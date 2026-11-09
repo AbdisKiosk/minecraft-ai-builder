@@ -1,0 +1,2 @@
+// Pure Java: DTOs, blueprint format, region encoding, renderer and the WorldEditBridge contract.
+// No Bukkit or WorldEdit dependencies so it can be unit tested in isolation.

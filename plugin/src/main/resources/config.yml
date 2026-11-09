@@ -1,0 +1,28 @@
+# AIBuilder: MCP + REST bridge for Claude Code.
+http:
+  # Keep this on 127.0.0.1 unless you put the server behind something that adds TLS.
+  bind: 127.0.0.1
+  port: 8765
+  # Generated on first start. Claude Code reads it from the AIBUILDER_TOKEN environment variable.
+  token: ""
+
+limits:
+  # Blocks written per server tick with vanilla WorldEdit (FAWE does its own queueing).
+  blocks-per-tick: 4000
+  # Largest single operation, in blocks.
+  max-volume-per-op: 2000000
+  # Largest region read_region / render_region may read (64^3 = 262144).
+  max-read-volume: 262144
+  # How long a tool call waits for its job before returning "running".
+  job-wait-seconds: 30
+
+safety:
+  # Empty = every world.
+  allowed-worlds: []
+  # Optional box edits must stay inside. Leave world empty to disable.
+  build-zone:
+    world: ""
+    min: [0, 0, 0]
+    max: [0, 0, 0]
+  # Directories place_blueprint may read files from. Empty = any absolute path.
+  blueprint-dirs: []

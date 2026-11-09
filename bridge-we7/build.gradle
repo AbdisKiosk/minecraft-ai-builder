@@ -1,0 +1,8 @@
+// Compiled against WorldEdit 7.2 so the bridge only uses API that exists on every 7.2+ release
+// (1.13 -> 26.x, including FAWE which implements the same API).
+dependencies {
+    implementation project(':common')
+    compileOnly 'org.spigotmc:spigot-api:1.13.2-R0.1-SNAPSHOT' // bridge only loads on 1.13+
+    compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.2.20') { transitive = false }
+    compileOnly 'com.sk89q.worldedit:worldedit-core:7.2.20'
+}

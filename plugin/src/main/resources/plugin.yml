@@ -1,0 +1,14 @@
+name: AIBuilder
+main: me.abdiskiosk.minecraftaibuilder.plugin.AIBuilderPlugin
+version: ${version}
+author: AbdisKiosk
+description: Lets Claude Code build with WorldEdit over MCP.
+depend: [WorldEdit]
+softdepend: [FastAsyncWorldEdit]
+commands:
+  aibuilder:
+    description: Shows AIBuilder status and connection details.
+    permission: aibuilder.admin
+permissions:
+  aibuilder.admin:
+    default: op

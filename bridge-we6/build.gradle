@@ -1,0 +1,11 @@
+// WorldEdit 6.x (Minecraft 1.8 - 1.12). legacy-blocks.txt (tools/gen_legacy_blocks.py) maps modern block states to legacy id:data.
+dependencies {
+    implementation project(':common')
+    compileOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
+    compileOnly('com.sk89q.worldedit:worldedit-bukkit:6.1') { transitive = false }
+    compileOnly('com.sk89q.worldedit:worldedit-core:6.1') { transitive = false }
+}
+
+dependencies {
+    testRuntimeOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT' // LegacyNames references Bukkit's Material
+}
