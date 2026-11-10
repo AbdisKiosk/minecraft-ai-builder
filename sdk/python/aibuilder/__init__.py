@@ -116,6 +116,10 @@ class Builder:
     def read(self, region, mode: str = "summary", heightmap: bool = False) -> dict:
         return self.call("read_region", region=region, mode=mode, heightmap=heightmap)
 
+    def check(self, region, checks: str | None = None) -> dict:
+        """Build mistakes as {"issues": [{"kind", "count", "at", "hint"}]}; checks="floating,dark" runs only those."""
+        return self.call("check_region", region=region, checks=checks)
+
     def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None,
                size: str | None = None) -> bytes:
         """PNG of a region (absolute coordinates). size: "small", "medium" (default) or "large".

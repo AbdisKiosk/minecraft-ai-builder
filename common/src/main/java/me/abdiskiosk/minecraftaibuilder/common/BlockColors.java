@@ -67,9 +67,6 @@ public final class BlockColors {
 
     /** True for blocks the renderer treats as see-through for occlusion. */
     public static boolean isTransparent(String state) {
-        String type = RegionCodec.stripProperties(state);
-        return RegionCodec.isAir(type) || type.contains("glass") || type.contains("leaves") || type.contains("water")
-                || type.contains("torch") || type.contains("fence") || type.contains("pane") || type.contains("bars")
-                || type.contains("flower") || type.equals("grass") || type.equals("short_grass") || type.contains("sign");
+        return !BlockTraits.opaque(state);
     }
 }

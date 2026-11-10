@@ -29,7 +29,7 @@ public final class McpEndpoint {
             - Blocks differ by server version (get_context.server). Unknown blocks and bad property values are rejected before anything is built; call block_info for valid names and properties (facing, half, ...).
             - Each tool call (or one batch) is one undo step; undo reverts it. Group related ops in one batch with "origin" and "vars" to keep calls short.
             - Large or repetitive builds: write a script with the aibuilder Python SDK instead of many tool calls.
-            - Check work with render_region (size small unless detail matters) rather than read_region mode=full.""";
+            - Check work with check_region (text, cheapest) first, then render_region (size small unless detail matters), not read_region mode=full.""";
 
     private final ToolRegistry tools;
     private final String version;

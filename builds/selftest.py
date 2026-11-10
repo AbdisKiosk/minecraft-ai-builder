@@ -214,6 +214,23 @@ def main():
     except AIBuilderError as e:
         check("split shapes", False, str(e))
 
+    # ---- check_region: a clean region has no issues, a block in mid-air is floating ----
+    lx, lz = ox + 50, oz + 20
+    lint = box([lx, oy, lz], [lx + 6, oy + 4, lz + 6])
+    b.fill(box([lx, oy, lz], [lx + 6, oy, lz + 6]), "stone")
+    b.fill(box([lx + 3, oy + 1, lz + 3], [lx + 3, oy + 2, lz + 3]), "stone")
+    try:
+        b.flush()
+        res = b.check(lint)
+        check("check_region: clean region has no issues", res.get("issues") == [], str(res))
+        b.block(lx + 1, oy + 3, lz + 1, "stone")
+        b.flush()
+        res = b.check(lint, checks="floating")
+        floating = [i for i in res.get("issues", []) if i["kind"] == "floating"]
+        check("check_region: mid-air block is floating", floating and [lx + 1, oy + 3, lz + 1] in floating[0]["at"], str(res))
+    except AIBuilderError as e:
+        check("check_region", False, str(e))
+
     # ---- undo ----
     if ctx["caller"]["name"] == "console" and legacy:
         expect_error("undo as console explains itself on WorldEdit 6", b.undo, "player")

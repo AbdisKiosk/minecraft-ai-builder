@@ -11,9 +11,16 @@ import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
+import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
+import org.bukkit.Bukkit;
+import org.bukkit.Server;
 import org.junit.jupiter.api.Test;
 
+import java.lang.reflect.Proxy;
+import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -37,17 +44,48 @@ class ToolsTest {
         public List<String> search(String query, int max) { return List.of("oak_stairs", "spruce_stairs"); }
     }
 
-    private static final class FakeBridge implements WorldEditBridge {
+    /** BuildService.read runs on the server thread; this stand-in server says every thread is that thread. */
+    static {
+        if (Bukkit.getServer() == null) {
+            Logger logger = Logger.getAnonymousLogger();
+            Bukkit.setServer((Server) Proxy.newProxyInstance(Server.class.getClassLoader(), new Class<?>[]{Server.class},
+                    (proxy, method, params) -> {
+                        Object answer = switch (method.getName()) {
+                            case "isPrimaryThread" -> Boolean.TRUE;
+                            case "getLogger" -> logger;
+                            case "getName", "getVersion", "getBukkitVersion", "toString" -> "test";
+                            default -> null;
+                        };
+                        if (answer == null && method.getReturnType() == boolean.class) return Boolean.FALSE;
+                        if (answer == null && method.getReturnType() == int.class) return 0;
+                        return answer;
+                    }));
+        }
+    }
+
+    /** Blocks the fake world holds; everything else reads as air. */
+    private final Map<Vec3, String> world = new HashMap<>();
+
+    private final class FakeBridge implements WorldEditBridge {
         public String name() { return "fake"; }
         public boolean async() { return false; }
         public BlockCatalog catalog() { return new FakeCatalog(); }
         public Optional<SelectionInfo> selection(UUID player) { return Optional.empty(); }
         public EditHandle begin(UUID actor, String world) { throw new UnsupportedOperationException(); }
         public int undo(UUID actor, int steps) { return steps; }
-        public String[] read(String world, Box box) { return new String[0]; }
+        public String[] read(String worldName, Box box) {
+            String[] states = new String[(int) box.volume()];
+            Arrays.fill(states, "air");
+            world.forEach((p, state) -> {
+                if (box.contains(Box.of(p, p))) states[RegionCodec.index(box, p.x(), p.y(), p.z())] = state;
+            });
+            return states;
+        }
     }
 
-    private final BuildService service = new BuildService(null, new FakeBridge(), null);
+    private final PluginConfig config = new PluginConfig("127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
+            List.of(), "", null, List.of());
+    private final BuildService service = new BuildService(null, new FakeBridge(), config);
     private final BuildService.Caller caller = new BuildService.Caller(null, "console", "world", null, 0, List.of("Ann", "Bob"), 0, 255);
     private final ToolRegistry registry = new ToolRegistry(service, Logger.getAnonymousLogger());
 
@@ -177,5 +215,32 @@ class ToolsTest {
         assertEquals(new Op.BlockAt(new Vec3(11, 64, 10), "oak_fence"), blocks.blocks().get(1));
         assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0]]}}").startsWith("blocks[\"stone\"][0] must be [x,y,z]"));
         assertTrue(error("set_blocks", "{\"blocks\":\"stone\"}").startsWith("\"blocks\" must be"));
+    }
+
+    @Test
+    void checkRegionListsIssuesAsCoordinates() {
+        for (int x = 0; x <= 4; x++) {
+            for (int z = 0; z <= 4; z++) world.put(new Vec3(x, 64, z), "stone");
+        }
+        String region = "\"region\":[0,64,0,4,68,4]";
+        assertEquals("{\"issues\":[]}", call("check_region", "{" + region + "}").data().toString());
+
+        world.put(new Vec3(2, 66, 2), "stone");
+        world.put(new Vec3(1, 66, 1), "sand");
+        JsonObject result = call("check_region", "{" + region + "}").data();
+        assertEquals("{\"issues\":[{\"kind\":\"floating\",\"count\":2,\"at\":[[1,66,1],[2,66,2]],"
+                + "\"hint\":\"not connected to the ground or the region's sides\"},{\"kind\":\"unsupported\",\"count\":1,"
+                + "\"at\":[[1,66,1]],\"hint\":\"breaks or falls: needs a block below, or behind it for wall blocks\"}]}",
+                result.toString());
+        JsonObject only = call("check_region", "{" + region + ",\"checks\":\"unsupported, dark\"}").data();
+        assertEquals(1, only.getAsJsonArray("issues").size());
+        assertEquals("unsupported", only.getAsJsonArray("issues").get(0).getAsJsonObject().get("kind").getAsString());
+    }
+
+    @Test
+    void checkRegionNamesTheValidChecks() {
+        assertEquals("unknown check 'floaty'; use floating, unsupported, halves, stairs, unconnected, dark",
+                error("check_region", "{\"region\":[0,64,0,4,68,4],\"checks\":\"floating,floaty\"}"));
+        assertTrue(error("check_region", "{\"region\":[0,64,0,4,68,4],\"mode\":\"full\"}").contains("unknown argument \"mode\""));
     }
 }

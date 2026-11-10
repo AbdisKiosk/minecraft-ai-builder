@@ -14,6 +14,7 @@ import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
+import me.abdiskiosk.minecraftaibuilder.common.RegionLint;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
@@ -27,6 +28,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -75,6 +77,11 @@ public final class Tools {
                 "Inspect blocks. mode=summary (default): counts, non-air bounds, surface heights. mode=full: palette+layers in place_blueprint format (costly; small regions only).",
                 schema("\"region\":" + REGION + ",\"mode\":{\"type\":\"string\",\"enum\":[\"summary\",\"full\"]},\"heightmap\":{\"type\":\"boolean\"}", "region"),
                 a -> read(a, service)));
+
+        registry.register(new Tool("check_region",
+                "Finds build mistakes: " + String.join(", ", RegionLint.KINDS) + ". checks=comma list (default all).",
+                schema("\"region\":" + REGION + ",\"checks\":{\"type\":\"string\"}", "region"),
+                a -> check(a, service)));
 
         registry.register(new Tool("render_region",
                 "PNG of a region, cropped to its blocks: top-down map (north up) and isometric view from the south-east. size: small for quick checks, medium (default), large for a final review.",
@@ -246,6 +253,39 @@ public final class Tools {
             return ToolResult.of(out);
         }
         return ToolResult.of(summaryJson(RegionCodec.summarize(box, states, 15, a.bool("heightmap", false))));
+    }
+
+    private static ToolResult check(Args a, BuildService service) {
+        a.only("check_region", "region", "checks");
+        Box box = a.region("region");
+        Set<String> kinds = null;
+        if (a.has("checks")) {
+            kinds = new LinkedHashSet<>();
+            for (String kind : a.str("checks").split(",")) {
+                String k = kind.trim();
+                if (k.isEmpty()) continue;
+                if (!RegionLint.KINDS.contains(k)) {
+                    throw new EditException("unknown check '" + k + "'; use " + String.join(", ", RegionLint.KINDS));
+                }
+                kinds.add(k);
+            }
+            if (kinds.isEmpty()) kinds = null;
+        }
+        String[] states = service.read(a.caller().world(), box);
+        JsonArray issues = new JsonArray();
+        for (RegionLint.Issue issue : RegionLint.check(box, states, kinds, service.bridge().catalog().legacy())) {
+            JsonObject o = new JsonObject();
+            o.addProperty("kind", issue.kind());
+            o.addProperty("count", issue.count());
+            JsonArray at = new JsonArray();
+            issue.at().forEach(v -> at.add(vec(v)));
+            o.add("at", at);
+            o.addProperty("hint", issue.hint());
+            issues.add(o);
+        }
+        JsonObject out = new JsonObject();
+        out.add("issues", issues);
+        return ToolResult.of(out);
     }
 
     private static ToolResult render(Args a, BuildService service) {
