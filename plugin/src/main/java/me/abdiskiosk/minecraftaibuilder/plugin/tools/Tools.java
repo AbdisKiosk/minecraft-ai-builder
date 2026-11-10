@@ -84,8 +84,8 @@ public final class Tools {
                 a -> check(a, service)));
 
         registry.register(new Tool("render_region",
-                "PNG of a region, cropped to its blocks: top-down map (north up) and isometric view from the south-east. size: small for quick checks, medium (default), large for a final review.",
-                schema("\"region\":" + REGION + ",\"view\":{\"type\":\"string\",\"enum\":[\"both\",\"top\",\"iso\"]},\"size\":{\"type\":\"string\",\"enum\":[\"small\",\"medium\",\"large\"]}", "region"),
+                "Region PNG cropped to its blocks. view: both (default) = top map (north up) + iso; north/south/east/west = that face seen from outside. corner = where the iso camera stands. size: small for checks, medium (default), large for final review.",
+                schema("\"region\":" + REGION + ",\"view\":{\"type\":\"string\",\"enum\":[\"both\",\"top\",\"iso\",\"north\",\"south\",\"east\",\"west\"]},\"corner\":{\"type\":\"string\",\"enum\":[\"se\",\"sw\",\"ne\",\"nw\"]},\"size\":{\"type\":\"string\",\"enum\":[\"small\",\"medium\",\"large\"]}", "region"),
                 a -> render(a, service)));
 
         registry.register(new Tool("fill",
@@ -289,24 +289,48 @@ public final class Tools {
     }
 
     private static ToolResult render(Args a, BuildService service) {
-        a.only("render_region", "region", "view", "size");
+        a.only("render_region", "region", "view", "corner", "size");
         Box box = a.region("region");
-        IsoRenderer.View view = switch (a.str("view", "both")) {
-            case "both" -> IsoRenderer.View.BOTH;
-            case "top" -> IsoRenderer.View.TOP;
-            case "iso" -> IsoRenderer.View.ISO;
-            default -> throw new EditException("view must be both, top or iso");
-        };
+        IsoRenderer.View view = renderView(a.str("view", "both"));
+        IsoRenderer.Corner corner = renderCorner(a.str("corner", null), view);
         IsoRenderer.Size size = switch (a.str("size", "medium")) {
             case "small" -> IsoRenderer.Size.SMALL;
             case "medium" -> IsoRenderer.Size.MEDIUM;
             case "large" -> IsoRenderer.Size.LARGE;
             default -> throw new EditException("size must be small, medium or large");
         };
-        IsoRenderer.Rendered rendered = IsoRenderer.render(box, service.read(a.caller().world(), box), view, size);
+        IsoRenderer.Rendered rendered = IsoRenderer.render(box, service.read(a.caller().world(), box), view, corner, size);
         JsonObject meta = new JsonObject();
         meta.add("box", region(rendered.box())); // what the image shows: the region cropped to its blocks
         return ToolResult.image(rendered.png(), meta);
+    }
+
+    static IsoRenderer.View renderView(String view) {
+        return switch (view) {
+            case "both" -> IsoRenderer.View.BOTH;
+            case "top" -> IsoRenderer.View.TOP;
+            case "iso" -> IsoRenderer.View.ISO;
+            case "north" -> IsoRenderer.View.NORTH;
+            case "south" -> IsoRenderer.View.SOUTH;
+            case "east" -> IsoRenderer.View.EAST;
+            case "west" -> IsoRenderer.View.WEST;
+            default -> throw new EditException("view must be both, top, iso, north, south, east or west");
+        };
+    }
+
+    /** @param corner null when not given */
+    static IsoRenderer.Corner renderCorner(String corner, IsoRenderer.View view) {
+        if (corner == null) return IsoRenderer.Corner.SE;
+        if (view != IsoRenderer.View.ISO && view != IsoRenderer.View.BOTH) {
+            throw new EditException("corner only applies to view iso or both; leave it out for view " + view.name().toLowerCase(java.util.Locale.ROOT));
+        }
+        return switch (corner) {
+            case "se" -> IsoRenderer.Corner.SE;
+            case "sw" -> IsoRenderer.Corner.SW;
+            case "ne" -> IsoRenderer.Corner.NE;
+            case "nw" -> IsoRenderer.Corner.NW;
+            default -> throw new EditException("corner must be se, sw, ne or nw");
+        };
     }
 
     private static ToolResult edit(Args a, BuildService service, List<Op> ops) {

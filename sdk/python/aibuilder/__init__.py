@@ -121,12 +121,15 @@ class Builder:
         return self.call("check_region", region=region, checks=checks)
 
     def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None,
-               size: str | None = None) -> bytes:
+               size: str | None = None, corner: str | None = None) -> bytes:
         """PNG of a region (absolute coordinates). size: "small", "medium" (default) or "large".
+        view: "both", "top", "iso" or an elevation "north"/"south"/"east"/"west"; corner: "se" (default), "sw", "ne"
+        or "nw", where the iso camera stands.
 
         Looking at the picture costs Claude about width*height/750 tokens, so use "small" for progress checks.
         """
-        png = base64.b64decode(self.call("render_region", region=region, view=view, size=size)["png_base64"])
+        png = base64.b64decode(self.call("render_region", region=region, view=view, size=size,
+                                         corner=corner)["png_base64"])
         if save_to:
             Path(save_to).write_bytes(png)
         return png

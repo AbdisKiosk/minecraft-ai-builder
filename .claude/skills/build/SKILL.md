@@ -58,6 +58,7 @@ print(b.flush())                               # one undo step
 - Foundation, frame, walls, roof, details. One batch or script phase per step, so each is one `undo`.
 - After a phase, run `check_region` on it first: the cheapest check, a few coordinates of floating or unsupported blocks, lone door/bed halves, reversed stairs, unconnected fences/panes and dark floors. Fix the real ones.
 - Then look with `render_region` at `size: "small"`, `view: "iso"` (a few hundred tokens). Use `"both"` when the floor plan matters, `"large"` only for the final look or when asked. The image is cropped to the blocks, so a generous region costs nothing extra.
+- To judge a facade use the elevation of that face (`view: "north"`, `"south"`, `"east"`, `"west"`); to see the back of a build, `view: "iso"` with the opposite `corner` (e.g. `"nw"`).
 - For a critique of how it looks, give the region and the brief to the `build-reviewer` subagent: the images stay in its context and you get back at most six concrete fixes.
 - To confirm a small fix, `check_region` or `read_region` summary counts are cheaper than another render.
 
