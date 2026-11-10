@@ -76,6 +76,17 @@ public final class BlockTraits {
         return !type.contains("leaves") && !type.endsWith("_grate") && !TRANSLUCENT.contains(type);
     }
 
+    /**
+     * Natural or built ground a structure can stand on, for {@link Terrain}: a full cube that is not leaves or a
+     * tree trunk, so trees, plants, water, snow layers and decoration do not count as the surface.
+     */
+    public static boolean ground(String type) {
+        type = RegionCodec.stripProperties(type);
+        if (!fullCube(type)) return false;
+        return !type.contains("leaves") && !type.endsWith("_log") && !type.endsWith("_wood") && !type.endsWith("_stem")
+                && !type.endsWith("_hyphae") && !type.equals("log") && !type.equals("log2");
+    }
+
     /** Falls when there is nothing below. */
     public static boolean gravity(String type) {
         return type != null && (type.equals("sand") || type.equals("red_sand") || type.equals("gravel")

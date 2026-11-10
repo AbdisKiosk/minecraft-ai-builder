@@ -18,6 +18,9 @@ import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormat;
 import com.sk89q.worldedit.extent.transform.BlockTransformExtent;
 import com.sk89q.worldedit.function.mask.Mask;
 import com.sk89q.worldedit.function.pattern.Patterns;
+import com.sk89q.worldedit.math.convolution.GaussianKernel;
+import com.sk89q.worldedit.math.convolution.HeightMap;
+import com.sk89q.worldedit.math.convolution.HeightMapFilter;
 import com.sk89q.worldedit.math.transform.AffineTransform;
 import com.sk89q.worldedit.patterns.Pattern;
 import com.sk89q.worldedit.regions.CuboidRegion;
@@ -304,6 +307,11 @@ public final class We6Bridge implements WorldEditBridge {
                         if (edit.setBlock(vec(b.pos()), block(b.state()))) changed++;
                     }
                     return changed;
+                }
+                if (op instanceof Op.Smooth o) {
+                    // As //smooth without -n.
+                    HeightMap map = new HeightMap(edit, region(world, o.box()));
+                    return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
                 throw new EditException("unsupported op " + op.getClass().getSimpleName());

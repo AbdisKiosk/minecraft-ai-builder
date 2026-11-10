@@ -76,4 +76,17 @@ class BlockTraitsTest {
         assertFalse(BlockTraits.gravity("sandstone"));
         assertFalse(BlockTraits.gravity("lime_concrete"));
     }
+
+    @Test
+    void ground() {
+        assertTrue(BlockTraits.ground("grass_block[snowy=false]"));
+        assertTrue(BlockTraits.ground("stone_bricks"));
+        assertTrue(BlockTraits.ground("sand"));
+        assertTrue(BlockTraits.ground("snow_block"));
+        for (String no : new String[]{"air", "water[level=0]", "lava", "oak_leaves[persistent=false]", "oak_log[axis=y]",
+                "stripped_birch_wood", "crimson_stem", "poppy", "short_grass", "vine[east=true]", "snow[layers=2]",
+                "oak_fence", "torch", "stone_slab"}) {
+            assertFalse(BlockTraits.ground(no), no);
+        }
+    }
 }

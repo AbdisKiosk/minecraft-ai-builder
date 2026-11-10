@@ -333,4 +333,45 @@ class ToolsTest {
         assertEquals("path must be a .json, .schem or .schematic file",
                 error("place_blueprint", "{\"path\":\"/tmp/tower.nbt\",\"origin\":[0,0,0]}"));
     }
+
+    @Test
+    void foundationFillsFromTheGroundAsReadBeforeTheBatch() {
+        for (int x = 0; x <= 2; x++) world.put(new Vec3(x, 64, 0), "stone");
+        world.put(new Vec3(2, 65, 0), "dirt");
+        world.put(new Vec3(0, 65, 0), "poppy");
+        List<Op> ops = Tools.batchOps(args("{\"ops\":[{\"op\":\"foundation\",\"region\":[0,64,0,2,66,0],\"pattern\":\"cobblestone\"},"
+                + "{\"op\":\"fill\",\"region\":[0,67,0,2,67,0],\"pattern\":\"oak_planks\"}]}"));
+        assertEquals(List.of(new Op.Fill(Box.of(new Vec3(0, 65, 0), new Vec3(1, 66, 0)), "cobblestone"),
+                new Op.Fill(Box.of(new Vec3(2, 66, 0), new Vec3(2, 66, 0)), "cobblestone"),
+                new Op.Fill(Box.of(new Vec3(0, 67, 0), new Vec3(2, 67, 0)), "oak_planks")), ops);
+
+        // Ground already at the top: no ops, and a call with nothing else to do says so instead of failing.
+        assertTrue(Tools.parseOp("foundation", args("{\"region\":[2,64,0,2,65,0],\"pattern\":\"dirt\"}")).isEmpty());
+        assertEquals("{\"changed\":0,\"note\":\"nothing to change: the terrain already fits\"}",
+                call("batch", "{\"ops\":[{\"op\":\"foundation\",\"region\":[2,64,0,2,65,0],\"pattern\":\"dirt\"}]}").data().toString());
+        assertEquals("ops is empty", error("batch", "{\"ops\":[]}"));
+    }
+
+    @Test
+    void overlayArgumentsAreChecked() {
+        world.put(new Vec3(0, 64, 0), "grass_block");
+        String region = "\"region\":[0,60,0,0,70,0],\"pattern\":\"dirt_path\"";
+        assertEquals(List.of(new Op.Fill(Box.of(new Vec3(0, 64, 0), new Vec3(0, 64, 0)), "dirt_path")),
+                Tools.parseOp("overlay", args("{" + region + "}")));
+        assertEquals(List.of(new Op.Fill(Box.of(new Vec3(0, 65, 0), new Vec3(0, 66, 0)), "dirt_path")),
+                Tools.parseOp("overlay", args("{" + region + ",\"raise\":2}")));
+        assertEquals("give \"depth\" or \"raise\", not both", error("overlay", "{" + region + ",\"depth\":2,\"raise\":1}"));
+        assertEquals("depth must be 1..16", error("overlay", "{" + region + ",\"depth\":0}"));
+        assertEquals("raise must be 0..16", error("overlay", "{" + region + ",\"raise\":17}"));
+        assertTrue(error("batch", "{\"ops\":[{\"op\":\"overlay\"," + region + ",\"height\":1}]}")
+                .startsWith("ops[0] (overlay): unknown argument \"height\""));
+    }
+
+    @Test
+    void smoothParsesWithDefaultIterations() {
+        assertEquals(new Op.Smooth(Box.of(new Vec3(0, 60, 0), new Vec3(9, 70, 9)), 2),
+                single("smooth", args("{\"region\":[0,60,0,9,70,9]}")));
+        assertEquals("iterations must be 1..10", error("smooth", "{\"region\":[0,60,0,9,70,9],\"iterations\":0}"));
+        assertEquals("iterations must be 1..10", error("smooth", "{\"region\":[0,60,0,9,70,9],\"iterations\":11}"));
+    }
 }

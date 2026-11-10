@@ -255,6 +255,30 @@ def main():
     except AIBuilderError as e:
         check("clone and saved blueprints", False, str(e))
 
+    # ---- terrain ops: foundation fills down to uneven ground, overlay replaces only the surface ----
+    tx, tz = ox + 50, oz + 4
+    b.fill(box([tx, oy, tz], [tx + 4, oy, tz + 2]), "stone")
+    b.fill(box([tx + 3, oy + 1, tz], [tx + 4, oy + 1, tz + 2]), "stone")  # a step up on the east side
+    b.fill(box([tx, oy, tz + 5], [tx + 4, oy, tz + 6]), "stone")
+    b.fill(box([tx, oy + 1, tz + 5], [tx + 4, oy + 1, tz + 6]), "dirt")
+    try:
+        b.flush()  # terrain ops read the ground when the batch is parsed, so it must already be built
+        b.foundation(box([tx, oy, tz], [tx + 4, oy + 3, tz + 2]), "cobblestone")
+        b.fill(box([tx, oy + 4, tz], [tx + 4, oy + 4, tz + 2]), "oak_planks")
+        b.overlay(box([tx, oy, tz + 5], [tx + 4, oy + 3, tz + 6]), "cobblestone")
+        b.flush()
+        low = read_cells(b, [(tx, oy + y, tz) for y in range(5)])
+        high = read_cells(b, [(tx + 4, oy + y, tz) for y in range(5)])
+        check("foundation fills from low ground to the platform",
+              [parse(low[(tx, oy + y, tz)])[0] for y in range(5)] == ["stone", "cobblestone", "cobblestone", "cobblestone", "oak_planks"], str(low))
+        check("foundation fills from high ground to the platform",
+              [parse(high[(tx + 4, oy + y, tz)])[0] for y in range(5)] == ["stone", "stone", "cobblestone", "cobblestone", "oak_planks"], str(high))
+        col = read_cells(b, [(tx + 2, oy + y, tz + 5) for y in range(3)])
+        check("overlay replaces only the surface block",
+              [parse(col[(tx + 2, oy + y, tz + 5)])[0] for y in range(3)] == ["stone", "cobblestone", "air"], str(col))
+    except AIBuilderError as e:
+        check("terrain ops", False, str(e))
+
     # ---- decorate: entities through the Bukkit API, outside WorldEdit's history ----
     dx, dz = ox + 52, oz + 52
     deco = box([dx - 1, oy - 1, dz - 1], [dx + 3, oy + 2, dz + 3])

@@ -26,6 +26,8 @@ Every argument you write and every result you read costs tokens, so pick by size
 
 `save_blueprint` keeps a region on the server; `place_blueprint` or a `paste` op with `name` places it again. Clone and saved blueprints copy block states only, not sign text or container contents.
 
+Terrain ops read the ground as it is before the batch runs. On a slope, put a `foundation` op (region top = the level just under the floor) before the walls so nothing floats; `overlay` lays paths and ground cover that follow the surface (`depth` replaces, `raise` adds on top); `smooth` blends cut or filled edges into the land.
+
 ```json
 {"origin": [104, 64, -20], "vars": {"W": "70%stone_bricks,20%cracked_stone_bricks,10%mossy_stone_bricks"},
  "ops": [{"op": "fill", "region": [0, 0, 0, 8, 0, 6], "pattern": "cobblestone"},

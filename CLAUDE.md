@@ -4,7 +4,7 @@ A Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp
 (`POST /api/<tool>`). Both use the same tools (`plugin/.../tools/Tools.java`).
 
 ## Modules
-- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), PNG renderer, `WorldEditBridge` contract. Unit tested.
+- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), terrain fills (`Terrain`), PNG renderer, `WorldEditBridge` contract. Unit tested.
 - `bridge-we7/`: WorldEdit 7.2+ / FAWE (MC 1.13 → 26.x). Compiled against WE 7.2.20 + spigot-api 1.13.2.
 - `bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.

@@ -231,6 +231,20 @@ class Builder:
         return self._queue("clone", region=region, to=list(to), rotation=rotation or None, flip=flip,
                            repeat=repeat if repeat != 1 else None, step=list(step) if step else None, air=air or None)
 
+    # The terrain ops read the ground when the batch is sent, before any queued op runs.
+    def foundation(self, region, pattern: str):
+        """Queues a fill from each column's ground up to the region's top (the level just under a build)."""
+        return self._queue("foundation", region=region, pattern=pattern)
+
+    def overlay(self, region, pattern: str, depth: int = 1, raise_: int = 0):
+        """Queues replacing the top `depth` ground blocks, or with raise_ > 0 placing that many on top instead."""
+        return self._queue("overlay", region=region, pattern=pattern, depth=depth if depth != 1 else None,
+                           **{"raise": raise_ or None})
+
+    def smooth(self, region, iterations: int = 2):
+        """Queues WorldEdit's //smooth over the region."""
+        return self._queue("smooth", region=region, iterations=iterations if iterations != 2 else None)
+
     def save_blueprint(self, name: str, region) -> dict:
         """Saves a region on the server ({"saved", "size", "blocks"}); paste(name=...) places it.
 

@@ -19,6 +19,9 @@ import com.sk89q.worldedit.function.pattern.Pattern;
 import com.sk89q.worldedit.math.BlockVector2;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.math.Vector3;
+import com.sk89q.worldedit.math.convolution.GaussianKernel;
+import com.sk89q.worldedit.math.convolution.HeightMap;
+import com.sk89q.worldedit.math.convolution.HeightMapFilter;
 import com.sk89q.worldedit.math.transform.AffineTransform;
 import com.sk89q.worldedit.registry.state.Property;
 import com.sk89q.worldedit.regions.CuboidRegion;
@@ -284,6 +287,11 @@ public final class We7Bridge implements WorldEditBridge {
                         if (edit.setBlock(vec(b.pos()), block(b.state()))) changed++;
                     }
                     return changed;
+                }
+                if (op instanceof Op.Smooth o) {
+                    // As //smooth without a mask: the heightmap follows blocks that stop movement.
+                    HeightMap map = new HeightMap(edit, region(world, o.box()), (Mask) null);
+                    return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
                 throw new EditException("unsupported op " + op.getClass().getSimpleName());

@@ -17,6 +17,7 @@ import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.RegionLint;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
+import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
@@ -109,6 +110,15 @@ public final class Tools {
         registry.register(new Tool("clone", "Copy a region to 'to', optionally rotated, flipped and repeated.",
                 schema("\"region\":" + REGION + ",\"to\":" + VEC, "region", "to"),
                 a -> edit(a, service, parseOp("clone", a))).unlisted());
+        registry.register(new Tool("foundation", "Fill from the ground up to the region's top.",
+                schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN, "region", "pattern"),
+                a -> edit(a, service, parseOp("foundation", a))).unlisted());
+        registry.register(new Tool("overlay", "Replace the top 'depth' ground blocks, or add 'raise' blocks on top.",
+                schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN + ",\"depth\":{\"type\":\"integer\"},\"raise\":{\"type\":\"integer\"}", "region", "pattern"),
+                a -> edit(a, service, parseOp("overlay", a))).unlisted());
+        registry.register(new Tool("smooth", "Smooth the terrain like //smooth.",
+                schema("\"region\":" + REGION + ",\"iterations\":{\"type\":\"integer\"}", "region"),
+                a -> edit(a, service, parseOp("smooth", a))).unlisted());
 
         registry.register(new Tool("cylinder", "Vertical cylinder standing on 'base', growing up 'height' blocks.",
                 schema("\"base\":" + VEC + ",\"radius\":{\"type\":\"number\"},\"radius_z\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"pattern\":" + PATTERN + ",\"hollow\":{\"type\":\"boolean\"}",
@@ -130,7 +140,7 @@ public final class Tools {
                 a -> edit(a, service, parseOp("blocks", a))));
 
         registry.register(new Tool("batch",
-                "Run several ops as ONE undo step: ops=[{\"op\":\"fill|cylinder|sphere|pyramid|line|blocks|paste|clone\", ...the matching tool's args}]; blocks=set_blocks, paste=place_blueprint, pyramid takes base,size,pattern,hollow, clone copies a built region: region,to,rotation,flip=x|z,repeat,step=[dx,dy,dz],air. origin=[x,y,z] makes every coordinate in ops an offset from it. vars={\"W\":\"70%stone_bricks,30%andesite\"} lets patterns and block states say $W.",
+                "Run several ops as ONE undo step: ops=[{\"op\":\"fill|cylinder|sphere|pyramid|line|blocks|paste|clone\", ...the matching tool's args}]; blocks=set_blocks, paste=place_blueprint, pyramid takes base,size,pattern,hollow, clone copies a built region: region,to,rotation,flip=x|z,repeat,step=[dx,dy,dz],air. Terrain ops see the ground as before the batch: foundation (region,pattern) fills up to region top; overlay (region,pattern,depth=1|raise) covers it; smooth (region,iterations=2). origin=[x,y,z] makes every coordinate in ops an offset from it. vars={\"W\":\"70%stone_bricks,30%andesite\"} lets patterns and block states say $W.",
                 schema("\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}},\"origin\":" + VEC + ",\"vars\":{\"type\":\"object\"}", "ops"),
                 a -> edit(a, service, batchOps(a))));
 
@@ -356,6 +366,13 @@ public final class Tools {
     }
 
     private static ToolResult edit(Args a, BuildService service, List<Op> ops) {
+        if (ops.isEmpty()) {
+            // Only foundation or overlay can leave nothing to do, when the ground already is as asked.
+            JsonObject o = new JsonObject();
+            o.addProperty("changed", 0);
+            o.addProperty("note", "nothing to change: the terrain already fits");
+            return ToolResult.of(o);
+        }
         BuildService.JobResult result = service.await(service.submit(a.caller(), ops));
         ToolResult out = jobJson(result, true);
         if (!soleOnlinePlayer(a.caller())) out.data().addProperty("as", a.caller().name());
@@ -441,6 +458,7 @@ public final class Tools {
         Map<String, String> vars = vars(a);
         List<Op> ops = new ArrayList<>();
         JsonArray list = a.array("ops");
+        if (list.isEmpty()) throw new EditException("ops is empty");
         for (int i = 0; i < list.size(); i++) {
             String type = "?";
             try {
@@ -520,9 +538,13 @@ public final class Tools {
         return m.appendTail(out).toString();
     }
 
-    /** One op, or one per copy for {@code clone}. */
+    /** One op, one per copy for {@code clone}, or any number (none included) for the terrain ops. */
     static List<Op> parseOp(String type, Args a) {
-        return type.equals("clone") ? cloneOps(a) : List.of(parseOne(type, a));
+        return switch (type) {
+            case "clone" -> cloneOps(a);
+            case "foundation", "overlay" -> terrainOps(type, a);
+            default -> List.of(parseOne(type, a));
+        };
     }
 
     private static Op parseOne(String type, Args a) {
@@ -584,7 +606,12 @@ public final class Tools {
                 if (rotation % 90 != 0) throw new EditException("rotation must be a multiple of 90");
                 yield new Op.Paste(blueprint(a), a.vec("origin"), rotation);
             }
-            default -> throw new EditException("unknown op '" + type + "'; use fill, cylinder, sphere, pyramid, line, blocks, paste or clone");
+            case "smooth" -> {
+                a.only("smooth", "region", "iterations");
+                yield new Op.Smooth(a.region("region"), range(a, "iterations", 2, 1, 10));
+            }
+            default -> throw new EditException("unknown op '" + type + "'; use fill, cylinder, sphere, pyramid, line, blocks, paste, clone, "
+                    + "foundation (region,pattern), overlay (region,pattern,depth|raise) or smooth (region,iterations)");
         };
     }
 
@@ -621,6 +648,28 @@ public final class Tools {
         List<Op> ops = new ArrayList<>();
         for (int i = 0; i < repeat; i++) ops.add(new Op.Paste(bp, to.add(step[0] * i, step[1] * i, step[2] * i), rotation));
         return ops;
+    }
+
+    private static List<Op> terrainOps(String type, Args a) {
+        if (type.equals("foundation")) {
+            a.only("foundation", "region", "pattern");
+        } else {
+            a.only("overlay", "region", "pattern", "depth", "raise");
+            if (a.has("depth") && a.has("raise")) throw new EditException("give \"depth\" or \"raise\", not both");
+        }
+        Box box = a.region("region");
+        String pattern = a.str("pattern");
+        int depth = type.equals("overlay") ? range(a, "depth", 1, 1, 16) : 0;
+        int raise = type.equals("overlay") ? range(a, "raise", 0, 0, 16) : 0;
+        // Read now, while the batch is parsed: the ops follow the terrain as it is before the batch runs.
+        String[] states = a.service().read(a.caller().world(), box);
+        return type.equals("foundation") ? Terrain.foundation(box, states, pattern) : Terrain.overlay(box, states, pattern, depth, raise);
+    }
+
+    private static int range(Args a, String name, int def, int min, int max) {
+        int v = a.integer(name, def);
+        if (v < min || v > max) throw new EditException(name + " must be " + min + ".." + max);
+        return v;
     }
 
     /** Blocks grouped by state, {@code {"state":[[x,y,z],...]}}, or one by one, {@code [[x,y,z,"state"],...]}. */
