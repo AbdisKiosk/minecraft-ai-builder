@@ -52,7 +52,9 @@ b.blocks(v.items())
 print(b.flush())                               # one undo step
 ```
 
-- `Vox` has `set`, `box`, `ring`, weighted patterns and `connect`; do not rewrite those helpers. `v.b` is the underlying dict.
+- `Vox` has `set`, `box`, `ring`, weighted patterns, `connect` (also stair corners), `roof_gable`, `roof_hip`, `arch(x0, x1, y, z, rise, state)`, `mirror(axis, at)`, `rotate(turns, about)` (plus `from aibuilder import transform_state` for one state); do not rewrite those helpers. `v.b` is the underlying dict.
+  `v.roof_gable(0, 0, 8, 6, 5, "spruce_stairs", gable="spruce_planks")  # walls (0,0)-(8,6), eaves at y=5, ridge along x`
+  `v.mirror("x", 4)  # build the west half, mirror it to the east (at=4.5 for even widths)`
 - For shapes rather than single blocks, `b.at(origin)` then `b.fill`, `b.cylinder`, `b.sphere`, `b.line`, ... with small offsets.
 - One function per phase and a phase name as argument, so a fix reruns one phase, not the whole build.
 - Print only the flush result. Save renders with `b.render(region, save_to=..., size="small")` and look at the file only when needed.

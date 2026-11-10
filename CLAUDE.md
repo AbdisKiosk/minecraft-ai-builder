@@ -17,6 +17,7 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 ## Commands
 - `./gradlew build`: tests + shaded jar at `plugin/build/libs/AIBuilder-<version>.jar`
 - `./gradlew :plugin:runServer` (1.21.11 + WE 7.3.19), `:plugin:runLatest` (26.3 + WE 7.4.6), `:plugin:runLegacy` (1.8.8, add WE 6.1.9 yourself)
+- `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
 - Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code.
 

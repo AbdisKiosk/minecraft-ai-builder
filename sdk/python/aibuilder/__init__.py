@@ -28,9 +28,10 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from .vox import Vox, pick
+from .vox import Vox, pick, transform_state
 
-__all__ = ["Builder", "AIBuilderError", "Vox", "box", "circle", "decode", "expand_layers", "pick", "SELECTION"]
+__all__ = ["Builder", "AIBuilderError", "Vox", "box", "circle", "decode", "expand_layers", "pick", "SELECTION",
+           "transform_state"]
 
 SELECTION = "selection"
 
