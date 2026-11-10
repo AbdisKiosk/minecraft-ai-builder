@@ -1,5 +1,7 @@
 package me.abdiskiosk.minecraftaibuilder.plugin.tools;
 
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
+import me.abdiskiosk.minecraftaibuilder.common.Op;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
@@ -112,5 +114,68 @@ class ToolsTest {
         assertEquals("Minecraft 1.8.8", unknown.get("server").getAsString());
 
         assertEquals(2, call("block_info", "{\"search\":\"stairs\"}").data().getAsJsonArray("matches").size());
+    }
+
+    private Args args(String json) {
+        return new Args(JsonParser.parseString(json).getAsJsonObject(), caller, service);
+    }
+
+    @Test
+    void regionTakesSixNumbers() {
+        Box expected = Box.of(new Vec3(1, 64, 2), new Vec3(3, 70, 9));
+        assertEquals(expected, ((Op.Fill) Tools.parseOp("fill", args("{\"region\":[3,70,9,1,64,2],\"pattern\":\"stone\"}"))).box());
+        assertEquals(expected, ((Op.Fill) Tools.parseOp("fill", args("{\"region\":{\"min\":[1,64,2],\"max\":[3,70,9]},\"pattern\":\"stone\"}"))).box());
+        assertEquals("\"region\" must be \"selection\" or [x1,y1,z1,x2,y2,z2]", error("fill", "{\"region\":[1,2,3],\"pattern\":\"stone\"}"));
+    }
+
+    @Test
+    void fillModesCoverTheOldTools() {
+        String region = "\"region\":[0,0,0,4,4,4],\"pattern\":\"stone\"";
+        assertInstanceOf(Op.Fill.class, Tools.parseOp("fill", args("{" + region + "}")));
+        assertInstanceOf(Op.Walls.class, Tools.parseOp("fill", args("{" + region + ",\"mode\":\"walls\"}")));
+        assertInstanceOf(Op.Outline.class, Tools.parseOp("fill", args("{" + region + ",\"mode\":\"outline\"}")));
+        Op.Replace replace = (Op.Replace) Tools.parseOp("fill", args("{" + region + ",\"from\":\"dirt,grass_block\"}"));
+        assertEquals("dirt,grass_block", replace.from());
+        assertEquals("mode must be solid, walls or outline", error("fill", "{" + region + ",\"mode\":\"hollow\"}"));
+        assertEquals("\"from\" only works with mode solid", error("fill", "{" + region + ",\"mode\":\"walls\",\"from\":\"dirt\"}"));
+        // The old names stay valid for batch ops and REST scripts.
+        assertInstanceOf(Op.Walls.class, Tools.parseOp("walls", args("{" + region + "}")));
+        assertInstanceOf(Op.Outline.class, Tools.parseOp("outline", args("{" + region + "}")));
+        assertInstanceOf(Op.Replace.class, Tools.parseOp("replace", args("{" + region + ",\"from\":\"dirt\"}")));
+        assertTrue(registry.has("walls") && registry.has("replace") && registry.has("get_selection"));
+    }
+
+    @Test
+    void batchOriginShiftsEveryCoordinateAndVarsNameBlocks() {
+        List<Op> ops = Tools.batchOps(args("{\"origin\":[100,64,-20],\"vars\":{\"W\":\"70%stone,30%andesite\"},\"ops\":["
+                + "{\"op\":\"fill\",\"region\":[0,0,0,4,3,4],\"pattern\":\"$W\"},"
+                + "{\"op\":\"blocks\",\"blocks\":{\"$W\":[[1,5,1]],\"oak_stairs[facing=east]\":[[2,5,2]]}},"
+                + "{\"op\":\"blocks\",\"origin\":[1,1,1],\"blocks\":[[0,0,0,\"$W\"]]},"
+                + "{\"op\":\"cylinder\",\"base\":[2,0,2],\"radius\":2,\"height\":3,\"pattern\":\"stone\"},"
+                + "{\"op\":\"paste\",\"origin\":[0,10,0],\"blueprint\":{\"palette\":{\"$\":\"$W\",\"_\":\"air\"},\"layers\":[[\"3$_\"]]}}]}"));
+        Op.Fill fill = (Op.Fill) ops.get(0);
+        assertEquals(Box.of(new Vec3(100, 64, -20), new Vec3(104, 67, -16)), fill.box());
+        assertEquals("70%stone,30%andesite", fill.pattern());
+        Op.Blocks grouped = (Op.Blocks) ops.get(1);
+        assertEquals(new Op.BlockAt(new Vec3(101, 69, -19), "70%stone,30%andesite"), grouped.blocks().get(0));
+        assertEquals(new Op.BlockAt(new Vec3(102, 69, -18), "oak_stairs[facing=east]"), grouped.blocks().get(1));
+        assertEquals(new Op.BlockAt(new Vec3(101, 65, -19), "70%stone,30%andesite"), ((Op.Blocks) ops.get(2)).blocks().get(0));
+        assertEquals(new Vec3(102, 64, -18), ((Op.Cylinder) ops.get(3)).base());
+        Op.Paste paste = (Op.Paste) ops.get(4);
+        assertEquals(new Vec3(100, 74, -20), paste.origin());
+        assertEquals("70%stone,30%andesite", paste.blueprint().palette().get('$'));
+        assertEquals(4, paste.blueprint().sizeX());
+
+        assertEquals("ops[0] (fill): unknown var $X; vars: W",
+                error("batch", "{\"vars\":{\"W\":\"stone\"},\"ops\":[{\"op\":\"fill\",\"region\":[0,0,0,1,1,1],\"pattern\":\"$X\"}]}"));
+    }
+
+    @Test
+    void groupedBlocksAreChecked() {
+        Op.Blocks blocks = (Op.Blocks) Tools.parseOp("blocks", args("{\"origin\":[10,64,10],\"blocks\":{\"oak_fence\":[[0,0,0],[1,0,0]],\"torch\":[[0,1,0]]}}"));
+        assertEquals(3, blocks.blocks().size());
+        assertEquals(new Op.BlockAt(new Vec3(11, 64, 10), "oak_fence"), blocks.blocks().get(1));
+        assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0]]}}").startsWith("blocks[\"stone\"][0] must be [x,y,z]"));
+        assertTrue(error("set_blocks", "{\"blocks\":\"stone\"}").startsWith("\"blocks\" must be"));
     }
 }

@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "sdk" / "python"))
-from aibuilder import AIBuilderError, Builder, box  # noqa: E402
+from aibuilder import AIBuilderError, Builder, box, decode  # noqa: E402
 
 # What a property means when it is left out (the 1.13+ defaults); read-back may omit default values.
 DEFAULTS = {"facing": "north", "half": "bottom", "type": "bottom", "axis": "y", "open": "false", "hinge": "left",
@@ -50,24 +50,6 @@ def matches(expected, actual):
 def check(name, ok, detail=""):
     results.append((name, bool(ok), detail))
     print(("PASS " if ok else "FAIL ") + name + ("" if ok else f"   -> {detail}"))
-
-
-def decode(read):
-    """read_region mode=full -> {(x, y, z): state}."""
-    ox, oy, oz = read["origin"]
-    out = {}
-    for y, layer in enumerate(read["layers"]):
-        for z, row in enumerate(layer):
-            x, count = 0, ""
-            for ch in row:
-                if ch.isdigit():
-                    count += ch
-                    continue
-                for _ in range(int(count or 1)):
-                    out[(ox + x, oy + y, oz + z)] = read["palette"][ch]
-                    x += 1
-                count = ""
-    return out
 
 
 def read_cells(b, cells):

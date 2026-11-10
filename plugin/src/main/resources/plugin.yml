@@ -7,7 +7,8 @@ depend: [WorldEdit]
 softdepend: [FastAsyncWorldEdit]
 commands:
   aibuilder:
-    description: Shows AIBuilder status and connection details.
+    description: Shows AIBuilder status and connection details; "stats" shows what MCP calls cost in tokens.
+    usage: /aibuilder [stats [reset]]
     permission: aibuilder.admin
 permissions:
   aibuilder.admin:

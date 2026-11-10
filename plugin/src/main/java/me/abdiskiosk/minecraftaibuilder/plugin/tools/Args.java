@@ -16,7 +16,8 @@ import java.util.TreeSet;
 
 /**
  * Typed access to tool arguments. Coordinates are {@code [x,y,z]}; each part may be a number or
- * {@code "~n"}, relative to the caller's feet. A region is {@code "selection"} or {@code {"min":[..],"max":[..]}}.
+ * {@code "~n"}, relative to the caller's feet. A region is {@code "selection"}, {@code [x1,y1,z1,x2,y2,z2]} or
+ * {@code {"min":[..],"max":[..]}}. Inside a batch with an origin, plain numbers are offsets from that origin.
  */
 public final class Args {
 
@@ -25,11 +26,17 @@ public final class Args {
     private final JsonObject json;
     private final BuildService.Caller caller;
     private final BuildService service;
+    private final Vec3 offset;
 
     public Args(JsonObject json, BuildService.Caller caller, BuildService service) {
+        this(json, caller, service, null);
+    }
+
+    private Args(JsonObject json, BuildService.Caller caller, BuildService service, Vec3 offset) {
         this.json = json == null ? new JsonObject() : json;
         this.caller = caller;
         this.service = service;
+        this.offset = offset;
     }
 
     /** Rejects misspelled or unsupported arguments instead of silently ignoring them. */
@@ -42,8 +49,9 @@ public final class Args {
         }
     }
 
-    public Args with(JsonObject other) {
-        return new Args(other, caller, service);
+    /** Arguments of one batch op; with an {@code origin}, its plain-number coordinates count from there. */
+    public Args with(JsonObject other, Vec3 origin) {
+        return new Args(other, caller, service, origin);
     }
 
     public JsonObject json() {
@@ -131,11 +139,12 @@ public final class Args {
 
     private int coord(JsonElement e, int axis, String what) {
         JsonPrimitive p = e.getAsJsonPrimitive();
-        if (p.isNumber()) return (int) Math.floor(p.getAsDouble());
+        int shift = offset == null ? 0 : axis == 0 ? offset.x() : axis == 1 ? offset.y() : offset.z();
+        if (p.isNumber()) return shift + (int) Math.floor(p.getAsDouble());
         String s = p.getAsString().trim();
         if (!s.startsWith("~")) {
             try {
-                return Integer.parseInt(s);
+                return shift + Integer.parseInt(s);
             } catch (NumberFormatException ex) {
                 throw new EditException("bad coordinate '" + s + "' in \"" + what + "\"");
             }
@@ -161,11 +170,19 @@ public final class Args {
             }
             return sel.bounds();
         }
+        if (e.isJsonArray() && e.getAsJsonArray().size() == 6) {
+            JsonArray six = e.getAsJsonArray(), min = new JsonArray(), max = new JsonArray();
+            for (int i = 0; i < 3; i++) {
+                min.add(six.get(i));
+                max.add(six.get(i + 3));
+            }
+            return Box.of(vec(min, name), vec(max, name));
+        }
         if (e.isJsonObject()) {
             JsonObject o = e.getAsJsonObject();
             if (!o.has("min") || !o.has("max")) throw new EditException("\"" + name + "\" needs min and max");
             return Box.of(vec(o.get("min"), name + ".min"), vec(o.get("max"), name + ".max"));
         }
-        throw new EditException("\"" + name + "\" must be \"selection\" or {\"min\":[x,y,z],\"max\":[x,y,z]}");
+        throw new EditException("\"" + name + "\" must be \"selection\" or [x1,y1,z1,x2,y2,z2]");
     }
 }

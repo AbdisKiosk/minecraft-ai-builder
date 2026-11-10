@@ -9,7 +9,7 @@ import java.util.Map;
 /** Turns raw block arrays into token-cheap summaries, or into the {@link Blueprint} text format. */
 public final class RegionCodec {
 
-    private static final String KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%&*+-=@!?^~<>/|:;";
+    private static final String KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%&*+-=@!?~<>/|:;";
     public static final char AIR_KEY = '_';
 
     private RegionCodec() {
@@ -17,6 +17,20 @@ public final class RegionCodec {
 
     public static int index(Box box, int x, int y, int z) {
         return ((y - box.min().y()) * box.sizeZ() + (z - box.min().z())) * box.sizeX() + (x - box.min().x());
+    }
+
+    /** The states of {@code inner}, which must lie inside {@code box}, in the same y, z, x order. */
+    public static String[] crop(Box box, String[] states, Box inner) {
+        String[] out = new String[(int) inner.volume()];
+        int i = 0;
+        for (int y = inner.min().y(); y <= inner.max().y(); y++) {
+            for (int z = inner.min().z(); z <= inner.max().z(); z++) {
+                for (int x = inner.min().x(); x <= inner.max().x(); x++) {
+                    out[i++] = states[index(box, x, y, z)];
+                }
+            }
+        }
+        return out;
     }
 
     public static boolean isAir(String state) {
@@ -78,7 +92,11 @@ public final class RegionCodec {
         return new Summary(box, box.volume(), nonAir, lo == null ? null : Box.of(lo, hi), sorted, sMin, sMax, heights);
     }
 
-    /** Palette + RLE layers, directly pasteable as a {@link Blueprint}. Air is written as {@value #AIR_KEY}. */
+    /**
+     * Palette + RLE layers, directly pasteable as a {@link Blueprint}. Air is written as {@value #AIR_KEY}.
+     * A row equal to the one before it is written as a repeat marker ({@code "^"}, {@code "3^"}), and so is a
+     * layer equal to the one below it ({@code ["^"]}), so walls and floors cost one row instead of one per block.
+     */
     public record Encoded(Map<Character, String> palette, List<List<String>> layers) {
     }
 
@@ -108,7 +126,43 @@ public final class RegionCodec {
             }
             layers.add(rows);
         }
-        return new Encoded(palette, layers);
+        return new Encoded(palette, packLayers(layers));
+    }
+
+    private static List<List<String>> packLayers(List<List<String>> layers) {
+        List<List<String>> out = new ArrayList<>();
+        int run = 0;
+        for (int y = 0; y < layers.size(); y++) {
+            if (y > 0 && layers.get(y).equals(layers.get(y - 1))) {
+                run++;
+                continue;
+            }
+            if (run > 0) out.add(List.of(repeat(run)));
+            run = 0;
+            out.add(packRows(layers.get(y)));
+        }
+        if (run > 0) out.add(List.of(repeat(run)));
+        return out;
+    }
+
+    private static List<String> packRows(List<String> rows) {
+        List<String> out = new ArrayList<>();
+        int run = 0;
+        for (int z = 0; z < rows.size(); z++) {
+            if (z > 0 && rows.get(z).equals(rows.get(z - 1))) {
+                run++;
+                continue;
+            }
+            if (run > 0) out.add(repeat(run));
+            run = 0;
+            out.add(rows.get(z));
+        }
+        if (run > 0) out.add(repeat(run));
+        return out;
+    }
+
+    private static String repeat(int run) {
+        return (run == 1 ? "" : String.valueOf(run)) + Blueprint.REPEAT;
     }
 
     private static char keyFor(String state, Map<String, Character> keys, Map<Character, String> palette) {

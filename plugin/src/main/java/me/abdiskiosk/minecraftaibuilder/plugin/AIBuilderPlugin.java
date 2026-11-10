@@ -3,6 +3,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.http.HttpApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
+import me.abdiskiosk.minecraftaibuilder.plugin.mcp.ToolStats;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
 import org.bukkit.command.Command;
@@ -13,6 +14,7 @@ import org.bukkit.plugin.java.JavaPlugin;
 import java.io.IOException;
 import java.security.SecureRandom;
 import java.util.HexFormat;
+import java.util.List;
 import java.util.logging.Level;
 
 public final class AIBuilderPlugin extends JavaPlugin {
@@ -20,6 +22,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     private HttpApi http;
     private WorldEditBridge bridge;
     private PluginConfig config;
+    private McpEndpoint mcp;
 
     @Override
     public void onEnable() {
@@ -45,8 +48,8 @@ public final class AIBuilderPlugin extends JavaPlugin {
         BuildService service = new BuildService(this, bridge, config);
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
-        http = new HttpApi(config.bind(), config.port(), config.token(),
-                new McpEndpoint(registry, getDescription().getVersion()), registry, getLogger());
+        mcp = new McpEndpoint(registry, getDescription().getVersion());
+        http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
         try {
             http.start();
         } catch (IOException e) {
@@ -90,6 +93,15 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage("AIBuilder is not running; check the server log.");
             return true;
         }
+        if (args.length > 0 && args[0].equalsIgnoreCase("stats")) {
+            if (args.length > 1 && args[1].equalsIgnoreCase("reset")) {
+                mcp.stats().reset();
+                sender.sendMessage("AIBuilder stats cleared.");
+            } else {
+                stats(sender);
+            }
+            return true;
+        }
         sender.sendMessage("AIBuilder " + getDescription().getVersion() + " using " + bridge.name());
         sender.sendMessage("MCP endpoint: " + url() + "/mcp");
         if (sender instanceof ConsoleCommandSender) {
@@ -98,5 +110,22 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage("The token is in plugins/AIBuilder/config.yml (or run /aibuilder from the console).");
         }
         return true;
+    }
+
+    /** MCP traffic per tool since the last reset; token figures are estimates. */
+    private void stats(CommandSender sender) {
+        List<ToolStats.Row> rows = mcp.stats().rows();
+        if (rows.isEmpty()) {
+            sender.sendMessage("No MCP calls yet. (REST calls from scripts are not counted.)");
+            return;
+        }
+        sender.sendMessage(String.format("%-16s %6s %9s %9s %10s %8s", "tool", "calls", "arg ch", "result ch", "image px", "~tokens"));
+        long total = 0;
+        for (ToolStats.Row r : rows) {
+            sender.sendMessage(String.format("%-16s %6d %9d %9d %10d %8d", r.tool(), r.calls(), r.argChars(), r.resultChars(), r.imagePixels(), r.tokens()));
+            total += r.tokens();
+        }
+        sender.sendMessage(String.format("%-16s %46s %8d", "total", "", total));
+        sender.sendMessage("Clear with /aibuilder stats reset.");
     }
 }

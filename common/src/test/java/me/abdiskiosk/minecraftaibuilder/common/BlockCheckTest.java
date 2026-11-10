@@ -72,7 +72,8 @@ class BlockCheckTest {
         List<String> warnings = check(false, new Op.Fill(BOX, "oak_stairs[direction=north]"));
         assertEquals(1, warnings.size());
         assertTrue(warnings.get(0).contains("unknown property 'direction' was ignored"), warnings.get(0));
-        assertTrue(warnings.get(0).contains("facing, half"), warnings.get(0));
+        // The fake catalog's Map.of has no fixed order, so either order of the two names is right.
+        assertTrue(warnings.get(0).contains("facing, half") || warnings.get(0).contains("half, facing"), warnings.get(0));
         assertThrows(EditException.class, () -> check(true, new Op.Fill(BOX, "oak_stairs[direction=north]")));
     }
 

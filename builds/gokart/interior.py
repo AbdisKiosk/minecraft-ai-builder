@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from build import G, GY, OUT, X0, Z0, Builder, Vox, box, kart  # noqa: E402
+from build import G, GY, OUT, X0, Z0, Builder, box, kart, vox  # noqa: E402
 
 UP = G + 6                         # upper floor: walking level y71, floor slab y70
 IX0, IX1, IZ0, IZ1 = 37, 45, 4, 14  # interior footprint inside the glass
@@ -112,7 +112,7 @@ def build(v):
 
 if __name__ == "__main__":
     b = Builder.connect()
-    v = Vox()
+    v = vox()
     build(v)
     v.connect()
     b.blocks(v.items())

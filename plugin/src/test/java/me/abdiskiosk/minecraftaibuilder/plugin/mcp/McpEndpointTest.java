@@ -1,5 +1,6 @@
 package me.abdiskiosk.minecraftaibuilder.plugin.mcp;
 
+import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
@@ -65,5 +66,54 @@ class McpEndpointTest {
     @Test
     void pingReturnsEmptyResult() {
         assertEquals(0, call("{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"ping\"}").getAsJsonObject("result").size());
+    }
+
+    /**
+     * The tool list is sent to Claude in every session, so its size is a fixed token cost.
+     * It was 11,183 characters (about 3,300 tokens) before the schemas were trimmed.
+     */
+    @Test
+    void toolListStaysWithinBudget() {
+        ToolRegistry registry = new ToolRegistry(null, Logger.getAnonymousLogger());
+        Tools.registerAll(registry, null);
+        McpEndpoint real = new McpEndpoint(registry, "test");
+        JsonObject list = real.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"))
+                .getAsJsonObject().getAsJsonObject("result");
+        int chars = list.toString().length();
+        assertTrue(chars <= 6500, "tools/list is " + chars + " characters; shorten descriptions or schemas before raising the budget");
+        assertTrue(McpEndpoint.INSTRUCTIONS.length() <= 1400, "instructions are " + McpEndpoint.INSTRUCTIONS.length() + " characters");
+
+        java.util.Set<String> names = new java.util.HashSet<>();
+        list.getAsJsonArray("tools").forEach(t -> names.add(t.getAsJsonObject().get("name").getAsString()));
+        assertTrue(names.containsAll(java.util.List.of("get_context", "fill", "batch", "render_region")), names.toString());
+        for (String hidden : java.util.List.of("walls", "outline", "replace", "get_selection")) {
+            assertFalse(names.contains(hidden), hidden + " should not be listed");
+            assertTrue(registry.has(hidden), hidden + " should still be callable");
+        }
+        assertEquals(ToolStats.SESSION, real.stats().rows().get(0).tool());
+        assertEquals(chars, real.stats().rows().get(0).resultChars());
+    }
+
+    @Test
+    void statsCountCallsAndImages() {
+        call("{\"jsonrpc\":\"2.0\",\"id\":6,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\",\"arguments\":{\"a\":1}}}");
+        call("{\"jsonrpc\":\"2.0\",\"id\":7,\"method\":\"tools/call\",\"params\":{\"name\":\"echo\"}}");
+        ToolStats.Row row = endpoint.stats().rows().get(0);
+        assertEquals("echo", row.tool());
+        assertEquals(2, row.calls());
+        assertEquals("{\"a\":1}".length() + 2, row.argChars());
+        assertTrue(row.resultChars() > 0); // the registry has no server behind it, so the result is an error text
+
+        byte[] png = new byte[24];
+        png[1] = 'P'; png[2] = 'N'; png[3] = 'G';
+        png[18] = 3; png[19] = (byte) 0xC0; // width 960
+        png[22] = 2; png[23] = (byte) 0xBC; // height 700
+        assertEquals(960L * 700, ToolStats.pngPixels(png));
+        assertEquals(0, ToolStats.pngPixels(null));
+        ToolStats stats = new ToolStats();
+        stats.record("render_region", 70, 35, 960L * 700);
+        assertEquals(926, stats.rows().get(0).tokens()); // 105 chars / 3.5 + 672000 px / 750
+        stats.reset();
+        assertTrue(stats.rows().isEmpty());
     }
 }

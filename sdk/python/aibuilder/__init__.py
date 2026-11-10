@@ -10,6 +10,9 @@ Claude writes a short script, the script expands it into thousands of blocks.
     b.block(10, 64, 10, "lantern")
     b.flush()                              # everything queued so far = one undo step
 
+Keep scripts short, they are what Claude pays for: `b.at(origin)` makes coordinates small offsets, and
+`Vox` (see vox.py) collects blocks locally with box/ring/weighted patterns and connects fences and panes.
+
 No dependencies beyond the standard library.
 """
 
@@ -25,7 +28,9 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-__all__ = ["Builder", "AIBuilderError", "box", "circle", "SELECTION"]
+from .vox import Vox, pick
+
+__all__ = ["Builder", "AIBuilderError", "Vox", "box", "circle", "decode", "expand_layers", "pick", "SELECTION"]
 
 SELECTION = "selection"
 
@@ -35,7 +40,7 @@ Vec = Sequence[Any]  # [x, y, z]; parts may be ints or "~n" relative strings
 class AIBuilderError(RuntimeError):
     """A tool call failed (unknown block, outside build zone, server unreachable, ...).
 
-    `payload` is the server's full answer when there was one, e.g. {"job": "j7", "changed": 0, "error": "..."}.
+    `payload` is the server's full answer when there was one, e.g. {"status": "failed", "changed": 0, "error": "..."}.
     """
 
     def __init__(self, message: str, payload: dict | None = None):
@@ -59,6 +64,7 @@ class Builder:
         self.world = world
         self.timeout = timeout
         self._ops: list[dict] = []
+        self._origin: list | None = None
 
     @classmethod
     def connect(cls, **kwargs) -> "Builder":
@@ -110,8 +116,13 @@ class Builder:
     def read(self, region, mode: str = "summary", heightmap: bool = False) -> dict:
         return self.call("read_region", region=region, mode=mode, heightmap=heightmap)
 
-    def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None) -> bytes:
-        png = base64.b64decode(self.call("render_region", region=region, view=view)["png_base64"])
+    def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None,
+               size: str | None = None) -> bytes:
+        """PNG of a region (absolute coordinates). size: "small", "medium" (default) or "large".
+
+        Looking at the picture costs Claude about width*height/750 tokens, so use "small" for progress checks.
+        """
+        png = base64.b64decode(self.call("render_region", region=region, view=view, size=size)["png_base64"])
         if save_to:
             Path(save_to).write_bytes(png)
         return png
@@ -120,6 +131,15 @@ class Builder:
         return self.call("undo", steps=steps)["undone"]
 
     # ---- edits (queued until flush) ----
+
+    def at(self, origin: Vec | None) -> "Builder":
+        """Makes the coordinates of queued edits offsets from `origin` ([x, y, z], "~" allowed); None turns it off.
+
+        Applies to a whole flush, so anything already queued is sent first. Reads and renders stay absolute.
+        """
+        self.flush()
+        self._origin = list(origin) if origin is not None else None
+        return self
 
     def _queue(self, op: str, **args) -> "Builder":
         self._ops.append({"op": op, **{k: v for k, v in args.items() if v is not None}})
@@ -172,7 +192,7 @@ class Builder:
         return self._queue("paste", blueprint=blueprint, origin=list(origin), rotation=rotation)
 
     def flush(self, wait: bool = True) -> dict | None:
-        """Sends everything queued as one batch (= one undo step). Returns the job result.
+        """Sends everything queued as one batch (= one undo step). Returns the result, {"changed": n} when done.
 
         On failure the queue is put back, so fix the cause (or `clear()`) and flush again. Blocks are validated
         before anything is placed, so an unknown block fails the whole batch with nothing built.
@@ -181,7 +201,7 @@ class Builder:
             return None
         ops, self._ops = self._ops, []
         try:
-            result = self.call("batch", ops=ops)
+            result = self.call("batch", ops=ops, origin=self._origin)
             while wait and result.get("status") == "running":
                 time.sleep(1)
                 result = self.call("job_status", job=result["job"])
@@ -217,3 +237,38 @@ def circle(center_x: int, center_z: int, radius: float, steps: int | None = None
         if p not in seen:
             seen.add(p)
             yield p
+
+
+def expand_layers(layers: list[list[str]]) -> list[list[str]]:
+    """Blueprint layers with the "^" / "3^" row and layer repeats written out."""
+    out: list[list[str]] = []
+    for layer in layers:
+        if layer and layer[0].endswith("^"):
+            out.extend([out[-1]] * int(layer[0][:-1] or 1))
+            continue
+        rows: list[str] = []
+        for row in layer:
+            if row.endswith("^"):
+                rows.extend([rows[-1]] * int(row[:-1] or 1))
+            else:
+                rows.append(row)
+        out.append(rows)
+    return out
+
+
+def decode(read: dict) -> dict[tuple[int, int, int], str]:
+    """A `read(region, mode="full")` result as {(x, y, z): state} in world coordinates."""
+    ox, oy, oz = read["origin"]
+    out = {}
+    for y, layer in enumerate(expand_layers(read["layers"])):
+        for z, row in enumerate(layer):
+            x, count = 0, ""
+            for ch in row:
+                if ch.isdigit():
+                    count += ch
+                    continue
+                for _ in range(int(count or 1)):
+                    out[(ox + x, oy + y, oz + z)] = read["palette"][ch]
+                    x += 1
+                count = ""
+    return out
