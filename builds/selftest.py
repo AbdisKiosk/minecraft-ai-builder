@@ -255,6 +255,23 @@ def main():
     except AIBuilderError as e:
         check("clone and saved blueprints", False, str(e))
 
+    # ---- decorate: entities through the Bukkit API, outside WorldEdit's history ----
+    dx, dz = ox + 52, oz + 52
+    deco = box([dx - 1, oy - 1, dz - 1], [dx + 3, oy + 2, dz + 3])
+    b.decorate(remove=deco)  # leftovers from an earlier run
+    b.block(dx, oy, dz, "stone")
+    b.block(dx + 2, oy - 1, dz + 1, "stone")
+    b.flush()
+    try:
+        res = b.decorate(items=[{"at": [dx, oy, dz + 1], "frame": "compass", "facing": "south"},
+                                {"at": [dx + 2, oy, dz + 1], "stand": {"yaw": 180, "head": "iron_helmet", "arms": True}}])
+        check("decorate spawns a frame and a stand", res.get("spawned") == 2, str(res))
+        res = b.decorate(remove=deco)
+        check("decorate remove takes both away", res.get("removed") == 2, str(res))
+    except AIBuilderError as e:
+        check("decorate", False, str(e))
+    expect_error("sign text on a non-sign is rejected", lambda: b.decorate(items=[{"at": [dx, oy, dz], "text": ["x"]}]), "needs a sign")
+
     # ---- undo ----
     if ctx["caller"]["name"] == "console" and legacy:
         expect_error("undo as console explains itself on WorldEdit 6", b.undo, "player")

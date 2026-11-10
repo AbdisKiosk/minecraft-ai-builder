@@ -137,6 +137,16 @@ class Builder:
     def undo(self, steps: int = 1) -> int:
         return self.call("undo", steps=steps)["undone"]
 
+    def decorate(self, items: list | None = None, origin: Vec | None = None, remove=None) -> dict:
+        """Sign text, container contents, item frames and armor stands; runs now, not queued.
+
+        Each item is {"at": [x, y, z]} plus one of text=[lines], contents={item: count}, frame=item with
+        facing, or stand={yaw, head, chest, legs, feet, hand, arms, small, base}. `remove` (a region) first
+        deletes item frames and armor stands in it. NOT undoable: `undo` does not revert it, so flush the blocks
+        it needs (signs, chests, walls) before calling. Returns {"set": n, "spawned": n, "removed": n}, zeros left out.
+        """
+        return self.call("decorate", items=items, origin=list(origin) if origin is not None else None, remove=remove)
+
     # ---- edits (queued until flush) ----
 
     def at(self, origin: Vec | None) -> "Builder":

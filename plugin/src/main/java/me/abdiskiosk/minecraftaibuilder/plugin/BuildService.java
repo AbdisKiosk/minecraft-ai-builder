@@ -370,15 +370,9 @@ public final class BuildService {
                         + " blocks; max per op is " + config.maxVolumePerOp());
             }
             Box bounds = op.bounds();
-            if (config.zone() != null) {
-                if (!config.zoneWorld().equals(world) || !config.zone().contains(bounds)) {
-                    throw new EditException("edit " + bounds + " is outside the build zone "
-                            + config.zoneWorld() + " " + config.zone());
-                }
-            }
-            if (bounds.min().y() < caller.minY() || bounds.max().y() > caller.maxY()) {
-                String what = op.kind() + " covers y " + bounds.min().y() + ".." + bounds.max().y() + " but world '" + world
-                        + "' only allows y " + caller.minY() + ".." + caller.maxY() + " (Minecraft " + minecraftVersion() + ")";
+            checkZone(world, bounds);
+            String what = outsideHeight(caller, bounds, op.kind());
+            if (what != null) {
                 // A sphere or pyramid near the limit is clipped by design; anything else is a mistake worth stopping.
                 if (op instanceof Op.Sphere || op instanceof Op.Pyramid) {
                     warnings.add(what + "; the part outside was cut off");
@@ -389,6 +383,29 @@ public final class BuildService {
         }
         warnings.addAll(BlockCheck.check(bridge.catalog(), ops));
         return warnings;
+    }
+
+    /** Throws unless {@code bounds} may be changed: allowed world, build zone and the world's y limits. */
+    public void checkEditable(Caller caller, Box bounds, String what) {
+        checkWorld(caller.world());
+        checkZone(caller.world(), bounds);
+        String problem = outsideHeight(caller, bounds, what);
+        if (problem != null) throw new EditException(problem);
+    }
+
+    private void checkZone(String world, Box bounds) {
+        if (config.zone() != null) {
+            if (!config.zoneWorld().equals(world) || !config.zone().contains(bounds)) {
+                throw new EditException("edit " + bounds + " is outside the build zone "
+                        + config.zoneWorld() + " " + config.zone());
+            }
+        }
+    }
+
+    private static String outsideHeight(Caller caller, Box bounds, String what) {
+        if (bounds.min().y() >= caller.minY() && bounds.max().y() <= caller.maxY()) return null;
+        return what + " covers y " + bounds.min().y() + ".." + bounds.max().y() + " but world '" + caller.world()
+                + "' only allows y " + caller.minY() + ".." + caller.maxY() + " (Minecraft " + minecraftVersion() + ")";
     }
 
     private void checkWorld(String world) {

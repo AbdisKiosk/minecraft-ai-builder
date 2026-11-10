@@ -62,6 +62,9 @@ print(b.flush())                               # one undo step
 - After a phase, run `check_region` on it first: the cheapest check, a few coordinates of floating or unsupported blocks, lone door/bed halves, reversed stairs, unconnected fences/panes and dark floors. Fix the real ones.
 - Then look with `render_region` at `size: "small"`, `view: "iso"` (a few hundred tokens). Use `"both"` when the floor plan matters, `"large"` only for the final look or when asked. The image is cropped to the blocks, so a generous region costs nothing extra.
 - To judge a facade use the elevation of that face (`view: "north"`, `"south"`, `"east"`, `"west"`); to see the back of a build, `view: "iso"` with the opposite `corner` (e.g. `"nw"`).
+- Last, `decorate` the placed signs and containers, and add item frames (`facing` = away from the wall) and armor stands:
+  `{"origin": [104, 64, -20], "items": [{"at": [2, 2, 0], "text": ["The Inn", "Rooms"]}, {"at": [1, 1, 5], "contents": {"bread": 6, "torch": 16}}]}`.
+  `undo` does not revert it; undoing the blocks removes a sign or chest with its data, and `remove` clears frames and stands.
 - For a critique of how it looks, give the region and the brief to the `build-reviewer` subagent: the images stay in its context and you get back at most six concrete fixes.
 - To confirm a small fix, `check_region` or `read_region` summary counts are cheaper than another render.
 

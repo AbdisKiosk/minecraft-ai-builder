@@ -19,6 +19,7 @@ import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -141,6 +142,11 @@ public final class Tools {
         registry.register(new Tool("save_blueprint", "Save a region for place_blueprint name=.",
                 schema("\"name\":{\"type\":\"string\"},\"region\":" + REGION, "name", "region"),
                 a -> saveBlueprint(a, service)));
+
+        registry.register(new Tool("decorate",
+                "Sign text, chest items, item frames, armor stands; no undo. items:[{at,text:[lines]|contents:{item:n}|frame:item,facing|stand:{yaw,head,chest,legs,feet,hand,arms,small,base}}]; remove=region clears frames/stands first.",
+                schema("\"items\":{\"type\":\"array\"},\"origin\":" + VEC + ",\"remove\":" + REGION),
+                a -> decorate(a, service)));
 
         registry.register(new Tool("undo", "Undo the caller's last edits (same history as //undo).",
                 schema("\"steps\":{\"type\":\"integer\"}"),
@@ -354,6 +360,18 @@ public final class Tools {
         ToolResult out = jobJson(result, true);
         if (!soleOnlinePlayer(a.caller())) out.data().addProperty("as", a.caller().name());
         return out;
+    }
+
+    private static ToolResult decorate(Args a, BuildService service) {
+        a.only("decorate", "items", "origin", "remove");
+        if (!a.has("items") && !a.has("remove")) throw new EditException("give \"items\", \"remove\" or both");
+        List<DecorSpec.Item> items = a.has("items") ? DecorSpec.parse(a) : List.of();
+        Decorator.Result r = Decorator.apply(service, a.caller(), items, a.has("remove") ? a.region("remove") : null);
+        JsonObject o = new JsonObject();
+        if (r.set() > 0) o.addProperty("set", r.set());
+        if (r.spawned() > 0) o.addProperty("spawned", r.spawned());
+        if (r.removed() > 0) o.addProperty("removed", r.removed());
+        return ToolResult.of(o);
     }
 
     /** Nobody needs to be told who acted when there is only one player it could have been. */
