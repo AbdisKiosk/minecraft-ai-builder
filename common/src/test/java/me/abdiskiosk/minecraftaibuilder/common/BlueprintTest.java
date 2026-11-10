@@ -69,4 +69,54 @@ class BlueprintTest {
         assertThrows(EditException.class, () -> Blueprint.of(palette, List.of(List.of("S", "0^"))));
         assertThrows(EditException.class, () -> Blueprint.of(Map.of('^', "stone"), List.of(List.of("^"))));
     }
+
+    private static List<String> cells(Blueprint bp) {
+        List<String> seen = new ArrayList<>();
+        bp.forEachCell((x, y, z, p) -> seen.add(x + "," + y + "," + z + "=" + p));
+        return seen;
+    }
+
+    @Test
+    void ofStatesKeepsRegionOrder() {
+        // 2 x 2 x 2 in y, z, x order
+        String[] states = {"stone", "air", "dirt", "oak_stairs[facing=east]", "cave_air", "glass", "stone", "air"};
+        Blueprint skip = Blueprint.ofStates(2, 2, 2, states, true);
+        assertEquals(List.of("0,0,0=stone", "0,0,1=dirt", "1,0,1=oak_stairs[facing=east]", "1,1,0=glass", "0,1,1=stone"), cells(skip));
+        assertEquals(5, skip.cellCount());
+        assertEquals(Blueprint.SKIP, skip.at(1, 0, 0));
+        assertEquals(2, skip.sizeX());
+        assertEquals(2, skip.sizeY());
+        assertEquals(2, skip.sizeZ());
+
+        Blueprint withAir = Blueprint.ofStates(2, 2, 2, states, false);
+        assertEquals(8, withAir.cellCount());
+        assertEquals("air", withAir.palette().get(withAir.at(0, 1, 0))); // cave_air places plain air
+    }
+
+    @Test
+    void ofStatesHasNoPaletteLimit() {
+        String[] states = new String[200];
+        for (int i = 0; i < states.length; i++) states[i] = "block_" + i;
+        Blueprint bp = Blueprint.ofStates(200, 1, 1, states, true);
+        assertEquals(200, bp.palette().size());
+        assertEquals("block_199", bp.palette().get(bp.at(199, 0, 0)));
+    }
+
+    @Test
+    void flipsMirrorCellsAndStates() {
+        Blueprint bp = Blueprint.of(Map.of('S', "oak_stairs[facing=east]", 'N', "70%oak_stairs[facing=north],30%stone"),
+                List.of(List.of("SN.", "N"), List.of("^")));
+        Blueprint x = bp.flipped('x');
+        // the short row "N" is padded to the full width, so after the flip it sits at the far end
+        assertEquals(List.of("1,0,0=70%oak_stairs[facing=north],30%stone", "2,0,0=oak_stairs[facing=west]",
+                "2,0,1=70%oak_stairs[facing=north],30%stone", "1,1,0=70%oak_stairs[facing=north],30%stone",
+                "2,1,0=oak_stairs[facing=west]", "2,1,1=70%oak_stairs[facing=north],30%stone"), cells(x));
+        assertEquals(bp.cellCount(), x.cellCount());
+
+        Blueprint z = bp.flipped('z');
+        assertEquals(List.of("0,0,0=70%oak_stairs[facing=south],30%stone", "0,0,1=oak_stairs[facing=east]",
+                "1,0,1=70%oak_stairs[facing=south],30%stone"), cells(z).subList(0, 3));
+        assertEquals(cells(bp), cells(z.flipped('z')));
+        assertThrows(EditException.class, () -> bp.flipped('y'));
+    }
 }

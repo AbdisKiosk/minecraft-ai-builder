@@ -45,7 +45,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return;
         }
 
-        BuildService service = new BuildService(this, bridge, config);
+        BuildService service = new BuildService(this, bridge, config, getDataFolder().toPath());
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, getDescription().getVersion());

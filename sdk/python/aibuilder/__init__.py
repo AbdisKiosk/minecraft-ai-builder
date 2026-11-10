@@ -192,11 +192,40 @@ class Builder:
         """Queues [x, y, z, state] items; with origin they are offsets from it."""
         return self._queue("blocks", blocks=[list(i) for i in items], origin=list(origin) if origin else None)
 
-    def paste(self, blueprint: dict | str | os.PathLike, origin: Vec, rotation: int = 0):
-        """Queues a blueprint paste. A path is read here, so the file never has to reach the server's disk."""
+    def paste(self, blueprint: dict | str | os.PathLike | None = None, origin: Vec | None = None,
+              rotation: int = 0, name: str | None = None):
+        """Queues a blueprint paste: a dict, a path, or name= of one saved with save_blueprint.
+
+        A .json path is read here, so the file never has to reach the server's disk; a .schem/.schematic path
+        is read by the server's WorldEdit, so it must be a file the server can see.
+        """
+        if origin is None:
+            raise AIBuilderError("paste needs an origin")
+        if name is not None:
+            return self._queue("paste", name=name, origin=list(origin), rotation=rotation)
         if not isinstance(blueprint, dict):
-            blueprint = json.loads(Path(blueprint).read_text())
+            path = Path(blueprint)
+            if path.suffix in (".schem", ".schematic"):
+                return self._queue("paste", path=str(path.resolve()), origin=list(origin), rotation=rotation)
+            blueprint = json.loads(path.read_text())
         return self._queue("paste", blueprint=blueprint, origin=list(origin), rotation=rotation)
+
+    def clone(self, region, to: Vec, rotation: int = 0, flip: str | None = None, repeat: int = 1,
+              step: Vec | None = None, air: bool = False):
+        """Queues a copy of a built region with its min corner at `to`; flip="x"|"z" mirrors before rotating.
+
+        repeat > 1 places more copies, each `step` ([dx, dy, dz], never shifted by at()) further on. air=True
+        copies air too instead of merging with what is there. Sign text and container contents are not copied.
+        """
+        return self._queue("clone", region=region, to=list(to), rotation=rotation or None, flip=flip,
+                           repeat=repeat if repeat != 1 else None, step=list(step) if step else None, air=air or None)
+
+    def save_blueprint(self, name: str, region) -> dict:
+        """Saves a region on the server ({"saved", "size", "blocks"}); paste(name=...) places it.
+
+        Runs immediately: flush() first if the region is still queued.
+        """
+        return self.call("save_blueprint", name=name, region=region)
 
     def flush(self, wait: bool = True) -> dict | None:
         """Sends everything queued as one batch (= one undo step). Returns the result, {"changed": n} when done.

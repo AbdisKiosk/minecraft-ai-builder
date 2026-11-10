@@ -62,6 +62,10 @@ public final class Args {
         return caller;
     }
 
+    public BuildService service() {
+        return service;
+    }
+
     public java.util.List<java.nio.file.Path> blueprintDirs() {
         return service.config().blueprintDirs();
     }

@@ -31,4 +31,13 @@ public interface WorldEditBridge {
      * Index order is y, then z, then x (see {@link RegionCodec#index}).
      */
     String[] read(String world, Box box);
+
+    /**
+     * Reads a WorldEdit schematic file ({@code .schem}, {@code .schematic}). It does no world access, so unlike the
+     * other methods it may be called from any thread.
+     *
+     * @throws EditException when WorldEdit does not recognise the format or the clipboard holds more than
+     *                       {@code maxVolume} blocks
+     */
+    Schematic readSchematic(java.nio.file.Path file, long maxVolume);
 }

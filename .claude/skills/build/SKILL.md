@@ -21,7 +21,10 @@ Every argument you write and every result you read costs tokens, so pick by size
 | A few shapes | One `batch` with `origin` (coordinates become small offsets) and `vars` for any pattern used twice |
 | Details, up to ~100 blocks | `set_blocks` grouped by state, with `origin` |
 | The same module several times | `place_blueprint` once per position, or one script |
+| Copy, mirror or repeat something already built | `clone` op in a batch (`flip`, `rotation`, `repeat` + `step`) |
 | Over ~500 single blocks, loops, symmetry, curves | A script (below) |
+
+`save_blueprint` keeps a region on the server; `place_blueprint` or a `paste` op with `name` places it again. Clone and saved blueprints copy block states only, not sign text or container contents.
 
 ```json
 {"origin": [104, 64, -20], "vars": {"W": "70%stone_bricks,20%cracked_stone_bricks,10%mossy_stone_bricks"},

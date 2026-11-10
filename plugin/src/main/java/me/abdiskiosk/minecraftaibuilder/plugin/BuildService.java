@@ -15,6 +15,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitRunnable;
 
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -38,6 +39,7 @@ public final class BuildService {
     private final Plugin plugin;
     private final WorldEditBridge bridge;
     private final PluginConfig config;
+    private final Path dataDir;
     private final AtomicInteger nextJob = new AtomicInteger(1);
     private final Map<String, Job> jobs = new LinkedHashMap<>() {
         @Override
@@ -46,10 +48,12 @@ public final class BuildService {
         }
     };
 
-    public BuildService(Plugin plugin, WorldEditBridge bridge, PluginConfig config) {
+    /** @param dataDir the plugin's data folder; saved blueprints live in its {@code blueprints} folder */
+    public BuildService(Plugin plugin, WorldEditBridge bridge, PluginConfig config, Path dataDir) {
         this.plugin = plugin;
         this.bridge = bridge;
         this.config = config;
+        this.dataDir = dataDir;
     }
 
     public WorldEditBridge bridge() {
@@ -58,6 +62,10 @@ public final class BuildService {
 
     public PluginConfig config() {
         return config;
+    }
+
+    public Path dataDir() {
+        return dataDir;
     }
 
     /**

@@ -12,13 +12,18 @@ import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
+import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
 import org.junit.jupiter.api.Test;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
@@ -81,11 +86,30 @@ class ToolsTest {
             });
             return states;
         }
+        /** Any schematic file holds one east-facing stair on top of air. */
+        public Schematic readSchematic(Path file, long maxVolume) {
+            return new Schematic(1, 2, 1, new String[]{"air", "oak_stairs[facing=east]"});
+        }
     }
 
     private final PluginConfig config = new PluginConfig("127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
             List.of(), "", null, List.of());
-    private final BuildService service = new BuildService(null, new FakeBridge(), config);
+    private final Path dataDir = tempDir();
+    private final BuildService service = new BuildService(null, new FakeBridge(), config, dataDir);
+
+    private static Path tempDir() {
+        try {
+            return Files.createTempDirectory("aibuilder-test");
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    private static Op single(String type, Args a) {
+        List<Op> ops = Tools.parseOp(type, a);
+        assertEquals(1, ops.size());
+        return ops.get(0);
+    }
     private final BuildService.Caller caller = new BuildService.Caller(null, "console", "world", null, 0, List.of("Ann", "Bob"), 0, 255);
     private final ToolRegistry registry = new ToolRegistry(service, Logger.getAnonymousLogger());
 
@@ -161,25 +185,25 @@ class ToolsTest {
     @Test
     void regionTakesSixNumbers() {
         Box expected = Box.of(new Vec3(1, 64, 2), new Vec3(3, 70, 9));
-        assertEquals(expected, ((Op.Fill) Tools.parseOp("fill", args("{\"region\":[3,70,9,1,64,2],\"pattern\":\"stone\"}"))).box());
-        assertEquals(expected, ((Op.Fill) Tools.parseOp("fill", args("{\"region\":{\"min\":[1,64,2],\"max\":[3,70,9]},\"pattern\":\"stone\"}"))).box());
+        assertEquals(expected, ((Op.Fill) single("fill", args("{\"region\":[3,70,9,1,64,2],\"pattern\":\"stone\"}"))).box());
+        assertEquals(expected, ((Op.Fill) single("fill", args("{\"region\":{\"min\":[1,64,2],\"max\":[3,70,9]},\"pattern\":\"stone\"}"))).box());
         assertEquals("\"region\" must be \"selection\" or [x1,y1,z1,x2,y2,z2]", error("fill", "{\"region\":[1,2,3],\"pattern\":\"stone\"}"));
     }
 
     @Test
     void fillModesCoverTheOldTools() {
         String region = "\"region\":[0,0,0,4,4,4],\"pattern\":\"stone\"";
-        assertInstanceOf(Op.Fill.class, Tools.parseOp("fill", args("{" + region + "}")));
-        assertInstanceOf(Op.Walls.class, Tools.parseOp("fill", args("{" + region + ",\"mode\":\"walls\"}")));
-        assertInstanceOf(Op.Outline.class, Tools.parseOp("fill", args("{" + region + ",\"mode\":\"outline\"}")));
-        Op.Replace replace = (Op.Replace) Tools.parseOp("fill", args("{" + region + ",\"from\":\"dirt,grass_block\"}"));
+        assertInstanceOf(Op.Fill.class, single("fill", args("{" + region + "}")));
+        assertInstanceOf(Op.Walls.class, single("fill", args("{" + region + ",\"mode\":\"walls\"}")));
+        assertInstanceOf(Op.Outline.class, single("fill", args("{" + region + ",\"mode\":\"outline\"}")));
+        Op.Replace replace = (Op.Replace) single("fill", args("{" + region + ",\"from\":\"dirt,grass_block\"}"));
         assertEquals("dirt,grass_block", replace.from());
         assertEquals("mode must be solid, walls or outline", error("fill", "{" + region + ",\"mode\":\"hollow\"}"));
         assertEquals("\"from\" only works with mode solid", error("fill", "{" + region + ",\"mode\":\"walls\",\"from\":\"dirt\"}"));
         // The old names stay valid for batch ops and REST scripts.
-        assertInstanceOf(Op.Walls.class, Tools.parseOp("walls", args("{" + region + "}")));
-        assertInstanceOf(Op.Outline.class, Tools.parseOp("outline", args("{" + region + "}")));
-        assertInstanceOf(Op.Replace.class, Tools.parseOp("replace", args("{" + region + ",\"from\":\"dirt\"}")));
+        assertInstanceOf(Op.Walls.class, single("walls", args("{" + region + "}")));
+        assertInstanceOf(Op.Outline.class, single("outline", args("{" + region + "}")));
+        assertInstanceOf(Op.Replace.class, single("replace", args("{" + region + ",\"from\":\"dirt\"}")));
         assertTrue(registry.has("walls") && registry.has("replace") && registry.has("get_selection"));
     }
 
@@ -210,7 +234,7 @@ class ToolsTest {
 
     @Test
     void groupedBlocksAreChecked() {
-        Op.Blocks blocks = (Op.Blocks) Tools.parseOp("blocks", args("{\"origin\":[10,64,10],\"blocks\":{\"oak_fence\":[[0,0,0],[1,0,0]],\"torch\":[[0,1,0]]}}"));
+        Op.Blocks blocks = (Op.Blocks) single("blocks", args("{\"origin\":[10,64,10],\"blocks\":{\"oak_fence\":[[0,0,0],[1,0,0]],\"torch\":[[0,1,0]]}}"));
         assertEquals(3, blocks.blocks().size());
         assertEquals(new Op.BlockAt(new Vec3(11, 64, 10), "oak_fence"), blocks.blocks().get(1));
         assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0]]}}").startsWith("blocks[\"stone\"][0] must be [x,y,z]"));
@@ -242,5 +266,71 @@ class ToolsTest {
         assertEquals("unknown check 'floaty'; use floating, unsupported, halves, stairs, unconnected, dark",
                 error("check_region", "{\"region\":[0,64,0,4,68,4],\"checks\":\"floating,floaty\"}"));
         assertTrue(error("check_region", "{\"region\":[0,64,0,4,68,4],\"mode\":\"full\"}").contains("unknown argument \"mode\""));
+    }
+
+    private static List<String> cells(Op.Paste paste) {
+        List<String> out = new java.util.ArrayList<>();
+        paste.blueprint().forEachCell((x, y, z, p) -> out.add(x + "," + y + "," + z + "=" + p));
+        return out;
+    }
+
+    @Test
+    void cloneRepeatsPastesOfTheSourceAtEachStep() {
+        world.put(new Vec3(0, 64, 0), "oak_stairs[facing=east]");
+        world.put(new Vec3(1, 64, 0), "stone");
+        // The batch origin shifts region and to, but not step; (2,64,0) is air and is skipped.
+        List<Op> ops = Tools.batchOps(args("{\"origin\":[10,0,0],\"ops\":[{\"op\":\"clone\",\"region\":[-10,64,0,-8,64,0],"
+                + "\"to\":[0,70,0],\"repeat\":3,\"step\":[0,0,5],\"rotation\":90}]}"));
+        assertEquals(3, ops.size());
+        for (int i = 0; i < 3; i++) {
+            Op.Paste paste = (Op.Paste) ops.get(i);
+            assertEquals(new Vec3(10, 70, 5 * i), paste.origin());
+            assertEquals(90, paste.rotation());
+            assertEquals(List.of("0,0,0=oak_stairs[facing=east]", "1,0,0=stone"), cells(paste));
+        }
+        Op.Paste withAir = (Op.Paste) single("clone", args("{\"region\":[0,64,0,2,64,0],\"to\":[0,70,0],\"air\":true}"));
+        assertEquals(3, withAir.blueprint().cellCount());
+        Op.Paste flipped = (Op.Paste) single("clone", args("{\"region\":[0,64,0,2,64,0],\"to\":[0,70,0],\"flip\":\"x\"}"));
+        assertEquals(List.of("1,0,0=stone", "2,0,0=oak_stairs[facing=west]"), cells(flipped));
+    }
+
+    @Test
+    void cloneArgumentsAreChecked() {
+        String region = "\"region\":[0,64,0,1,64,1],\"to\":[0,70,0]";
+        assertEquals("repeat needs \"step\": [dx,dy,dz] between copies", error("clone", "{" + region + ",\"repeat\":2}"));
+        assertEquals("repeat must be 1..64", error("clone", "{" + region + ",\"repeat\":65,\"step\":[1,0,0]}"));
+        assertEquals("flip must be \"x\" or \"z\"", error("clone", "{" + region + ",\"flip\":\"y\"}"));
+        assertEquals("rotation must be 0, 90, 180 or 270", error("clone", "{" + region + ",\"rotation\":45}"));
+        assertTrue(error("batch", "{\"ops\":[{\"op\":\"clone\"," + region + ",\"mirror\":\"x\"}]}").startsWith("ops[0] (clone): unknown argument \"mirror\""));
+    }
+
+    @Test
+    void savedBlueprintsArePlacedByName() throws IOException {
+        world.put(new Vec3(0, 64, 0), "oak_stairs[facing=east]");
+        world.put(new Vec3(2, 64, 0), "stone");
+        JsonObject saved = call("save_blueprint", "{\"name\":\"hut-1\",\"region\":[0,64,0,2,65,0]}").data();
+        assertEquals("{\"saved\":\"hut-1\",\"size\":\"3x2x1\",\"blocks\":2}", saved.toString());
+        assertTrue(Files.isRegularFile(dataDir.resolve("blueprints/hut-1.json")));
+
+        Op.Paste paste = (Op.Paste) single("paste", args("{\"name\":\"hut-1\",\"origin\":[5,5,5]}"));
+        assertEquals(new Vec3(5, 5, 5), paste.origin());
+        assertTrue(paste.blueprint().palette().containsValue("oak_stairs[facing=east]"));
+        assertEquals(6, paste.blueprint().cellCount()); // saved air places air
+
+        assertEquals("name must be 1-40 of a-z, 0-9, _ and -", error("save_blueprint", "{\"name\":\"Hut\",\"region\":[0,64,0,1,64,1]}"));
+        assertEquals("no saved blueprint 'barn'; saved: hut-1", error("place_blueprint", "{\"name\":\"barn\",\"origin\":[0,0,0]}"));
+        assertEquals("give exactly one of \"blueprint\", \"path\" or \"name\"",
+                error("place_blueprint", "{\"name\":\"hut-1\",\"path\":\"/tmp/x.json\",\"origin\":[0,0,0]}"));
+        assertEquals("give exactly one of \"blueprint\", \"path\" or \"name\"", error("place_blueprint", "{\"origin\":[0,0,0]}"));
+    }
+
+    @Test
+    void schematicFilesComeFromTheBridge() throws IOException {
+        Path file = Files.writeString(dataDir.resolve("tower.schem"), "not read by the fake bridge");
+        Op.Paste paste = (Op.Paste) single("paste", args("{\"path\":" + new com.google.gson.JsonPrimitive(file.toString()) + ",\"origin\":[0,0,0]}"));
+        assertEquals(2, paste.blueprint().sizeY());
+        assertEquals(List.of("0,1,0=oak_stairs[facing=east]"), cells(paste)); // air is skipped
+        assertEquals("path must be a .json, .schem or .schematic file",
+                error("place_blueprint", "{\"path\":\"/tmp/tower.nbt\",\"origin\":[0,0,0]}"));
     }
 }

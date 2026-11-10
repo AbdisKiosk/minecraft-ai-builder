@@ -231,6 +231,30 @@ def main():
     except AIBuilderError as e:
         check("check_region", False, str(e))
 
+    # ---- clone and saved blueprints: copies turn and mirror their block states ----
+    kx, ky, kz = ox + 40, oy + 20, oz
+    src = box([kx, ky, kz], [kx, ky, kz])
+    b.block(kx, ky, kz, "oak_stairs[facing=east]")
+    try:
+        b.flush()  # clone reads its source when the batch is parsed, so the source must already be built
+        b.clone(src, [kx + 2, ky, kz], rotation=180)
+        b.clone(src, [kx + 4, ky, kz], flip="x")
+        b.clone(src, [kx, ky, kz + 3], repeat=4, step=[2, 0, 0])
+        b.flush()
+        got = read_cells(b, [(kx + 2, ky, kz), (kx + 4, ky, kz)])
+        check("clone rotation 180 turns east stairs west", matches("oak_stairs[facing=west]", got[(kx + 2, ky, kz)]), str(got))
+        check("clone flip x turns east stairs west", matches("oak_stairs[facing=west]", got[(kx + 4, ky, kz)]), str(got))
+        row = read_cells(b, [(kx + 2 * i, ky, kz + 3) for i in range(4)])
+        check("clone repeat places every copy", all(matches("oak_stairs[facing=east]", row[(kx + 2 * i, ky, kz + 3)]) for i in range(4)), str(row))
+        res = b.save_blueprint("selftest", src)
+        check("save_blueprint counts the block", res.get("saved") == "selftest" and res.get("blocks") == 1, str(res))
+        b.paste(origin=[kx, ky, kz + 6], name="selftest")
+        b.flush()
+        got = read_cells(b, [(kx, ky, kz + 6)])
+        check("place_blueprint name= reproduces the block", matches("oak_stairs[facing=east]", got[(kx, ky, kz + 6)]), str(got))
+    except AIBuilderError as e:
+        check("clone and saved blueprints", False, str(e))
+
     # ---- undo ----
     if ctx["caller"]["name"] == "console" and legacy:
         expect_error("undo as console explains itself on WorldEdit 6", b.undo, "player")
