@@ -6,7 +6,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "sdk" / "python"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from aibuilder import Builder, box  # noqa: E402
+from aibuilder import Builder, Vox, box  # noqa: E402
 from layout import BARRIER, D, GY, W, X0, Z0, plan  # noqa: E402
 
 G = GY + 1          # first block above ground
@@ -14,64 +14,9 @@ rnd = random.Random(7)
 OUT = Path(__file__).resolve().parent
 
 
-def pick(spec):
-    """'80%a,20%b' -> random choice; plain name -> itself."""
-    if "%" not in spec:
-        return spec
-    parts = [p.split("%") for p in spec.split(",")]
-    r, acc = rnd.uniform(0, sum(float(w) for w, _ in parts)), 0.0
-    for w, n in parts:
-        acc += float(w)
-        if r <= acc:
-            return n
-    return parts[-1][1]
-
-
-NONSOLID = ("slab", "stairs", "carpet", "lantern", "pane", "bars", "fence", "wall", "torch", "rod",
-            "pot", "air", "grass", "leaves", "door", "button", "plate", "sign", "banner", "flower",
-            "poppy", "dandelion", "tulip", "allium", "bluet", "daisy", "cornflower", "fern", "bush")
-CONNECT = ("pane", "iron_bars", "fence")
-
-
-class Vox:
-    def __init__(self):
-        self.b = {}
-
-    def set(self, X, y, Z, st):
-        self.b[(X, y, Z)] = pick(st)
-
-    def box(self, x0, y0, z0, x1, y1, z1, st):
-        for X in range(min(x0, x1), max(x0, x1) + 1):
-            for y in range(min(y0, y1), max(y0, y1) + 1):
-                for Z in range(min(z0, z1), max(z0, z1) + 1):
-                    self.set(X, y, Z, st)
-
-    def ring(self, x0, y, z0, x1, z1, st):
-        for X in range(x0, x1 + 1):
-            self.set(X, y, z0, st); self.set(X, y, z1, st)
-        for Z in range(z0, z1 + 1):
-            self.set(x0, y, Z, st); self.set(x1, y, Z, st)
-
-    def connect(self):
-        def base(s): return s.split("[")[0]
-        def fam(s):
-            n = base(s)
-            if n.endswith("fence"): return "fence"
-            if "pane" in n or n == "iron_bars": return "pane"
-            return None
-        for (X, y, Z), st in list(self.b.items()):
-            f = fam(st)
-            if not f or "[" in st:
-                continue
-            dirs = {}
-            for name, (dx, dz) in {"north": (0, -1), "south": (0, 1), "east": (1, 0), "west": (-1, 0)}.items():
-                n = self.b.get((X + dx, y, Z + dz))
-                ok = n is not None and (fam(n) == f or (not any(k in base(n) for k in NONSOLID)))
-                dirs[name] = "true" if ok else "false"
-            self.b[(X, y, Z)] = f"{st}[" + ",".join(f"{k}={v}" for k, v in dirs.items()) + "]"
-
-    def items(self):
-        return [[X0 + X, y, Z0 + Z, s] for (X, y, Z), s in self.b.items()]
+def vox():
+    """Venue-local voxel buffer (X east, Z south from the venue corner; y absolute)."""
+    return Vox(origin=(X0, 0, Z0), rng=rnd)
 
 
 def letters(text):
@@ -132,7 +77,7 @@ def tree(v, X, Z, kind="oak", h=5, r=2.4):
 # --------------------------------------------------------------------------------------------
 def phase_circuit(b):
     b.fill(box([X0, G, Z0], [X0 + W - 1, 102, Z0 + 36]), "air")
-    v = Vox()
+    v = vox()
     cells = plan()
     surf = {
         "asphalt": "82%black_concrete,10%polished_blackstone,8%black_concrete_powder",
@@ -182,7 +127,7 @@ def phase_circuit(b):
 
 
 def phase_clubhouse(b):
-    v = Vox()
+    v = vox()
     x0, x1, z0, z1 = 35, 47, 2, 16          # shell
     cols_x, cols_z = (35, 38, 41, 44, 47), (2, 5, 9, 13, 16)
     # plinth / walkway
@@ -279,7 +224,7 @@ def phase_clubhouse(b):
 
 
 def phase_infield(b):
-    v = Vox()
+    v = vox()
     # race-control tower 5x5 with a 7x7 glass cab
     tx0, tz0 = 12, 13
     v.box(tx0, G, tz0, tx0 + 4, G + 7, tz0 + 4, "white_concrete")
@@ -340,7 +285,7 @@ def phase_infield(b):
 
 
 def phase_paddock(b):
-    v = Vox()
+    v = vox()
     # paddock apron
     for X in range(33, 49):
         for Z in range(19, 34):
@@ -375,7 +320,7 @@ def phase_paddock(b):
 
 
 def phase_landscape(b):
-    v = Vox()
+    v = vox()
     # perimeter: andesite curb + clipped hedge, gate to the south
     for X in range(W):
         for Z in (0, 34):
@@ -420,7 +365,7 @@ def phase_landscape(b):
 
 
 def phase_details(b):
-    v = Vox()
+    v = vox()
     # solar arrays on the garage canopy and the clubhouse roof
     for Z in range(20, 33):
         if Z % 4 != 0:

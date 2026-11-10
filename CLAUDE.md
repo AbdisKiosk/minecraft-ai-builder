@@ -20,17 +20,11 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
 - Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code.
 
-## Building in Minecraft (when the aibuilder MCP server is connected)
-- Start with `get_context`. If the player has a selection, use `"region": "selection"` instead of coordinates.
-- Axes: +y up, +x east, +z south. `"~n"` coordinates are relative to the player's feet.
-- Modern block names and states (`stone_bricks`, `oak_stairs[facing=east,half=top]`), also on 1.8 servers, where only blocks that exist in 1.8 are accepted.
-  `get_context.server` says which (`legacy_blocks`); `block_info` lists a block's properties and the closest names for an unknown one.
-  Bad blocks are rejected before anything is placed, so a failed call never leaves a half-built structure.
-- With several players online and no `player` argument, calls act as the console: `~` coordinates, selections and (on WorldEdit 6) undo then need `player`.
-- Patterns use WorldEdit syntax: `80%stone_bricks,20%andesite`.
-- **Token budget:** use shapes (`fill`, `walls`, `cylinder`, ...) or `batch` for a few ops. For anything
-  over ~500 individual blocks or with repetition, write `builds/<name>.py` with the Python SDK and run it.
-  Never hand-type large `set_blocks` lists. Never use `read_region mode=full` on big regions; use `render_region`.
-- Build in phases (foundation → frame → walls → roof → detail), render after each phase, fix, then continue.
-- Each tool call or batch is one undo step; `undo` reverts the latest.
-- Use the `/build` skill for the full workflow and `build-style` for aesthetics.
+## Building in Minecraft
+When the aibuilder MCP server is connected, use the `/build` skill for the workflow and `build-style` for aesthetics.
+The server's own instructions (`McpEndpoint.INSTRUCTIONS`) cover coordinates, regions, patterns and undo.
+
+## Token cost
+Tool descriptions, schemas and results are read by Claude in every build session, so keep them short:
+`McpEndpointTest#toolListStaysWithinBudget` caps the size of `tools/list`, and `/aibuilder stats` in the server
+console shows what a session's MCP calls cost. Say things that apply to every tool once, in `INSTRUCTIONS`.

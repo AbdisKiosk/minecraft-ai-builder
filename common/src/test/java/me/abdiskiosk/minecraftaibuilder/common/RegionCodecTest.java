@@ -46,7 +46,7 @@ class RegionCodecTest {
     void encodeRoundTripsThroughBlueprint() {
         String[] states = sample();
         RegionCodec.Encoded enc = RegionCodec.encode(BOX, states);
-        assertEquals(List.of(List.of("4A", "4A"), List.of("__B_", "__B_")), enc.layers());
+        assertEquals(List.of(List.of("4A", "^"), List.of("__B_", "^")), enc.layers());
         Blueprint bp = Blueprint.of(enc.palette(), enc.layers());
         for (int y = 0; y < 2; y++) {
             for (int z = 0; z < 2; z++) {
@@ -57,5 +57,32 @@ class RegionCodecTest {
             }
         }
         assertEquals(Map.of('A', "stone", '_', "air", 'B', "oak_stairs[facing=east]"), enc.palette());
+    }
+
+    @Test
+    void repeatedRowsAndLayersAreWrittenOnce() {
+        Box wall = Box.of(new Vec3(0, 0, 0), new Vec3(5, 4, 3)); // 6 x 5 x 4
+        String[] states = new String[(int) wall.volume()];
+        java.util.Arrays.fill(states, "stone_bricks");
+        states[RegionCodec.index(wall, 2, 4, 3)] = "glass";
+        RegionCodec.Encoded enc = RegionCodec.encode(wall, states);
+        assertEquals(List.of(List.of("6A", "3^"), List.of("3^"), List.of("6A", "2^", "AAB3A")), enc.layers());
+
+        Blueprint bp = Blueprint.of(enc.palette(), enc.layers());
+        assertEquals(5, bp.sizeY());
+        assertEquals(4, bp.sizeZ());
+        for (int y = 0; y < 5; y++) {
+            for (int z = 0; z < 4; z++) {
+                for (int x = 0; x < 6; x++) {
+                    assertEquals(states[RegionCodec.index(wall, x, y, z)], bp.palette().get(bp.at(x, y, z)), x + "," + y + "," + z);
+                }
+            }
+        }
+    }
+
+    @Test
+    void cropKeepsOrder() {
+        String[] part = RegionCodec.crop(BOX, sample(), Box.of(new Vec3(12, 61, -5), new Vec3(13, 61, -4)));
+        assertArrayEquals(new String[]{"oak_stairs[facing=east]", "air", "oak_stairs[facing=east]", "air"}, part);
     }
 }

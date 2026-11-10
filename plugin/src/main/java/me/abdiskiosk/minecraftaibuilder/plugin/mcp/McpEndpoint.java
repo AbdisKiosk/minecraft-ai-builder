@@ -22,22 +22,29 @@ public final class McpEndpoint {
 
     static final String INSTRUCTIONS = """
             Builds in a live Minecraft server through WorldEdit.
-            - Start with get_context (player position/facing, selection, server version). Prefer region "selection" when the player has one.
-            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet (needs a player; pass "player" when several are online).
+            - Start with get_context (player position/facing, selection, server version).
+            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet. A region is "selection" (the player's WorldEdit selection; prefer it when there is one) or [x1,y1,z1,x2,y2,z2].
+            - Every tool also takes "player" (who acts; default: the only online player, needed for ~ and selections when several are online) and "world".
             - Patterns use WorldEdit syntax and modern block names with states, e.g. 80%stone_bricks,20%andesite or oak_stairs[facing=east,half=top].
             - Blocks differ by server version (get_context.server). Unknown blocks and bad property values are rejected before anything is built; call block_info for valid names and properties (facing, half, ...).
-            - Each tool call (or one batch) is one undo step; undo reverts it.
+            - Each tool call (or one batch) is one undo step; undo reverts it. Group related ops in one batch with "origin" and "vars" to keep calls short.
             - Large or repetitive builds: write a script with the aibuilder Python SDK instead of many tool calls.
-            - Check work with render_region (image) rather than read_region mode=full.""";
+            - Check work with render_region (size small unless detail matters) rather than read_region mode=full.""";
 
     private final ToolRegistry tools;
     private final String version;
+    private final ToolStats stats = new ToolStats();
     // No HTML escaping: it would turn "=" and "'" into \\u003d / \\u0027 in the text Claude reads (states, errors).
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
 
     public McpEndpoint(ToolRegistry tools, String version) {
         this.tools = tools;
         this.version = version;
+    }
+
+    /** Sizes of everything sent to and from Claude since the last reset. */
+    public ToolStats stats() {
+        return stats;
     }
 
     /** @return the response, or null when the message only contained notifications/responses */
@@ -74,16 +81,25 @@ public final class McpEndpoint {
         String method = req.get("method").getAsString();
         JsonObject params = req.has("params") && req.get("params").isJsonObject() ? req.getAsJsonObject("params") : new JsonObject();
         return switch (method) {
-            case "initialize" -> result(id, initialize(params));
+            case "initialize" -> {
+                stats.record(ToolStats.SESSION, 0, INSTRUCTIONS.length(), 0);
+                yield result(id, initialize(params));
+            }
             case "ping" -> result(id, new JsonObject());
-            case "tools/list" -> result(id, listTools());
+            case "tools/list" -> {
+                JsonObject list = listTools();
+                stats.record(ToolStats.SESSION, 0, gson.toJson(list).length(), 0);
+                yield result(id, list);
+            }
             case "tools/call" -> {
                 if (!params.has("name")) yield error(id, -32602, "missing tool name");
                 String name = params.get("name").getAsString();
                 if (!tools.has(name)) yield error(id, -32602, "unknown tool: " + name);
                 JsonObject args = params.has("arguments") && params.get("arguments").isJsonObject()
                         ? params.getAsJsonObject("arguments") : new JsonObject();
-                yield result(id, callResult(tools.call(name, args)));
+                ToolResult called = tools.call(name, args);
+                stats.record(name, gson.toJson(args).length(), gson.toJson(called.data()).length(), ToolStats.pngPixels(called.png()));
+                yield result(id, callResult(called));
             }
             default -> error(id, -32601, "method not found: " + method);
         };
@@ -109,6 +125,7 @@ public final class McpEndpoint {
     private JsonObject listTools() {
         JsonArray list = new JsonArray();
         for (Tool tool : tools.all()) {
+            if (!tool.listed()) continue;
             JsonObject t = new JsonObject();
             t.addProperty("name", tool.name());
             t.addProperty("description", tool.description());
