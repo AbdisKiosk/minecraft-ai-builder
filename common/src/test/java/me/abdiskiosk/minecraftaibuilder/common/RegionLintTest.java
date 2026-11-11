@@ -68,6 +68,15 @@ class RegionLintTest {
     }
 
     @Test
+    void stepsThatTouchAlongEdgesAreOnePiece() {
+        // A staircase or a stair roof: each step is one up and one along, so it shares only an edge with the next.
+        Region steps = ground().set(2, 1, 2, "stone").set(3, 2, 2, "oak_stairs[facing=east]").set(4, 3, 2, "oak_stairs[facing=east]");
+        assertTrue(steps.check("floating").isEmpty());
+        // Corner to corner is not touching.
+        assertEquals(1, ground().set(2, 1, 2, "stone").set(3, 2, 3, "stone").only("floating").count());
+    }
+
+    @Test
     void hangingLanternUnderACeilingIsFine() {
         Region r = ground().fill(2, 1, 2, 2, 4, 2, "oak_log").set(3, 4, 2, "oak_planks").set(3, 3, 2, "lantern[hanging=true]");
         assertTrue(r.check("floating").isEmpty());

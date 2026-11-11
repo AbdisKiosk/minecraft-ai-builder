@@ -249,10 +249,10 @@ class ToolsTest {
         String region = "\"region\":[0,64,0,4,68,4]";
         assertEquals("{\"issues\":[]}", call("check_region", "{" + region + "}").data().toString());
 
-        world.put(new Vec3(2, 66, 2), "stone");
+        world.put(new Vec3(3, 66, 3), "stone");
         world.put(new Vec3(1, 66, 1), "sand");
         JsonObject result = call("check_region", "{" + region + "}").data();
-        assertEquals("{\"issues\":[{\"kind\":\"floating\",\"count\":2,\"at\":[[1,66,1],[2,66,2]],"
+        assertEquals("{\"issues\":[{\"kind\":\"floating\",\"count\":2,\"at\":[[1,66,1],[3,66,3]],"
                 + "\"hint\":\"not connected to the ground or the region's sides\"},{\"kind\":\"unsupported\",\"count\":1,"
                 + "\"at\":[[1,66,1]],\"hint\":\"breaks or falls: needs a block below, or behind it for wall blocks\"}]}",
                 result.toString());

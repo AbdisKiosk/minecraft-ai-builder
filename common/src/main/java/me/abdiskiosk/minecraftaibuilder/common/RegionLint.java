@@ -80,6 +80,21 @@ public final class RegionLint {
 
     private static final int[][] SIX = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
     private static final int[][] FLAT = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+    /** Blocks that share a face or an edge: the steps of a staircase or a stair roof only touch along edges. */
+    private static final int[][] TOUCHING = touching();
+
+    private static int[][] touching() {
+        List<int[]> out = new ArrayList<>();
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    int axes = Math.abs(dx) + Math.abs(dy) + Math.abs(dz);
+                    if (axes == 1 || axes == 2) out.add(new int[]{dx, dy, dz});
+                }
+            }
+        }
+        return out.toArray(new int[0][]);
+    }
 
     /**
      * @param states indexed with {@link RegionCodec#index}
@@ -119,7 +134,7 @@ public final class RegionLint {
         return new Issue(kind, count, at, hint);
     }
 
-    /** Components that touch neither the bottom layer nor a side face of the box. */
+    /** Pieces (blocks joined by faces or edges) that touch neither the bottom layer nor a side face of the box. */
     private static Issue floating(Grid g) {
         boolean[] seen = new boolean[g.n];
         int[] queue = new int[g.n];
@@ -134,7 +149,7 @@ public final class RegionLint {
                 int i = queue[head++];
                 int x = g.x(i), z = g.z(i);
                 if (g.y(i) == 0 || x == 0 || z == 0 || x == g.sx - 1 || z == g.sz - 1) anchored = true;
-                for (int[] d : SIX) {
+                for (int[] d : TOUCHING) {
                     int j = g.at(i, d[0], d[1], d[2]);
                     if (j >= 0 && !seen[j] && !g.air(j)) {
                         seen[j] = true;
