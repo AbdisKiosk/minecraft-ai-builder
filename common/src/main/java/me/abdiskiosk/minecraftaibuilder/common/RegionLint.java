@@ -17,12 +17,13 @@ public final class RegionLint {
 
     public static final List<String> KINDS = List.of("floating", "unsupported", "halves", "stairs", "unconnected", "dark");
     private static final int MAX_AT = 5;
+    private static final int MAX_AT_LIMIT = 100;
 
     private RegionLint() {
     }
 
     /** What the checks need to know about one distinct state, computed once per state. */
-    private record Traits(String type, Map<String, String> props, boolean air, boolean solid, boolean opaque, int light,
+    record Traits(String type, Map<String, String> props, boolean air, boolean solid, boolean opaque, int light,
                           boolean needsFloor, boolean wallAttached) {
 
         static Traits of(String state) {
@@ -39,7 +40,7 @@ public final class RegionLint {
     }
 
     /** The region in local coordinates; index order is y, z, x like {@link RegionCodec#index}. */
-    private static final class Grid {
+    static final class Grid {
         final Box box;
         final int sx, sy, sz, n;
         final Traits[] cells;
@@ -78,8 +79,8 @@ public final class RegionLint {
         }
     }
 
-    private static final int[][] SIX = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
-    private static final int[][] FLAT = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
+    static final int[][] SIX = {{1, 0, 0}, {-1, 0, 0}, {0, 1, 0}, {0, -1, 0}, {0, 0, 1}, {0, 0, -1}};
+    static final int[][] FLAT = {{1, 0, 0}, {-1, 0, 0}, {0, 0, 1}, {0, 0, -1}};
     /** Blocks that share a face or an edge: the steps of a staircase or a stair roof only touch along edges. */
     private static final int[][] TOUCHING = touching();
 
@@ -96,24 +97,31 @@ public final class RegionLint {
         return out.toArray(new int[0][]);
     }
 
+    /** {@link #check(Box, String[], Set, boolean, int)} listing up to {@value #MAX_AT} coordinates per issue. */
+    public static List<Issue> check(Box box, String[] states, Set<String> kinds, boolean legacy) {
+        return check(box, states, kinds, legacy, MAX_AT);
+    }
+
     /**
      * @param states indexed with {@link RegionCodec#index}
      * @param kinds  which of {@link #KINDS} to run; null runs all
      * @param legacy a 1.8-1.12 server, which does not store fence and pane connections
+     * @param maxAt  how many coordinates each issue lists, 1..100
      * @return issues with {@code count > 0}, in {@link #KINDS} order
      */
-    public static List<Issue> check(Box box, String[] states, Set<String> kinds, boolean legacy) {
+    public static List<Issue> check(Box box, String[] states, Set<String> kinds, boolean legacy, int maxAt) {
+        if (maxAt < 1 || maxAt > MAX_AT_LIMIT) throw new IllegalArgumentException("maxAt must be 1.." + MAX_AT_LIMIT + ": " + maxAt);
         Grid g = new Grid(box, states);
         List<Issue> out = new ArrayList<>();
         for (String kind : KINDS) {
             if (kinds != null && !kinds.contains(kind)) continue;
             Issue issue = switch (kind) {
-                case "floating" -> floating(g);
-                case "unsupported" -> issue(g, kind, unsupported(g), "breaks or falls: needs a block below, or behind it for wall blocks");
-                case "halves" -> issue(g, kind, halves(g), "door or bed is missing its other half");
-                case "stairs" -> issue(g, kind, stairs(g), "faces down the slope; face it the way the slope rises");
-                case "unconnected" -> issue(g, kind, legacy ? List.of() : unconnected(g), "connection states unset; re-place it or set north/south/east/west");
-                case "dark" -> dark(g);
+                case "floating" -> floating(g, maxAt);
+                case "unsupported" -> issue(g, kind, unsupported(g), maxAt, "breaks or falls: needs a block below, or behind it for wall blocks");
+                case "halves" -> issue(g, kind, halves(g), maxAt, "door or bed is missing its other half");
+                case "stairs" -> issue(g, kind, stairs(g), maxAt, "faces down the slope; face it the way the slope rises");
+                case "unconnected" -> issue(g, kind, legacy ? List.of() : unconnected(g), maxAt, "connection states unset; re-place it or set north/south/east/west");
+                case "dark" -> dark(g, maxAt);
                 default -> throw new IllegalStateException(kind);
             };
             if (issue.count() > 0) out.add(issue);
@@ -121,21 +129,21 @@ public final class RegionLint {
         return out;
     }
 
-    private static Issue issue(Grid g, String kind, List<Integer> cells, String hint) {
-        return issue(g, kind, cells.size(), cells, hint);
+    private static Issue issue(Grid g, String kind, List<Integer> cells, int maxAt, String hint) {
+        return issue(g, kind, cells.size(), cells, maxAt, hint);
     }
 
-    /** {@code at} is the first {@value #MAX_AT} of {@code cells}; index order is already y, then z, then x. */
-    private static Issue issue(Grid g, String kind, int count, List<Integer> cells, String hint) {
+    /** {@code at} is the first {@code maxAt} of {@code cells}; index order is already y, then z, then x. */
+    private static Issue issue(Grid g, String kind, int count, List<Integer> cells, int maxAt, String hint) {
         List<Integer> sorted = new ArrayList<>(cells);
         sorted.sort(null);
         List<Vec3> at = new ArrayList<>();
-        for (int i = 0; i < Math.min(MAX_AT, sorted.size()); i++) at.add(g.pos(sorted.get(i)));
+        for (int i = 0; i < Math.min(maxAt, sorted.size()); i++) at.add(g.pos(sorted.get(i)));
         return new Issue(kind, count, at, hint);
     }
 
     /** Pieces (blocks joined by faces or edges) that touch neither the bottom layer nor a side face of the box. */
-    private static Issue floating(Grid g) {
+    private static Issue floating(Grid g, int maxAt) {
         boolean[] seen = new boolean[g.n];
         int[] queue = new int[g.n];
         List<Integer> lowest = new ArrayList<>();
@@ -159,7 +167,7 @@ public final class RegionLint {
             }
             if (!anchored) lowest.add(start); // the scan meets each component first at its lowest block
         }
-        return issue(g, "floating", lowest, "not connected to the ground or the region's sides");
+        return issue(g, "floating", lowest, maxAt, "not connected to the ground or the region's sides");
     }
 
     private static List<Integer> unsupported(Grid g) {
@@ -226,13 +234,19 @@ public final class RegionLint {
                 int j = g.at(i, d[0], d[1], d[2]);
                 if (j < 0) continue;
                 Traits n = g.cells[j];
-                if (n.solid || family.equals(family(n.type)) || (family.equals("fence") && n.type.endsWith("fence_gate"))) {
+                if ((n.solid && !neverJoined(n.type)) || family.equals(family(n.type)) || (family.equals("fence") && n.type.endsWith("fence_gate"))) {
                     out.add(i);
                     break;
                 }
             }
         }
         return out;
+    }
+
+    /** Full blocks that fences, panes and walls do not attach to, so standing next to one is not a mistake. */
+    private static boolean neverJoined(String type) {
+        return type.endsWith("leaves") || type.endsWith("shulker_box") || type.equals("barrier") || type.equals("melon")
+                || type.equals("pumpkin") || type.equals("carved_pumpkin") || type.equals("jack_o_lantern");
     }
 
     /** Blocks that connect to each other: fences, and panes with bars and walls. */
@@ -251,39 +265,8 @@ public final class RegionLint {
     }
 
     /** Roofed air with a floor to stand on and block light 0, where mobs can spawn. */
-    private static Issue dark(Grid g) {
-        int[] light = new int[g.n];
-        // Brightest first, so every cell is final when its level is processed.
-        List<List<Integer>> levels = new ArrayList<>();
-        for (int l = 0; l <= 15; l++) levels.add(new ArrayList<>());
-        for (int i = 0; i < g.n; i++) {
-            light[i] = Math.min(15, g.cells[i].light);
-            if (light[i] > 1) levels.get(light[i]).add(i);
-        }
-        for (int l = 15; l > 1; l--) {
-            for (int k = 0; k < levels.get(l).size(); k++) {
-                int i = levels.get(l).get(k);
-                if (light[i] != l) continue;
-                for (int[] d : SIX) {
-                    int j = g.at(i, d[0], d[1], d[2]);
-                    if (j < 0 || g.cells[j].opaque || light[j] >= l - 1) continue;
-                    light[j] = l - 1;
-                    levels.get(l - 1).add(j);
-                }
-            }
-        }
-        int layer = g.sx * g.sz;
-        boolean[] dark = new boolean[g.n];
-        for (int x = 0; x < g.sx; x++) {
-            for (int z = 0; z < g.sz; z++) {
-                boolean roofed = !g.air(((g.sy - 1) * g.sz + z) * g.sx + x);
-                for (int y = g.sy - 2; y >= 1; y--) {
-                    int i = (y * g.sz + z) * g.sx + x;
-                    dark[i] = roofed && g.air(i) && g.air(i + layer) && g.cells[i - layer].solid && light[i] == 0;
-                    if (!g.air(i)) roofed = true;
-                }
-            }
-        }
+    private static Issue dark(Grid g, int maxAt) {
+        boolean[] dark = darkMask(g, light(g));
         boolean[] seen = new boolean[g.n];
         int[] cluster = new int[g.n];
         int count = 0;
@@ -306,7 +289,67 @@ public final class RegionLint {
                 }
             }
         }
-        return issue(g, "dark", count, first, "block light 0 under a roof: mobs can spawn; add a light");
+        return issue(g, "dark", count, first, maxAt, "block light 0 under a roof: mobs can spawn; add a light, or the light op places them");
+    }
+
+    /** Block light of every cell, from the light sources inside the box; shared with {@link Lighting}. */
+    static int[] light(Grid g) {
+        int[] light = new int[g.n];
+        // Brightest first, so every cell is final when its level is processed.
+        List<List<Integer>> levels = new ArrayList<>();
+        for (int l = 0; l <= 15; l++) levels.add(new ArrayList<>());
+        for (int i = 0; i < g.n; i++) {
+            light[i] = Math.min(15, g.cells[i].light);
+            if (light[i] > 1) levels.get(light[i]).add(i);
+        }
+        for (int l = 15; l > 1; l--) {
+            for (int k = 0; k < levels.get(l).size(); k++) {
+                int i = levels.get(l).get(k);
+                if (light[i] != l) continue;
+                for (int[] d : SIX) {
+                    int j = g.at(i, d[0], d[1], d[2]);
+                    if (j < 0 || g.cells[j].opaque || light[j] >= l - 1) continue;
+                    light[j] = l - 1;
+                    levels.get(l - 1).add(j);
+                }
+            }
+        }
+        return light;
+    }
+
+    /**
+     * Roofed air with air above it, a solid block below it and {@code light} 0: the cells the dark check reports.
+     * A cell beside one that is open to the sky does not count: the strip under an eave is outdoors, like the yard
+     * around it, and lighting it is not what makes a building safe.
+     */
+    static boolean[] darkMask(Grid g, int[] light) {
+        int layer = g.sx * g.sz;
+        boolean[] dark = new boolean[g.n];
+        boolean[] sky = new boolean[g.n];
+        for (int x = 0; x < g.sx; x++) {
+            for (int z = 0; z < g.sz; z++) {
+                boolean roofed = false;
+                for (int y = g.sy - 1; y >= 0; y--) {
+                    int i = (y * g.sz + z) * g.sx + x;
+                    if (!g.air(i)) roofed = true;
+                    sky[i] = !roofed;
+                    if (y >= 1 && y <= g.sy - 2) {
+                        dark[i] = roofed && g.air(i) && g.air(i + layer) && g.cells[i - layer].solid && light[i] == 0;
+                    }
+                }
+            }
+        }
+        for (int i = 0; i < g.n; i++) {
+            if (!dark[i]) continue;
+            for (int[] d : FLAT) {
+                int j = g.at(i, d[0], d[1], d[2]);
+                if (j >= 0 && sky[j]) {
+                    dark[i] = false;
+                    break;
+                }
+            }
+        }
+        return dark;
     }
 
     private static Vec3 facing(Traits t) {

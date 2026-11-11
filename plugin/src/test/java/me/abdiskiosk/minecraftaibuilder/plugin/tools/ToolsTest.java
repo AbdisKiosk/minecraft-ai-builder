@@ -237,8 +237,50 @@ class ToolsTest {
         Op.Blocks blocks = (Op.Blocks) single("blocks", args("{\"origin\":[10,64,10],\"blocks\":{\"oak_fence\":[[0,0,0],[1,0,0]],\"torch\":[[0,1,0]]}}"));
         assertEquals(3, blocks.blocks().size());
         assertEquals(new Op.BlockAt(new Vec3(11, 64, 10), "oak_fence"), blocks.blocks().get(1));
-        assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0]]}}").startsWith("blocks[\"stone\"][0] must be [x,y,z]"));
+        assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0]]}}").startsWith("blocks[\"stone\"][0] must be [x,y,z] or a box"));
         assertTrue(error("set_blocks", "{\"blocks\":\"stone\"}").startsWith("\"blocks\" must be"));
+    }
+
+    @Test
+    void groupedBlocksTakeBoxesAndCompleteDoors() {
+        Op.Blocks blocks = (Op.Blocks) single("blocks", args("{\"origin\":[10,64,10],\"blocks\":{"
+                + "\"oak_log\":[[0,0,0,0,2,0],[4,0,0]],\"oak_door[facing=south]\":[[2,0,0]]}}"));
+        assertEquals(List.of(
+                new Op.BlockAt(new Vec3(10, 64, 10), "oak_log"), new Op.BlockAt(new Vec3(10, 65, 10), "oak_log"),
+                new Op.BlockAt(new Vec3(10, 66, 10), "oak_log"), new Op.BlockAt(new Vec3(14, 64, 10), "oak_log"),
+                new Op.BlockAt(new Vec3(12, 64, 10), "oak_door[facing=south]"),
+                new Op.BlockAt(new Vec3(12, 65, 10), "oak_door[facing=south,half=upper]")), blocks.blocks());
+        assertTrue(error("set_blocks", "{\"blocks\":{\"stone\":[[0,0,0,1000,100,1000]]}}").contains("use fill"));
+    }
+
+    @Test
+    void roofTreeAndLightAreBuildOps() {
+        List<Op> ops = Tools.batchOps(args("{\"origin\":[100,64,0],\"vars\":{\"P\":\"oak_planks\"},\"ops\":["
+                + "{\"op\":\"roof\",\"region\":[0,5,0,8,5,6],\"stairs\":\"oak_stairs\",\"gable\":\"$P\"},"
+                + "{\"op\":\"tree\",\"at\":[12,0,3],\"type\":\"birch\"},"
+                + "{\"op\":\"light\",\"region\":[0,0,0,8,4,6]}]}"));
+        // 9 wide, 7 deep: the ridge runs along x, the longer side, and the slopes face north and south.
+        Op.Blocks stairs = (Op.Blocks) ops.get(0);
+        assertTrue(stairs.blocks().contains(new Op.BlockAt(new Vec3(99, 69, -1), "oak_stairs[facing=south]")));
+        assertTrue(stairs.blocks().contains(new Op.BlockAt(new Vec3(109, 69, 7), "oak_stairs[facing=north]")));
+        assertTrue(ops.stream().anyMatch(op -> op instanceof Op.Fill f && f.pattern().equals("oak_planks")));
+        assertEquals(new Op.Tree(new Vec3(112, 64, 3), "birch"), ops.get(ops.size() - 2));
+        assertEquals(new Op.Light(Box.of(new Vec3(100, 64, 0), new Vec3(108, 68, 6)), "torch"), ops.get(ops.size() - 1));
+
+        assertEquals("ops[0] (roof): style must be gable or hip",
+                error("build", "{\"ops\":[{\"op\":\"roof\",\"region\":[0,5,0,8,5,6],\"stairs\":\"oak_stairs\",\"style\":\"flat\"}]}"));
+        assertTrue(error("build", "{\"ops\":[{\"op\":\"dome\"}]}").startsWith("ops[0] (dome): unknown op 'dome'; use fill, blocks, roof, tree"));
+        // One op may be given without the brackets.
+        assertEquals(1, Tools.batchOps(args("{\"ops\":{\"op\":\"tree\",\"at\":[0,64,0]}}")).size());
+    }
+
+    @Test
+    void checkRegionLimitSetsHowManyCoordinatesAreListed() {
+        for (int x = 0; x <= 8; x++) world.put(new Vec3(x, 66, 0), "torch");
+        String region = "\"region\":[0,64,0,8,68,0],\"checks\":\"unsupported\"";
+        assertEquals(5, call("check_region", "{" + region + "}").data().getAsJsonArray("issues").get(0).getAsJsonObject().getAsJsonArray("at").size());
+        assertEquals(9, call("check_region", "{" + region + ",\"limit\":20}").data().getAsJsonArray("issues").get(0).getAsJsonObject().getAsJsonArray("at").size());
+        assertEquals("limit must be 1..100", error("check_region", "{" + region + ",\"limit\":0}"));
     }
 
     @Test

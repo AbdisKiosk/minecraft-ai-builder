@@ -27,6 +27,7 @@ import com.sk89q.worldedit.registry.state.Property;
 import com.sk89q.worldedit.regions.CuboidRegion;
 import com.sk89q.worldedit.regions.Polygonal2DRegion;
 import com.sk89q.worldedit.regions.Region;
+import com.sk89q.worldedit.util.TreeGenerator;
 import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.block.BaseBlock;
 import com.sk89q.worldedit.world.block.BlockState;
@@ -49,6 +50,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -142,11 +144,13 @@ public final class We7Bridge implements WorldEditBridge {
     public String[] read(String worldName, Box box) {
         World world = world(worldName);
         String[] out = new String[(int) box.volume()];
+        // WorldEdit hands out one BlockState object per state, so each distinct state is written out once.
+        Map<BlockState, String> names = new IdentityHashMap<>();
         int i = 0;
         for (int y = box.min().y(); y <= box.max().y(); y++) {
             for (int z = box.min().z(); z <= box.max().z(); z++) {
                 for (int x = box.min().x(); x <= box.max().x(); x++) {
-                    out[i++] = compact(world.getBlock(BlockVector3.at(x, y, z)));
+                    out[i++] = names.computeIfAbsent(world.getBlock(BlockVector3.at(x, y, z)), We7Bridge::compact);
                 }
             }
         }
@@ -191,6 +195,17 @@ public final class We7Bridge implements WorldEditBridge {
             first = false;
         }
         return first ? sb.toString() : sb.append(']').toString();
+    }
+
+    /** Most of WorldEdit's tree names have no separators: "dark_oak" is "darkoak", but "pale_oak" keeps its own. */
+    private static TreeGenerator.TreeType tree(String name) {
+        String key = name.toLowerCase(Locale.ROOT).replace(" ", "_");
+        TreeGenerator.TreeType type = TreeGenerator.TreeType.lookup(key);
+        if (type == null) type = TreeGenerator.TreeType.lookup(key.replace("_", ""));
+        if (type == null) {
+            throw new EditException("unknown tree '" + name + "'; use " + String.join(", ", new java.util.TreeSet<>(TreeGenerator.TreeType.getPrimaryAliases())));
+        }
+        return type;
     }
 
     private static BlockVector3 vec(Vec3 v) {
@@ -262,6 +277,7 @@ public final class We7Bridge implements WorldEditBridge {
 
         @Override
         public void prepare(Op op) {
+            if (op instanceof Op.Tree o) tree(o.type());
             if (op instanceof Op.Blocks) {
                 op.patterns().forEach(this::block);
             } else {
@@ -294,6 +310,12 @@ public final class We7Bridge implements WorldEditBridge {
                     return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
+                if (op instanceof Op.Tree o) {
+                    // WorldEdit grows a tree anywhere, in mid-air too; a tree stands on something.
+                    if (edit.getBlock(vec(o.at().add(0, -1, 0))).getBlockType().getMaterial().isAir()) return 0;
+                    int before = edit.getBlockChangeCount();
+                    return tree(o.type()).generate(edit, vec(o.at())) ? Math.max(1, edit.getBlockChangeCount() - before) : 0;
+                }
                 throw new EditException("unsupported op " + op.getClass().getSimpleName());
             } catch (MaxChangedBlocksException e) {
                 throw new EditException("WorldEdit block limit reached: " + e.getMessage());

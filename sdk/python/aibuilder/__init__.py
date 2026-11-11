@@ -122,9 +122,13 @@ class Builder:
     def read(self, region, mode: str = "summary", heightmap: bool = False) -> dict:
         return self.call("read_region", region=region, mode=mode, heightmap=heightmap)
 
-    def check(self, region, checks: str | None = None) -> dict:
-        """Build mistakes as {"issues": [{"kind", "count", "at", "hint"}]}; checks="floating,dark" runs only those."""
-        return self.call("check_region", region=region, checks=checks)
+    def check(self, region, checks: str | None = None, limit: int | None = None) -> dict:
+        """Build mistakes as {"issues": [{"kind", "count", "at", "hint"}]}; checks="floating,dark" runs only those.
+
+        One call covers a region of up to 2,000,000 blocks (the server's limits.max-read-volume). `limit` is how
+        many coordinates each issue lists (default 5, up to 100).
+        """
+        return self.call("check_region", region=region, checks=checks, limit=limit)
 
     def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None,
                size: str | None = None, corner: str | None = None) -> bytes:
@@ -212,7 +216,10 @@ class Builder:
         return self
 
     def blocks(self, items: Iterable[Sequence[Any]], origin: Vec | None = None):
-        """Queues [x, y, z, state] items; with origin they are offsets from it."""
+        """Queues [x, y, z, state] items; with origin they are offsets from it.
+
+        A door, bed or tall plant needs one item: the server adds the other half.
+        """
         return self._queue("blocks", blocks=[list(i) for i in items], origin=_pos(origin) if origin else None)
 
     def paste(self, blueprint: dict | str | os.PathLike | None = None, origin: Vec | None = None,
@@ -256,6 +263,31 @@ class Builder:
     def smooth(self, region, iterations: int = 2):
         """Queues WorldEdit's //smooth over the region."""
         return self._queue("smooth", region=region, iterations=iterations if iterations != 2 else None)
+
+    def roof(self, region, stairs: str, style: str = "gable", along: str | None = None, overhang: int = 1,
+             gable: str | None = None, ridge: str | None = None):
+        """Queues a stair roof over the walls whose footprint is `region`; the region's lowest y is the eaves row.
+
+        style "gable" (ridge along the longer side, or along="x"|"z"; `gable` fills the end walls) or "hip".
+        The roof sticks out `overhang` on all sides; an odd span is closed with `ridge` (default: the stairs' slab).
+        """
+        return self._queue("roof", region=region, stairs=stairs, style=style if style != "gable" else None, along=along,
+                           overhang=overhang if overhang != 1 else None, gable=gable, ridge=ridge)
+
+    def tree(self, at: Vec, type: str = "oak"):
+        """Queues a tree grown by the server (oak, birch, spruce, jungle, acacia, dark_oak, large_oak, ...).
+
+        `at` is the lowest trunk block: it must be free, with dirt or grass below. A tree that cannot grow there
+        is reported in the flush result's "warnings".
+        """
+        return self._queue("tree", at=_pos(at), type=type)
+
+    def light(self, region, block: str = "torch"):
+        """Queues placing `block` on the dark floors of the region until check()'s "dark" is clean.
+
+        Runs after everything else in the same flush, so it lights what the flush builds.
+        """
+        return self._queue("light", region=region, block=block if block != "torch" else None)
 
     def save_blueprint(self, name: str, region) -> dict:
         """Saves a region on the server ({"saved", "size", "blocks"}); paste(name=...) places it.

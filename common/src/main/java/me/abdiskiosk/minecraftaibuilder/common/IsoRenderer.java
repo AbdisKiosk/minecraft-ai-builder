@@ -30,16 +30,25 @@ public final class IsoRenderer {
     /** Where the isometric camera stands. */
     public enum Corner { SE, SW, NE, NW }
 
-    /** Largest canvas per size class (a region with more blocks across than pixels still gets one pixel per block). */
+    /**
+     * Largest canvas and largest block per size class (a region with more blocks across than pixels still gets one
+     * pixel per block). A small build never fills the canvas, so the block cap is what its picture costs:
+     * 10 px blocks are half the pixels of 14 px ones and still show every shape.
+     */
     public enum Size {
-        SMALL(640, 480), MEDIUM(960, 700), LARGE(1400, 1000);
+        SMALL(640, 480, 10, 10), MEDIUM(960, 700, 16, 14), LARGE(1400, 1000, 16, 14);
 
         final int maxWidth;
         final int maxHeight;
+        /** Largest block in pixels: the side of a cell in flat views, the tile half-width in the isometric one. */
+        final int maxCell;
+        final int maxTile;
 
-        Size(int maxWidth, int maxHeight) {
+        Size(int maxWidth, int maxHeight, int maxCell, int maxTile) {
             this.maxWidth = maxWidth;
             this.maxHeight = maxHeight;
+            this.maxCell = maxCell;
+            this.maxTile = maxTile;
         }
     }
 
@@ -71,12 +80,12 @@ public final class IsoRenderer {
             box = drawn;
         }
         BufferedImage out = switch (view) {
-            case TOP -> renderTop(box, states, size.maxWidth, size.maxHeight);
-            case ISO -> renderIso(box, states, corner, size.maxWidth, size.maxHeight);
+            case TOP -> renderTop(box, states, size.maxWidth, size.maxHeight, size.maxCell);
+            case ISO -> renderIso(box, states, corner, size.maxWidth, size.maxHeight, size.maxTile);
             // Two views share the width.
-            case BOTH -> combine(renderTop(box, states, (size.maxWidth - GAP) / 2, size.maxHeight),
-                    renderIso(box, states, corner, (size.maxWidth - GAP) / 2, size.maxHeight), size);
-            default -> renderElevation(box, states, view, size.maxWidth, size.maxHeight);
+            case BOTH -> combine(renderTop(box, states, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxCell),
+                    renderIso(box, states, corner, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxTile), size);
+            default -> renderElevation(box, states, view, size.maxWidth, size.maxHeight, size.maxCell);
         };
         return new Rendered(toPng(out), box, out.getWidth(), out.getHeight());
     }
@@ -113,8 +122,8 @@ public final class IsoRenderer {
         return Box.of(Vec3.max(box.min(), lo.add(-1, -1, -1)), Vec3.min(box.max(), hi.add(1, 1, 1)));
     }
 
-    static BufferedImage renderTop(Box box, String[] states, int maxWidth, int maxHeight) {
-        int cell = Math.max(1, Math.min(16, Math.min(maxWidth / box.sizeX(), maxHeight / box.sizeZ())));
+    static BufferedImage renderTop(Box box, String[] states, int maxWidth, int maxHeight, int maxCell) {
+        int cell = Math.max(1, Math.min(maxCell, Math.min(maxWidth / box.sizeX(), maxHeight / box.sizeZ())));
         BufferedImage img = new BufferedImage(box.sizeX() * cell, box.sizeZ() * cell, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setColor(BACKGROUND);
@@ -148,11 +157,11 @@ public final class IsoRenderer {
      * One face of the region seen from outside: each cell shows the nearest block along the view axis, darker with
      * depth. A block that does not fill its cell (a slab) shows what is behind it.
      */
-    static BufferedImage renderElevation(Box box, String[] states, View view, int maxWidth, int maxHeight) {
+    static BufferedImage renderElevation(Box box, String[] states, View view, int maxWidth, int maxHeight, int maxCell) {
         int sx = box.sizeX(), sy = box.sizeY(), sz = box.sizeZ();
         boolean alongX = view == View.EAST || view == View.WEST;
         int columns = alongX ? sz : sx, depths = alongX ? sx : sz;
-        int cell = Math.max(1, Math.min(16, Math.min(maxWidth / columns, maxHeight / sy)));
+        int cell = Math.max(1, Math.min(maxCell, Math.min(maxWidth / columns, maxHeight / sy)));
         BufferedImage img = new BufferedImage(columns * cell, sy * cell, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
         g.setColor(BACKGROUND);
@@ -218,7 +227,7 @@ public final class IsoRenderer {
         };
     }
 
-    static BufferedImage renderIso(Box box, String[] states, Corner corner, int maxWidth, int maxHeight) {
+    static BufferedImage renderIso(Box box, String[] states, Corner corner, int maxWidth, int maxHeight, int maxTile) {
         int sy = box.sizeY();
         boolean turned = corner == Corner.SW || corner == Corner.NE;
         // View space: u, y, v with the camera at +u +y +v, a quarter-turn rotation of world x, y, z.
@@ -226,7 +235,7 @@ public final class IsoRenderer {
         // Tile: half-width a, half-height a/2, cube height a.
         double widthUnits = su + sv;
         double heightUnits = (su + sv) / 2.0 + sy + 1;
-        int a = (int) Math.max(1, Math.min(14, Math.min((maxWidth - 2) / widthUnits, (maxHeight - 2) / heightUnits)));
+        int a = (int) Math.max(1, Math.min(maxTile, Math.min((maxWidth - 2) / widthUnits, (maxHeight - 2) / heightUnits)));
         int w = (int) Math.ceil(widthUnits * a) + 2;
         int h = (int) Math.ceil(heightUnits * a) + 2;
         BufferedImage img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB);

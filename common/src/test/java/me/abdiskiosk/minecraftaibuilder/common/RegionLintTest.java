@@ -166,6 +166,26 @@ class RegionLintTest {
         assertTrue(ok.check("unconnected").isEmpty());
     }
 
+    /** Fences do not attach to leaves, so a post under a tree is as it should be. */
+    @Test
+    void aFenceBesideLeavesIsNotUnconnected() {
+        Region r = ground().set(1, 1, 1, "oak_fence").set(2, 1, 1, "oak_leaves[distance=2]").set(1, 1, 2, "jack_o_lantern");
+        assertTrue(r.check("unconnected").isEmpty());
+    }
+
+    /** The ground under an eave is outdoors: only what lies deeper under the roof is reported. */
+    @Test
+    void theStripUnderAnOverhangIsNotDark() {
+        // A wall along x=3 with a roof slab over x=1..3: x=2 is under the roof, next to the wall; x=1 is its open edge.
+        Region r = new Region(0, 0, 0, 6, 4, 2).fill(0, 0, 0, 6, 0, 2, "stone").fill(3, 1, 0, 3, 3, 2, "stone").fill(1, 4, 0, 3, 4, 2, "stone");
+        RegionLint.Issue issue = r.only("dark");
+        assertEquals(3, issue.count());
+        assertEquals(new Vec3(2, 1, 0), issue.at().get(0));
+
+        Region eave = new Region(0, 0, 0, 6, 4, 2).fill(0, 0, 0, 6, 0, 2, "stone").fill(3, 1, 0, 3, 3, 2, "stone").fill(2, 4, 0, 3, 4, 2, "stone");
+        assertTrue(eave.check("dark").isEmpty());
+    }
+
     /** A closed 5x5 stone room (inside 1..3) with a floor at y=0, walls up to y=4 and a roof at y=5. */
     private static Region room() {
         Region r = new Region(0, 0, 0, 4, 5, 4);
@@ -218,5 +238,26 @@ class RegionLintTest {
         assertEquals(10, issue.count());
         assertEquals(5, issue.at().size());
         assertEquals(new Vec3(1, 2, 2), issue.at().get(0));
+    }
+
+    @Test
+    void maxAtSetsHowManyPositionsAreListed() {
+        Region r = ground();
+        for (int x = 1; x <= 5; x++) {
+            r.set(x, 2, 2, "sand");
+            r.set(x, 2, 4, "sand");
+        }
+        RegionLint.Issue all = RegionLint.check(r.box, r.states, Set.of("unsupported"), false, 100).get(0);
+        assertEquals(10, all.count());
+        assertEquals(10, all.at().size());
+        assertEquals(List.of(new Vec3(1, 2, 2)), RegionLint.check(r.box, r.states, Set.of("unsupported"), false, 1).get(0).at());
+        assertThrows(IllegalArgumentException.class, () -> RegionLint.check(r.box, r.states, null, false, 0));
+        assertThrows(IllegalArgumentException.class, () -> RegionLint.check(r.box, r.states, null, false, 101));
+    }
+
+    @Test
+    void darkHintNamesTheLightOp() {
+        assertEquals("block light 0 under a roof: mobs can spawn; add a light, or the light op places them",
+                room().only("dark").hint());
     }
 }

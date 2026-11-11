@@ -27,6 +27,7 @@ import com.sk89q.worldedit.regions.CuboidRegion;
 import com.sk89q.worldedit.regions.Polygonal2DRegion;
 import com.sk89q.worldedit.regions.Region;
 import com.sk89q.worldedit.session.request.Request;
+import com.sk89q.worldedit.util.TreeGenerator;
 import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.registry.BlockRegistry;
 import com.sk89q.worldedit.world.registry.LegacyWorldData;
@@ -191,6 +192,23 @@ public final class We6Bridge implements WorldEditBridge {
         return new Schematic(sx, sy, sz, states);
     }
 
+    /** WorldEdit 6 knows the modern "oak" and "spruce" as "tree" and "redwood", and writes names without separators. */
+    private static TreeGenerator.TreeType tree(String name) {
+        String key = name.toLowerCase(java.util.Locale.ROOT).replace("_", "").replace(" ", "");
+        key = switch (key) {
+            case "oak" -> "tree";
+            case "largeoak", "bigoak" -> "bigtree";
+            case "spruce" -> "redwood";
+            case "tallspruce" -> "tallredwood";
+            default -> key;
+        };
+        TreeGenerator.TreeType type = TreeGenerator.TreeType.lookup(key);
+        if (type == null) {
+            throw new EditException("unknown tree '" + name + "'; use oak, largeoak, birch, tallbirch, spruce, tallspruce, pine, jungle, smalljungle, acacia, darkoak, swamp");
+        }
+        return type;
+    }
+
     private static Vector vec(Vec3 v) {
         return new Vector(v.x(), v.y(), v.z());
     }
@@ -282,6 +300,7 @@ public final class We6Bridge implements WorldEditBridge {
 
         @Override
         public void prepare(Op op) {
+            if (op instanceof Op.Tree o) tree(o.type());
             if (op instanceof Op.Blocks) {
                 op.patterns().forEach(this::block);
             } else {
@@ -314,6 +333,12 @@ public final class We6Bridge implements WorldEditBridge {
                     return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
+                if (op instanceof Op.Tree o) {
+                    // WorldEdit grows a tree anywhere, in mid-air too; a tree stands on something.
+                    if (edit.getBlock(vec(o.at().add(0, -1, 0))).isAir()) return 0;
+                    int before = edit.getBlockChangeCount();
+                    return tree(o.type()).generate(edit, vec(o.at())) ? Math.max(1, edit.getBlockChangeCount() - before) : 0;
+                }
                 throw new EditException("unsupported op " + op.getClass().getSimpleName());
             } catch (MaxChangedBlocksException e) {
                 throw new EditException("WorldEdit block limit reached: " + e.getMessage());

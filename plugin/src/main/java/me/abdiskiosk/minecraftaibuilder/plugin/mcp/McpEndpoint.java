@@ -23,13 +23,16 @@ public final class McpEndpoint {
     static final String INSTRUCTIONS = """
             Builds in a live Minecraft server through WorldEdit.
             - Start with get_context (player position/facing, selection, server version).
-            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet. A position can also be "@name", a marker the player set with /aibuilder mark <name>; get_context lists them. A region is "selection" (the player's WorldEdit selection; prefer it when there is one) or [x1,y1,z1,x2,y2,z2].
+            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet; "@name" is a marker the player set with /aibuilder mark <name> (get_context lists them). A region is "selection" (the player's WorldEdit selection; prefer it when there is one) or [x1,y1,z1,x2,y2,z2].
             - Every tool also takes "player" (who acts; default: the only online player, needed for ~ and selections when several are online) and "world".
-            - Patterns use WorldEdit syntax and modern block names with states, e.g. 80%stone_bricks,20%andesite or oak_stairs[facing=east,half=top].
-            - Blocks differ by server version (get_context.server). Unknown blocks and bad property values are rejected before anything is built; call block_info for valid names and properties (facing, half, ...).
-            - Each tool call (or one batch) is one undo step; undo reverts it. Group related ops in one batch with "origin" and "vars" to keep calls short.
-            - Large or repetitive builds: write a script with the aibuilder Python SDK instead of many tool calls.
-            - Check work with check_region (text, cheapest) first, then render_region (size small unless detail matters), not read_region mode=full.""";
+            - Patterns are WorldEdit syntax with modern block names and states: 80%stone_bricks,20%andesite or oak_stairs[facing=east,half=top]. A stair's facing is the side it rises towards.
+            - Blocks differ by server version. Unknown blocks and bad property values are rejected before anything is built; block_info gives valid names and properties.
+            - build makes every edit. Put a whole phase in one call (one undo step) with "origin", and use its roof, tree, light and box forms instead of listing blocks.
+            - Check with check_region (text, cheapest) first, then one render_region; avoid read_region mode=full.
+            - Large or repetitive builds: write a script with the aibuilder Python SDK instead of many calls.""";
+
+    /** A result larger than this (about 7,000 tokens) is refused instead of filling Claude's context. */
+    static final int MAX_RESULT_CHARS = 24_000;
 
     private final ToolRegistry tools;
     private final String version;
@@ -97,12 +100,21 @@ public final class McpEndpoint {
                 if (!tools.has(name)) yield error(id, -32602, "unknown tool: " + name);
                 JsonObject args = params.has("arguments") && params.get("arguments").isJsonObject()
                         ? params.getAsJsonObject("arguments") : new JsonObject();
-                ToolResult called = tools.call(name, args);
+                ToolResult called = capped(name, tools.call(name, args));
                 stats.record(name, gson.toJson(args).length(), gson.toJson(called.data()).length(), ToolStats.pngPixels(called.png()));
                 yield result(id, callResult(called));
             }
             default -> error(id, -32601, "method not found: " + method);
         };
+    }
+
+    /** {@code result}, or an error saying how to ask for less when its text is over {@link #MAX_RESULT_CHARS}. */
+    ToolResult capped(String tool, ToolResult result) {
+        int chars = gson.toJson(result.data()).length();
+        if (chars <= MAX_RESULT_CHARS) return result;
+        return ToolResult.error(tool + " would return " + chars + " characters (about " + Math.round(chars / 3500.0)
+                + "k tokens); the limit is " + MAX_RESULT_CHARS + ". Ask for less: a smaller region, or read_region"
+                + " mode=summary or check_region instead of mode=full.");
     }
 
     private JsonObject initialize(JsonObject params) {

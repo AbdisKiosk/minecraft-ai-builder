@@ -1,9 +1,12 @@
 package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import me.abdiskiosk.minecraftaibuilder.common.BlockCheck;
+import me.abdiskiosk.minecraftaibuilder.common.BlockState;
+import me.abdiskiosk.minecraftaibuilder.common.BlockTraits;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
+import me.abdiskiosk.minecraftaibuilder.common.Lighting;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
@@ -35,6 +38,10 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class BuildService {
 
     private static final int MAX_JOBS = 200;
+    /** Blocks read per main-thread visit, so a large read costs each tick only a few milliseconds. */
+    private static final long READ_SLAB = 100_000;
+    private static final int MAX_TREE_WARNINGS = 5;
+    private static final int LIGHT_HEADROOM = 24;
 
     private final Plugin plugin;
     private final WorldEditBridge bridge;
@@ -106,7 +113,7 @@ public final class BuildService {
 
         Job(String id, List<String> warnings) {
             this.id = id;
-            this.warnings = warnings;
+            this.warnings = new java.util.concurrent.CopyOnWriteArrayList<>(warnings);
         }
 
         JobResult snapshot() {
@@ -115,8 +122,12 @@ public final class BuildService {
         }
     }
 
-    /** The ops of a call and the pieces they were split into, so a failure can name the op it came from. */
-    private record Plan(List<Op> ops, List<Op> pieces, int[] owner) {
+    /**
+     * The ops of a call and the pieces they were split into, so a failure can name the op it came from.
+     *
+     * @param lights light ops, which run after every piece because they read what the pieces built
+     */
+    private record Plan(List<Op> ops, List<Op> pieces, int[] owner, List<Op.Light> lights) {
         RuntimeException explain(Throwable failure, int piece) {
             RuntimeException e = failure instanceof RuntimeException re ? re : new EditException(String.valueOf(failure), failure);
             if (ops.size() < 2 || piece < 0) return e;
@@ -204,9 +215,17 @@ public final class BuildService {
         checkWorld(world);
         if (box.volume() > config.maxReadVolume()) {
             throw new EditException("region is " + box.volume() + " blocks; max read is " + config.maxReadVolume()
-                    + ". Read a smaller box or use mode=summary on parts.");
+                    + ". Use a smaller region.");
         }
-        return sync(() -> bridge.read(world, box));
+        if (box.volume() <= READ_SLAB || Bukkit.isPrimaryThread()) return sync(() -> bridge.read(world, box));
+        String[] out = new String[(int) box.volume()];
+        int at = 0;
+        for (Box slab : Op.slabs(box, READ_SLAB)) {
+            String[] part = sync(() -> bridge.read(world, slab));
+            System.arraycopy(part, 0, out, at, part.length);
+            at += part.length;
+        }
+        return out;
     }
 
     public int undo(Caller caller, int steps) {
@@ -230,13 +249,18 @@ public final class BuildService {
         }
         List<Op> pieces = new ArrayList<>();
         List<Integer> owners = new ArrayList<>();
+        List<Op.Light> lights = new ArrayList<>();
         for (int i = 0; i < ops.size(); i++) {
+            if (ops.get(i) instanceof Op.Light light) {
+                lights.add(light);
+                continue;
+            }
             for (Op piece : ops.get(i).split(config.blocksPerTick())) {
                 pieces.add(piece);
                 owners.add(i);
             }
         }
-        Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray());
+        Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray(), lights);
 
         if (bridge.async()) {
             Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runAsync(caller, plan, job));
@@ -262,9 +286,10 @@ public final class BuildService {
             }
             for (int i = 0; i < plan.pieces().size(); i++) {
                 at = i;
-                job.changed += handle.apply(plan.pieces().get(i));
+                apply(handle, plan.pieces().get(i), job);
             }
             at = -1;
+            light(caller, handle, plan.lights(), job);
         } catch (Throwable t) {
             failure = t;
         }
@@ -279,6 +304,36 @@ public final class BuildService {
             }
         }
         finish(job, failure == null ? null : plan.explain(failure, at));
+    }
+
+    private void apply(EditHandle handle, Op piece, Job job) {
+        int changed = handle.apply(piece);
+        job.changed += changed;
+        if (changed == 0 && piece instanceof Op.Tree tree && job.warnings.size() < MAX_TREE_WARNINGS) {
+            job.warnings.add("no tree grew at " + tree.at() + ": it needs ground below and free space around");
+        }
+    }
+
+    /** Lights what the pieces built: reads each region as it now is and places the op's block on its dark floors. */
+    private void light(Caller caller, EditHandle handle, List<Op.Light> lights, Job job) {
+        for (Op.Light light : lights) {
+            handle.flush();
+            // A room is dark because of the floor under it and the roof over it, and the region given often
+            // stops short of both, so the layer below and some headroom are read with it.
+            Box box = light.box();
+            Box seen = box.withY(Math.max(caller.minY(), box.min().y() - 1), Math.min(caller.maxY(), box.max().y() + LIGHT_HEADROOM));
+            if (seen.volume() > config.maxReadVolume()) seen = box;
+            List<Vec3> spots = Lighting.place(seen, read(caller.world(), seen), emitted(light.block()), box.max().y());
+            if (spots.isEmpty()) continue;
+            job.changed += handle.apply(new Op.Blocks(spots.stream().map(p -> new Op.BlockAt(p, light.block())).toList()));
+        }
+    }
+
+    /** Block light a block gives off; the invisible {@code light} block carries it in its level. */
+    private static int emitted(String block) {
+        BlockState state = BlockState.parse(block);
+        if (state.type().equals("light")) return Integer.parseInt(state.props().getOrDefault("level", "15"));
+        return BlockTraits.light(block);
     }
 
     /** Waits up to the configured time; long jobs report "running" and keep going. */
@@ -341,13 +396,14 @@ public final class BuildService {
                 while (next < pieces.size() && budget > 0) {
                     at = next;
                     Op piece = pieces.get(next++);
-                    job.changed += handle.apply(piece);
+                    apply(handle, piece, job);
                     budget -= piece.volume();
                 }
                 at = -1;
                 handle.flush();
                 if (next >= pieces.size()) {
                     cancel();
+                    light(caller, handle, plan.lights(), job);
                     handle.close();
                     finish(job, null);
                 }
@@ -375,6 +431,20 @@ public final class BuildService {
             if (volume > config.maxVolumePerOp()) {
                 throw new EditException(op.kind() + " touches ~" + volume
                         + " blocks; max per op is " + config.maxVolumePerOp());
+            }
+            if (op instanceof Op.Light light) {
+                if (volume > config.maxReadVolume()) {
+                    throw new EditException("light region is " + volume + " blocks; max is " + config.maxReadVolume());
+                }
+                int emit;
+                try {
+                    emit = emitted(light.block());
+                } catch (NumberFormatException e) {
+                    emit = 0;
+                }
+                if (emit < 1 || emit > 15) {
+                    throw new EditException("'" + light.block() + "' gives no light; use torch, lantern, glowstone, sea_lantern, end_rod or light");
+                }
             }
             Box bounds = op.bounds();
             checkZone(world, bounds);
