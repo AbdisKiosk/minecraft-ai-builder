@@ -2,15 +2,19 @@ package me.abdiskiosk.minecraftaibuilder.plugin.relay;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
+import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
+import me.abdiskiosk.minecraftaibuilder.plugin.Drafts;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
@@ -49,6 +53,7 @@ public final class RelayClient implements BuildService.JobListener {
     private final McpEndpoint mcp;
     private final RestApi api;
     private final History history;
+    private final Drafts drafts;
     private final BuildService service;
     private final Supplier<JsonObject> hello;
     private final Logger logger;
@@ -62,18 +67,23 @@ public final class RelayClient implements BuildService.JobListener {
     private volatile boolean stopped;
     private volatile String status = "starting";
     private volatile long lastHeard;
+    private volatile long lastBeat = System.currentTimeMillis();
     private long backoff = 1;
     /** Sends must not overlap (java.net.http.WebSocket rule), so each waits for the previous one. */
     private CompletableFuture<?> sendChain = CompletableFuture.completedFuture(null);
 
-    /** @param history null when the history is turned off */
-    public RelayClient(String url, String token, McpEndpoint mcp, RestApi api, History history, BuildService service,
-                       Supplier<JsonObject> hello, Logger logger) {
+    /**
+     * @param history null when the history is turned off
+     * @param drafts  null when drafts are not available
+     */
+    public RelayClient(String url, String token, McpEndpoint mcp, RestApi api, History history, Drafts drafts,
+                       BuildService service, Supplier<JsonObject> hello, Logger logger) {
         this.uri = relayUri(url);
         this.token = token;
         this.mcp = mcp;
         this.api = api;
         this.history = history;
+        this.drafts = drafts;
         this.service = service;
         this.hello = hello;
         this.logger = logger;
@@ -103,6 +113,7 @@ public final class RelayClient implements BuildService.JobListener {
 
     public void start() {
         service.addListener(this);
+        if (drafts != null) drafts.addListener(this::onDraft);
         connect();
         timer.scheduleAtFixedRate(this::heartbeat, PING_SECONDS, PING_SECONDS, TimeUnit.SECONDS);
     }
@@ -157,9 +168,15 @@ public final class RelayClient implements BuildService.JobListener {
     }
 
     private void heartbeat() {
+        long now = System.currentTimeMillis();
+        long gap = now - lastBeat;
+        lastBeat = now;
         WebSocket s = socket;
         if (s == null) return;
-        if (System.currentTimeMillis() - lastHeard > DEAD_MILLIS) {
+        // A late heartbeat means this process was paused (the machine slept), not that the panel went quiet:
+        // give the panel a fresh ping to answer instead of dropping a working connection.
+        if (gap > 2 * PING_SECONDS * 1000) lastHeard = now;
+        if (now - lastHeard > DEAD_MILLIS) {
             s.abort();
             failed("no answer from the panel");
             return;
@@ -178,8 +195,19 @@ public final class RelayClient implements BuildService.JobListener {
         o.addProperty("t", RelayProtocol.HELLO);
         o.addProperty("protocol", RelayProtocol.VERSION);
         o.addProperty("history", history != null);
+        o.addProperty("review", drafts != null && drafts.reviewOn());
         send(o);
         for (BuildService.JobInfo job : service.running()) onJob(RelayProtocol.JOB_START, job);
+        if (drafts != null) drafts.openSummaries().forEach(this::onDraft);
+    }
+
+    private void onDraft(JsonObject summary) {
+        if (socket == null) return;
+        JsonObject o = new JsonObject();
+        o.addProperty("t", RelayProtocol.EVENT);
+        o.addProperty("event", RelayProtocol.DRAFT_UPDATE);
+        o.add("draft", summary);
+        send(o);
     }
 
     @Override
@@ -226,6 +254,7 @@ public final class RelayClient implements BuildService.JobListener {
                         yield tool.equals("tools") ? api.list() : CallContext.withSource("panel rest", () -> api.call(tool, args));
                     }
                     case RelayProtocol.HISTORY -> history(frame);
+                    case RelayProtocol.DRAFT -> draft(frame);
                     default -> RestApi.error(400, "unknown frame type '" + type + "'");
                 };
             } catch (EditException e) {
@@ -259,6 +288,43 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("force") && args.get("force").getAsBoolean()));
             default -> RestApi.error(400, "unknown history op '" + op + "'");
         });
+    }
+
+    private RestApi.Response draft(JsonObject frame) {
+        if (drafts == null) return RestApi.error(404, "drafts are not available on this server");
+        JsonObject args = frame.has("args") && frame.get("args").isJsonObject() ? frame.getAsJsonObject("args") : new JsonObject();
+        String op = frame.has("op") ? frame.get("op").getAsString() : "";
+        String by = args.has("by") ? args.get("by").getAsString() : "panel";
+        return CallContext.withSource("panel", () -> switch (op) {
+            case "list" -> new RestApi.Response(200, drafts.list());
+            case "get" -> new RestApi.Response(200, drafts.get(str(args, "id")));
+            case "render" -> new RestApi.Response(200, drafts.render(str(args, "id"),
+                    args.has("view") ? args.get("view").getAsString() : null,
+                    args.has("corner") ? args.get("corner").getAsString() : null));
+            case "approve" -> new RestApi.Response(200, drafts.approve(str(args, "id"), bool(args, "force"), by));
+            case "reject" -> new RestApi.Response(200, drafts.reject(str(args, "id"), by));
+            case "export" -> new RestApi.Response(200, drafts.export(str(args, "world"), box(args.getAsJsonArray("box"))));
+            case "import" -> {
+                JsonArray origin = args.getAsJsonArray("origin");
+                JsonArray size = args.getAsJsonArray("size");
+                yield new RestApi.Response(200, drafts.importRegion(str(args, "world"),
+                        new Vec3(origin.get(0).getAsInt(), origin.get(1).getAsInt(), origin.get(2).getAsInt()),
+                        size.get(0).getAsInt(), size.get(1).getAsInt(), size.get(2).getAsInt(), str(args, "data"),
+                        !args.has("air") || bool(args, "air"), bool(args, "skipUnknown"),
+                        args.has("label") ? args.get("label").getAsString() : null));
+            }
+            default -> RestApi.error(400, "unknown draft op '" + op + "'");
+        });
+    }
+
+    private static boolean bool(JsonObject o, String key) {
+        return o.has(key) && o.get(key).getAsBoolean();
+    }
+
+    private static Box box(JsonArray a) {
+        if (a == null || a.size() != 6) throw new EditException("box must be [x1,y1,z1,x2,y2,z2]");
+        return Box.of(new Vec3(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt()),
+                new Vec3(a.get(3).getAsInt(), a.get(4).getAsInt(), a.get(5).getAsInt()));
     }
 
     private static String str(JsonObject o, String key) {

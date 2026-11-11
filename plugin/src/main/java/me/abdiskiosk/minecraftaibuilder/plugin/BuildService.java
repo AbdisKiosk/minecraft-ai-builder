@@ -2,10 +2,12 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import me.abdiskiosk.minecraftaibuilder.common.BlockCheck;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
+import me.abdiskiosk.minecraftaibuilder.common.Draft;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import me.abdiskiosk.minecraftaibuilder.common.PreviewHandle;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
 import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
@@ -34,6 +36,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Supplier;
 
 /** Runs bridge calls on the right thread, enforces limits and tracks edit jobs. */
 public final class BuildService {
@@ -98,7 +101,8 @@ public final class BuildService {
         }
     }
 
-    public record JobResult(String job, String status, long changed, long ms, String error, List<String> warnings) {
+    /** @param draft the draft an unplaced (review) edit went into, or null */
+    public record JobResult(String job, String status, long changed, long ms, String error, List<String> warnings, String draft) {
     }
 
     public static final class Job {
@@ -118,6 +122,13 @@ public final class BuildService {
         volatile String historyId;
         /** Set for jobs started by reverting a history entry. */
         volatile String revertOf;
+        /** Set for jobs that place an approved draft. */
+        volatile String draftOf;
+        /** Dry run: the result goes into a draft instead of the world. */
+        volatile boolean preview;
+        /** The draft a preview job's changes went into. */
+        volatile String draft;
+        volatile String label;
 
         Job(String id, List<String> warnings, Caller caller, Box bounds, long total) {
             this.id = id;
@@ -133,20 +144,20 @@ public final class BuildService {
 
         JobResult snapshot() {
             JobResult done = future.getNow(null);
-            return done != null ? done : new JobResult(id, "running", changed, System.currentTimeMillis() - started, null, warnings);
+            return done != null ? done : new JobResult(id, "running", changed, System.currentTimeMillis() - started, null, warnings, draft);
         }
 
         public JobInfo info() {
             JobResult r = snapshot();
             return new JobInfo(id, r.status(), phase, tool, source, caller.name(), caller.world(), bounds, total, processed,
-                    r.changed(), started, r.ms(), r.error(), historyId, revertOf);
+                    r.changed(), started, r.ms(), r.error(), historyId, revertOf, draft, draftOf);
         }
     }
 
     /** What the panel shows about a job; {@code processed} out of {@code total} is the progress. */
     public record JobInfo(String id, String status, String phase, String tool, String source, String caller, String world,
                           Box bounds, long total, long processed, long changed, long started, long ms, String error,
-                          String history, String revertOf) {
+                          String history, String revertOf, String draft, String draftOf) {
     }
 
     /** Hears about every job; called from the main thread or a FastAsyncWorldEdit thread, so it must be quick. */
@@ -286,11 +297,70 @@ public final class BuildService {
             throw new EditException("region is " + box.volume() + " blocks; max read is " + config.maxReadVolume()
                     + ". Read a smaller box or use mode=summary on parts.");
         }
-        return sync(() -> bridge.read(world, box));
+        String[] states = sync(() -> bridge.read(world, box));
+        // With review on, the caller sees the world as the open draft would leave it.
+        if (reviewOn()) drafts.overlay(world, box, states);
+        return states;
     }
 
+    /** With review on, takes the newest edits out of the caller's world's draft instead of using WorldEdit's undo. */
     public int undo(Caller caller, int steps) {
+        if (reviewOn()) return drafts.undo(caller.world(), steps);
         return sync(() -> bridge.undo(caller.id(), steps));
+    }
+
+    private volatile Drafts drafts;
+
+    public void setDrafts(Drafts drafts) {
+        this.drafts = drafts;
+    }
+
+    public Drafts drafts() {
+        return drafts;
+    }
+
+    /** True when Claude's edits go into drafts (review.enabled). */
+    public boolean reviewOn() {
+        Drafts d = drafts;
+        return d != null && d.reviewOn();
+    }
+
+    /**
+     * Reads boxes a slice per tick (or right away with FastAsyncWorldEdit) without the draft overlay, and waits.
+     * For history, drafts and region exports; not for the main thread.
+     */
+    public RegionSnapshot readStepped(String world, List<Box> boxes, long perTick) {
+        checkWorld(world);
+        RegionSnapshot s = new RegionSnapshot(boxes);
+        if (bridge.async()) {
+            s.readAll(bridge, world, perTick);
+            return s;
+        }
+        CompletableFuture<RegionSnapshot> done = new CompletableFuture<>();
+        new BukkitRunnable() {
+            @Override
+            public void run() {
+                try {
+                    if (s.step(bridge, world, perTick)) {
+                        cancel();
+                        done.complete(s);
+                    }
+                } catch (RuntimeException ex) {
+                    cancel();
+                    done.completeExceptionally(ex);
+                }
+            }
+        }.runTaskTimer(plugin, 0L, 1L);
+        try {
+            return done.get(5, TimeUnit.MINUTES);
+        } catch (ExecutionException ex) {
+            throw ex.getCause() instanceof RuntimeException re ? re : new EditException(String.valueOf(ex.getCause()));
+        } catch (TimeoutException ex) {
+            throw new EditException("reading the region took too long");
+        } catch (InterruptedException ex) {
+            Thread.currentThread().interrupt();
+            throw new EditException("interrupted");
+        }
     }
 
     public Optional<JobResult> job(String id) {
@@ -300,14 +370,28 @@ public final class BuildService {
         }
     }
 
-    /** Validates and starts an edit job; every op in the list becomes one undo step together. */
-    public Job submit(Caller caller, List<Op> ops) {
-        return submit(caller, ops, null);
+    /** Where an edit goes: AUTO follows review.enabled, DIRECT always places, DRAFT always goes into a draft. */
+    public enum Mode { AUTO, DIRECT, DRAFT }
+
+    /**
+     * @param revertOf the history entry the job reverts, or null
+     * @param draftOf  the draft the job places, or null
+     * @param label    shown on the draft entry, e.g. "promote from staging"
+     */
+    public record Options(Mode mode, String revertOf, String draftOf, String label) {
+        public static final Options AUTO = new Options(Mode.AUTO, null, null, null);
     }
 
-    /** @param revertOf the history entry this job reverts, or null */
-    public Job submit(Caller caller, List<Op> ops, String revertOf) {
+    /** Validates and starts an edit job; every op in the list becomes one undo step together. */
+    public Job submit(Caller caller, List<Op> ops) {
+        return submit(caller, ops, Options.AUTO);
+    }
+
+    public Job submit(Caller caller, List<Op> ops, Options options) {
         if (ops.isEmpty()) throw new EditException("no operations");
+        boolean preview = options.mode() == Mode.DRAFT || (options.mode() == Mode.AUTO && reviewOn());
+        Drafts draftStore = drafts;
+        if (preview && draftStore == null) throw new EditException("drafts are off on this server");
         List<String> warnings = validate(caller, ops);
         List<Op> pieces = new ArrayList<>();
         List<Integer> owners = new ArrayList<>();
@@ -323,22 +407,30 @@ public final class BuildService {
             }
         }
         Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray());
-        Recorder rec = recorder;
+        // A dry run changes nothing in the world, so there is nothing to snapshot for the history.
+        Recorder rec = preview ? null : recorder;
         List<Box> boxes = rec == null ? null : rec.boxes(caller, ops);
         RegionSnapshot before = boxes == null ? null : new RegionSnapshot(boxes);
 
         Job job = new Job("j" + nextJob.getAndIncrement(), warnings, caller, bounds, total);
-        job.revertOf = revertOf;
+        job.revertOf = options.revertOf();
+        job.draftOf = options.draftOf();
+        job.label = options.label();
+        job.preview = preview;
         if (before != null) job.phase = "snapshot";
+        if (preview) job.phase = "preview";
+        Supplier<EditHandle> open = preview
+                ? () -> bridge.preview(caller.id(), caller.world(), draftStore.overlay(caller.world()), draftStore.maxVolume())
+                : () -> bridge.begin(caller.id(), caller.world());
         synchronized (jobs) {
             jobs.put(job.id, job);
         }
         fire(RelayProtocol.JOB_START, job);
 
         if (bridge.async()) {
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runAsync(caller, plan, job, before));
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runAsync(caller, plan, job, before, open));
         } else {
-            new TickRunner(caller, plan, job, before).runTaskTimer(plugin, 0L, 1L);
+            new TickRunner(caller, plan, job, before, open).runTaskTimer(plugin, 0L, 1L);
         }
         return job;
     }
@@ -352,12 +444,12 @@ public final class BuildService {
      * Everything is parsed before the first block is placed, and the job only reports done after the handle
      * is closed (flushed and remembered for undo), so "done" means the blocks are in the world.
      */
-    private void runAsync(Caller caller, Plan plan, Job job, RegionSnapshot before) {
+    private void runAsync(Caller caller, Plan plan, Job job, RegionSnapshot before, Supplier<EditHandle> open) {
         Throwable failure = null;
         int at = -1;
         EditHandle handle = null;
         try {
-            handle = bridge.begin(caller.id(), caller.world());
+            handle = open.get();
             for (int i = 0; i < plan.pieces().size(); i++) {
                 at = i;
                 handle.prepare(plan.pieces().get(i));
@@ -400,11 +492,29 @@ public final class BuildService {
                 after = null;
             }
         }
-        complete(job, error, before, after);
+        complete(job, error, before, after, handle);
     }
 
-    /** Records the job in the history (off the main thread), then reports it finished. */
-    private void complete(Job job, RuntimeException error, RegionSnapshot before, RegionSnapshot after) {
+    /**
+     * A preview job's changes go into the world's draft; any other job is recorded in the history (off the main
+     * thread). Then the job is reported finished.
+     */
+    private void complete(Job job, RuntimeException error, RegionSnapshot before, RegionSnapshot after, EditHandle handle) {
+        if (job.preview) {
+            RuntimeException failure = error;
+            if (failure == null) {
+                try {
+                    BlockDiff diff = ((PreviewHandle) handle).changes();
+                    job.changed = diff.size();
+                    job.draft = drafts.add(job.caller.world(), new Draft.Entry(job.tool, job.source, job.caller.name(),
+                            job.started, diff, job.label));
+                } catch (RuntimeException e) {
+                    failure = e;
+                }
+            }
+            finish(job, failure);
+            return;
+        }
         Recorder rec = recorder;
         if (rec == null) {
             finish(job, error);
@@ -433,7 +543,7 @@ public final class BuildService {
         String message = error == null ? null : error.getMessage() == null ? error.toString() : error.getMessage();
         return new JobInfo(i.id(), error == null ? "done" : "failed", "done", i.tool(), i.source(), i.caller(), i.world(),
                 i.bounds(), i.total(), i.processed(), i.changed(), i.started(), System.currentTimeMillis() - i.started(),
-                message, null, i.revertOf());
+                message, null, i.revertOf(), null, i.draftOf());
     }
 
     /** Waits up to the configured time; long jobs report "running" and keep going. */
@@ -446,19 +556,19 @@ public final class BuildService {
             Thread.currentThread().interrupt();
             return job.snapshot();
         } catch (ExecutionException e) {
-            return new JobResult(job.id, "failed", job.changed, 0, String.valueOf(e.getCause()), job.warnings);
+            return new JobResult(job.id, "failed", job.changed, 0, String.valueOf(e.getCause()), job.warnings, job.draft);
         }
     }
 
     private void finish(Job job, RuntimeException error) {
         long ms = System.currentTimeMillis() - job.started;
         if (error == null) {
-            job.future.complete(new JobResult(job.id, "done", job.changed, ms, null, job.warnings));
+            job.future.complete(new JobResult(job.id, "done", job.changed, ms, null, job.warnings, job.draft));
         } else {
             Throwable root = error instanceof EditException && error.getCause() != null ? error.getCause() : error;
             if (!(root instanceof EditException)) plugin.getLogger().log(java.util.logging.Level.WARNING, "job " + job.id + " failed", root);
             String message = error.getMessage() == null ? error.toString() : error.getMessage();
-            job.future.complete(new JobResult(job.id, "failed", job.changed, ms, message, job.warnings));
+            job.future.complete(new JobResult(job.id, "failed", job.changed, ms, message, job.warnings, job.draft));
         }
         job.phase = "done";
         fire(RelayProtocol.JOB_END, job);
@@ -474,17 +584,19 @@ public final class BuildService {
         private final Job job;
         /** Read across ticks before the first block is placed; null when the job is not tracked. */
         private final RegionSnapshot before;
+        private final Supplier<EditHandle> open;
         private RegionSnapshot after;
         private EditHandle handle;
         private int next;
         private boolean closed;
         private RuntimeException failure;
 
-        TickRunner(Caller caller, Plan plan, Job job, RegionSnapshot before) {
+        TickRunner(Caller caller, Plan plan, Job job, RegionSnapshot before, Supplier<EditHandle> open) {
             this.caller = caller;
             this.plan = plan;
             this.job = job;
             this.before = before;
+            this.open = open;
         }
 
         @Override
@@ -501,7 +613,7 @@ public final class BuildService {
                 }
             }
             cancel();
-            complete(job, failure, before, after);
+            complete(job, failure, before, after, handle);
         }
 
         private void build() {
@@ -509,7 +621,7 @@ public final class BuildService {
             List<Op> pieces = plan.pieces();
             try {
                 if (handle == null) {
-                    handle = bridge.begin(caller.id(), caller.world());
+                    handle = open.get();
                     for (int i = 0; i < pieces.size(); i++) {
                         at = i;
                         handle.prepare(pieces.get(i));

@@ -131,8 +131,57 @@ Settings live under `history:` in the plugin's `config.yml`:
 Limits:
 
 - Only block states are recorded. Sign text, chest contents, item frames and armor stands (`decorate`) are not.
-- Calls to the `undo` tool are not recorded.
+- Calls to the `undo` tool are not recorded (with review on, undo only changes the draft).
 - Two edits running at the same time over the same blocks each see the other's changes.
+
+## Drafts: approve edits before they are placed
+
+Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone
+approves them:
+
+```yaml
+review:
+  enabled: true
+```
+
+With review on:
+
+- Every edit tool (`fill`, `batch`, `place_blueprint`, `clone`, terrain ops, …) runs through WorldEdit in a dry
+  run. Nothing reaches the world: the blocks go into the world's open **draft**, and the result says
+  `"placed": false` with the draft id. Other plugins (loggers, region guards) never see the dry run.
+- Claude's reads (`read_region`, `check_region`, `render_region`, …) show the world as the draft would leave it, so
+  its build-and-check workflow is unchanged. Players see the real world.
+- `undo` takes the newest edit out of the draft. `decorate` is refused until the draft is approved, because signs,
+  containers and entities would skip the draft.
+- The panel shows a "Draft waiting for approval" banner on the server, and a draft page with before/after/changes
+  pictures, every edit in it, and the changed blocks. **Approve and place** puts exactly the previewed blocks in the
+  world as one job (recorded in the history, so it can be reverted). Blocks changed in the world since the draft was
+  made are left alone and listed, unless you tick "also overwrite blocks changed since". **Reject** drops the draft.
+- From the server console or in game (permission `aibuilder.approve`): `/aibuilder draft` lists open drafts,
+  `/aibuilder draft approve [world] [force]` and `/aibuilder draft reject [world]` decide one.
+- Drafts are saved in `plugins/AIBuilder/drafts/` and survive restarts.
+
+| Setting | What it does |
+| --- | --- |
+| `review.enabled` | Claude's edits go into drafts. It is only in `config.yml`, so it cannot be switched off from the panel |
+| `review.max-volume` | Most changed blocks one draft may hold |
+| `review.keep` | Approved and rejected drafts kept for the panel |
+
+Drafts need WorldEdit. With FastAsyncWorldEdit, which writes around WorldEdit's world API, every edit is refused
+while review is on rather than risk placing it.
+
+## Promote: copy a region between servers
+
+**Copy region to…** on a server page, or **Promote to…** on a history entry or draft, copies a region's blocks from
+one server into a draft on another (or the same) server: for example a hole built on a staging server, promoted to the
+live one. Nothing is placed on the target until its draft is approved, whether or not review is on there.
+
+- Choose the target server and world, the region, and the target corner (it defaults to the same coordinates).
+- **Copy air too** clears what is in the way; untick it to only add blocks.
+- Blocks the target server does not have (for example 1.21 blocks going to a 1.12 server) stop the promote with a list,
+  or are left out when **leave out blocks the target server does not have** is ticked.
+- Only block states are copied: sign text, chest contents and entities are not.
+- `promote.max-volume` (default 2,000,000 blocks) limits the region on both servers.
 
 ## Security
 

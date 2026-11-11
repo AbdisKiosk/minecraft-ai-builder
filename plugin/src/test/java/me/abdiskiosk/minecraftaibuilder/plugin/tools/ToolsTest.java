@@ -93,7 +93,7 @@ class ToolsTest {
     }
 
     private final PluginConfig config = new PluginConfig(true, "127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
-            List.of(), "", null, List.of(), true, "", "", null);
+            List.of(), "", null, List.of(), true, "", "", null, null);
     private final Path dataDir = tempDir();
     private final BuildService service = new BuildService(null, new FakeBridge(), config, dataDir);
 
@@ -405,7 +405,7 @@ class ToolsTest {
         assertTrue(error("tell", "{\"message\":\"hi\",\"teleport\":[0,64,0]}").startsWith("teleport needs a player. 2 players are online"));
 
         PluginConfig noTeleport = new PluginConfig(true, "127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
-                List.of(), "", null, List.of(), false, "", "", null);
+                List.of(), "", null, List.of(), false, "", "", null, null);
         ToolRegistry other = new ToolRegistry(service, Logger.getAnonymousLogger());
         Tools.registerAll(other, new BuildService(null, new FakeBridge(), noTeleport, null));
         Tool tell = other.all().stream().filter(x -> x.name().equals("tell")).findFirst().orElseThrow();

@@ -30,6 +30,13 @@ final class Events {
         broadcast("job", o.toString());
     }
 
+    void draft(String serverId, JsonObject draft) {
+        JsonObject o = new JsonObject();
+        o.addProperty("server", serverId);
+        o.add("draft", draft);
+        broadcast("draft", o.toString());
+    }
+
     /** Keeps proxies from closing idle streams. */
     void ping() {
         for (SseClient c : clients) {

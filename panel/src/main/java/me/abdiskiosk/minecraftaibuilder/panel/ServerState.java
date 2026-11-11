@@ -20,6 +20,8 @@ final class ServerState {
     private JsonObject hello = new JsonObject();
     private long since;
     private final Map<String, JsonObject> running = new LinkedHashMap<>();
+    /** Open drafts by id, as the plugin last described them. */
+    private final Map<String, JsonObject> drafts = new LinkedHashMap<>();
     private final Deque<JsonObject> recent = new ArrayDeque<>();
 
     ServerState(String id, String name) {
@@ -41,6 +43,16 @@ final class ServerState {
         this.hello.remove("t");
         this.since = System.currentTimeMillis();
         running.clear(); // the plugin re-sends job.start for whatever is still running
+        drafts.clear();  // and draft.update for every open draft
+    }
+
+    synchronized void draft(JsonObject summary) {
+        String id = summary.get("id").getAsString();
+        if ("open".equals(summary.has("status") ? summary.get("status").getAsString() : "")) {
+            drafts.put(id, summary.deepCopy());
+        } else {
+            drafts.remove(id);
+        }
     }
 
     synchronized void disconnected() {
@@ -81,6 +93,9 @@ final class ServerState {
         JsonArray done = new JsonArray();
         recent.forEach(j -> done.add(j.deepCopy()));
         o.add("recent", done);
+        JsonArray open = new JsonArray();
+        drafts.values().forEach(d -> open.add(d.deepCopy()));
+        o.add("drafts", open);
         return o;
     }
 }

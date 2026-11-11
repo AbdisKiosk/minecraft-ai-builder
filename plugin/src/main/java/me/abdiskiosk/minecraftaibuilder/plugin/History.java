@@ -122,6 +122,7 @@ public final class History implements BuildService.Recorder {
         e.addProperty("status", job.status());
         if (job.error() != null) e.addProperty("error", job.error());
         if (job.revertOf() != null) e.addProperty("revertOf", job.revertOf());
+        if (job.draftOf() != null) e.addProperty("draftOf", job.draftOf());
         e.addProperty("tracked", diff != null);
         if (diff != null) {
             BlockDiff.Stats stats = diff.stats();
@@ -227,59 +228,15 @@ public final class History implements BuildService.Recorder {
         JsonObject e = entry(id);
         BlockDiff diff = diff(id, e);
         JsonObject o = e.deepCopy();
-        BlockDiff.Stats stats = diff.stats();
-        JsonArray types = new JsonArray();
-        for (BlockDiff.TypeCount t : stats.types()) {
-            JsonObject row = new JsonObject();
-            row.addProperty("type", t.type());
-            row.addProperty("added", t.added());
-            row.addProperty("removed", t.removed());
-            types.add(row);
-        }
-        o.add("types", types);
-        JsonArray changes = new JsonArray();
-        for (BlockDiff.Change c : diff.changes().subList(0, Math.min(LISTED_CHANGES, diff.size()))) changes.add(change(c));
-        o.add("changes", changes);
-        o.addProperty("listed", changes.size());
+        DiffImages.describe(o, diff, LISTED_CHANGES);
         return o;
     }
 
     /** Before, after and changes pictures of an entry, as base64 PNGs, using the blocks around it as they are now. */
     public JsonObject render(String id, String viewName, String cornerName) {
         JsonObject e = entry(id);
-        BlockDiff diff = diff(id, e);
-        if (diff.isEmpty()) throw new EditException("entry " + id + " changed no blocks");
-        Box bounds = diff.bounds();
-        String world = e.get("world").getAsString();
-        BuildService.Caller caller = service.resolve(null, world);
-        // A little of the surroundings, for context.
-        Box box = Box.of(bounds.min().add(-2, -1, -2), bounds.max().add(2, 1, 2));
-        Box clipped = RegionSnapshot.clipY(box, caller.minY(), caller.maxY());
-        box = clipped == null ? bounds : clipped;
-        if (box.volume() > settings.maxRenderVolume()) box = bounds;
-        if (box.volume() > settings.maxRenderVolume()) {
-            throw new EditException("entry " + id + " spans " + box.volume() + " blocks; renders are limited to "
-                    + settings.maxRenderVolume() + " (history.max-render-volume)");
-        }
-        String[] now = read(world, List.of(box)).array(0);
-        String[] before = diff.overlay(box, now, false);
-        String[] after = diff.overlay(box, now, true);
-        // Removed blocks are drawn where they were, tinted red.
-        String[] marked = after.clone();
-        for (BlockDiff.Change c : diff.changes()) {
-            if (c.kind() == BlockDiff.Kind.REMOVED && inside(box, c.pos())) {
-                marked[RegionCodec.index(box, c.pos().x(), c.pos().y(), c.pos().z())] = c.before();
-            }
-        }
-        IsoRenderer.View view = viewName == null ? IsoRenderer.View.ISO : IsoRenderer.View.valueOf(viewName.toUpperCase(Locale.ROOT));
-        IsoRenderer.Corner corner = cornerName == null ? IsoRenderer.Corner.SE : IsoRenderer.Corner.valueOf(cornerName.toUpperCase(Locale.ROOT));
-        IsoRenderer.Size size = IsoRenderer.Size.LARGE;
-        JsonObject o = new JsonObject();
-        o.add("box", box(box));
-        o.addProperty("before", png(IsoRenderer.render(box, before, view, corner, size).png()));
-        o.addProperty("after", png(IsoRenderer.render(box, after, view, corner, size).png()));
-        o.addProperty("changes", png(IsoRenderer.render(box, marked, view, corner, size, diff.highlight(box)).png()));
-        return o;
+        return DiffImages.render(service, e.get("world").getAsString(), diff(id, e), "entry " + id, viewName, cornerName,
+                settings.maxRenderVolume(), settings.readsPerTick());
     }
 
     /**
@@ -299,25 +256,19 @@ public final class History implements BuildService.Recorder {
             o.addProperty("conflicts", 0);
             return o;
         }
-        RegionSnapshot now = read(world, boxes);
+        RegionSnapshot now = service.readStepped(world, boxes, settings.readsPerTick());
         BlockDiff.Revert revert = diff.revert(p -> {
             String s = now.get(p);
             return s == null ? "air" : s;
         }, force);
         o.addProperty("blocks", revert.blocks().size());
         o.addProperty("conflicts", revert.conflicts().size());
-        JsonArray conflicts = new JsonArray();
-        for (BlockDiff.Change c : revert.conflicts().subList(0, Math.min(LISTED_CONFLICTS, revert.conflicts().size()))) {
-            JsonObject row = change(c);
-            row.add("expected", row.remove("before"));
-            row.add("now", row.remove("after"));
-            conflicts.add(row);
-        }
-        o.add("conflictList", conflicts);
+        o.add("conflictList", DiffImages.conflicts(revert.conflicts(), LISTED_CONFLICTS));
         if (!revert.blocks().isEmpty()) {
             BuildService.Caller caller = service.resolve(null, world);
             BuildService.Job job = CallContext.withTool("revert",
-                    () -> service.submit(caller, List.of(new Op.Blocks(revert.blocks())), id));
+                    () -> service.submit(caller, List.of(new Op.Blocks(revert.blocks())),
+                            new BuildService.Options(BuildService.Mode.DIRECT, id, null, null)));
             o.addProperty("job", job.id());
         }
         return o;
@@ -340,60 +291,6 @@ public final class History implements BuildService.Recorder {
         } catch (IOException ex) {
             throw new UncheckedIOException(ex);
         }
-    }
-
-    /** Reads boxes over several ticks (or right away with FastAsyncWorldEdit) and waits for the result. */
-    private RegionSnapshot read(String world, List<Box> boxes) {
-        RegionSnapshot s = new RegionSnapshot(boxes);
-        if (service.bridge().async()) {
-            s.readAll(service.bridge(), world, settings.readsPerTick());
-            return s;
-        }
-        CompletableFuture<RegionSnapshot> done = new CompletableFuture<>();
-        new BukkitRunnable() {
-            @Override
-            public void run() {
-                try {
-                    if (s.step(service.bridge(), world, settings.readsPerTick())) {
-                        cancel();
-                        done.complete(s);
-                    }
-                } catch (RuntimeException ex) {
-                    cancel();
-                    done.completeExceptionally(ex);
-                }
-            }
-        }.runTaskTimer(plugin, 0L, 1L);
-        try {
-            return done.get(5, TimeUnit.MINUTES);
-        } catch (ExecutionException ex) {
-            throw ex.getCause() instanceof RuntimeException re ? re : new EditException(String.valueOf(ex.getCause()));
-        } catch (TimeoutException ex) {
-            throw new EditException("reading the region took too long");
-        } catch (InterruptedException ex) {
-            Thread.currentThread().interrupt();
-            throw new EditException("interrupted");
-        }
-    }
-
-    private static JsonObject change(BlockDiff.Change c) {
-        JsonObject row = new JsonObject();
-        JsonArray pos = new JsonArray();
-        pos.add(c.pos().x());
-        pos.add(c.pos().y());
-        pos.add(c.pos().z());
-        row.add("pos", pos);
-        row.addProperty("before", c.before());
-        row.addProperty("after", c.after());
-        return row;
-    }
-
-    private static boolean inside(Box box, Vec3 p) {
-        return box.contains(Box.of(p, p));
-    }
-
-    private static String png(byte[] bytes) {
-        return Base64.getEncoder().encodeToString(bytes);
     }
 
     private static JsonArray box(Box b) {

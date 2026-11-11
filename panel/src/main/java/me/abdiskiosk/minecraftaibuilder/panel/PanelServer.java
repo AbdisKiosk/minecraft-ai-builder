@@ -1,5 +1,6 @@
 package me.abdiskiosk.minecraftaibuilder.panel;
 
+import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
@@ -162,6 +163,28 @@ public final class PanelServer {
                     && body.getAsJsonObject().get("force").getAsBoolean());
             forward(ctx, history("revert", args), HISTORY_TIMEOUT);
         });
+        app.get("/api/servers/{server}/drafts", ctx -> forward(ctx, draft("list", new JsonObject()), HISTORY_TIMEOUT));
+        app.get("/api/servers/{server}/drafts/{id}", ctx -> forward(ctx, draft("get", idArgs(ctx)), HISTORY_TIMEOUT));
+        app.get("/api/servers/{server}/drafts/{id}/render", ctx -> {
+            JsonObject args = idArgs(ctx);
+            if (ctx.queryParam("view") != null) args.addProperty("view", ctx.queryParam("view"));
+            if (ctx.queryParam("corner") != null) args.addProperty("corner", ctx.queryParam("corner"));
+            forward(ctx, draft("render", args), HISTORY_TIMEOUT);
+        });
+        app.post("/api/servers/{server}/drafts/{id}/approve", ctx -> {
+            JsonObject args = idArgs(ctx);
+            JsonElement body = json(ctx);
+            args.addProperty("force", body != null && body.isJsonObject() && body.getAsJsonObject().has("force")
+                    && body.getAsJsonObject().get("force").getAsBoolean());
+            args.addProperty("by", "panel");
+            forward(ctx, draft("approve", args), HISTORY_TIMEOUT);
+        });
+        app.post("/api/servers/{server}/drafts/{id}/reject", ctx -> {
+            JsonObject args = idArgs(ctx);
+            args.addProperty("by", "panel");
+            forward(ctx, draft("reject", args), HISTORY_TIMEOUT);
+        });
+        app.post("/api/promote", this::promote);
         app.sse("/events", client -> events.add(client, state().toString()));
 
         app.start(host, port);
@@ -271,6 +294,83 @@ public final class PanelServer {
         }));
     }
 
+    /**
+     * Copies a region from one server into another server's draft: {@code {from, to, world, box, toWorld, origin,
+     * air, skipUnknown}}. Nothing is placed until the target draft is approved.
+     */
+    private void promote(Context ctx) {
+        JsonElement body = json(ctx);
+        if (body == null || !body.isJsonObject()) {
+            error(ctx, 400, "body must be a JSON object");
+            return;
+        }
+        JsonObject b = body.getAsJsonObject();
+        String from, to, world, toWorld;
+        JsonArray box, origin;
+        try {
+            from = b.get("from").getAsString();
+            to = b.get("to").getAsString();
+            world = b.get("world").getAsString();
+            toWorld = b.has("toWorld") ? b.get("toWorld").getAsString() : world;
+            box = b.getAsJsonArray("box");
+            origin = b.has("origin") ? b.getAsJsonArray("origin") : null;
+            if (box == null || box.size() != 6 || (origin != null && origin.size() != 3)) throw new IllegalStateException();
+        } catch (RuntimeException e) {
+            error(ctx, 400, "give from, to, world, box [x1,y1,z1,x2,y2,z2] and optionally toWorld, origin [x,y,z], air, skipUnknown");
+            return;
+        }
+        for (String id : new String[]{from, to}) {
+            if (!hub.known(id)) {
+                error(ctx, 404, "unknown server '" + id + "'");
+                return;
+            }
+        }
+        int[] v = new int[6];
+        for (int i = 0; i < 6; i++) v[i] = box.get(i).getAsInt();
+        int minX = Math.min(v[0], v[3]), minY = Math.min(v[1], v[4]), minZ = Math.min(v[2], v[5]);
+        JsonArray size = new JsonArray();
+        size.add(Math.abs(v[3] - v[0]) + 1);
+        size.add(Math.abs(v[4] - v[1]) + 1);
+        size.add(Math.abs(v[5] - v[2]) + 1);
+        JsonArray target = origin != null ? origin : new JsonArray();
+        if (origin == null) {
+            target.add(minX);
+            target.add(minY);
+            target.add(minZ);
+        }
+        JsonObject exportArgs = new JsonObject();
+        exportArgs.addProperty("world", world);
+        exportArgs.add("box", box);
+        boolean air = !b.has("air") || b.get("air").getAsBoolean();
+        boolean skipUnknown = b.has("skipUnknown") && b.get("skipUnknown").getAsBoolean();
+        String label = "promote from " + from + " " + world + " " + minX + " " + minY + " " + minZ;
+        ctx.future(() -> hub.request(from, draft("export", exportArgs), HISTORY_TIMEOUT).thenCompose(exported -> {
+            int status = exported.has("status") ? exported.get("status").getAsInt() : 502;
+            if (status != 200) return java.util.concurrent.CompletableFuture.completedFuture(exported);
+            JsonObject importArgs = new JsonObject();
+            importArgs.addProperty("world", toWorld);
+            importArgs.add("origin", target);
+            importArgs.add("size", size);
+            importArgs.add("data", exported.getAsJsonObject("body").get("data"));
+            importArgs.addProperty("air", air);
+            importArgs.addProperty("skipUnknown", skipUnknown);
+            importArgs.addProperty("label", label);
+            return hub.request(to, draft("import", importArgs), HISTORY_TIMEOUT);
+        }).handle((reply, e) -> {
+            if (e != null) {
+                Throwable cause = e instanceof CompletionException && e.getCause() != null ? e.getCause() : e;
+                if (cause instanceof RelayHub.OfflineException) error(ctx, 503, cause.getMessage());
+                else if (cause instanceof TimeoutException) error(ctx, 504, "a server did not answer in time");
+                else error(ctx, 502, "promote failed: " + cause);
+                return null;
+            }
+            ctx.status(reply.has("status") ? reply.get("status").getAsInt() : 502);
+            JsonElement out = reply.get("body");
+            if (out != null && !(out instanceof JsonNull)) ctx.contentType("application/json").result(out.toString());
+            return null;
+        }));
+    }
+
     private void housekeeping() {
         auth.purgeExpired();
         FileTime now = modified();
@@ -325,6 +425,14 @@ public final class PanelServer {
     private static JsonObject history(String op, JsonObject args) {
         JsonObject f = new JsonObject();
         f.addProperty("t", RelayProtocol.HISTORY);
+        f.addProperty("op", op);
+        f.add("args", args);
+        return f;
+    }
+
+    private static JsonObject draft(String op, JsonObject args) {
+        JsonObject f = new JsonObject();
+        f.addProperty("t", RelayProtocol.DRAFT);
         f.addProperty("op", op);
         f.add("args", args);
         return f;

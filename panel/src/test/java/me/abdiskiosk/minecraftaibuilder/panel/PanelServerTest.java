@@ -31,6 +31,7 @@ class PanelServerTest {
 
     private PanelServer panel;
     private String serverToken;
+    private String stagingToken;
     private String clientToken;
     private final HttpClient http = HttpClient.newHttpClient();
 
@@ -44,6 +45,11 @@ class PanelServerTest {
         s.name = "Survival";
         s.tokenHash = Auth.sha256(serverToken);
         config.servers.put("survival", s);
+        stagingToken = Auth.newToken("aibs_");
+        PanelConfig.Server staging = new PanelConfig.Server();
+        staging.name = "Staging";
+        staging.tokenHash = Auth.sha256(stagingToken);
+        config.servers.put("staging", staging);
         PanelConfig.Client c = new PanelConfig.Client();
         c.label = "test";
         c.tokenHash = Auth.sha256(clientToken);
@@ -133,12 +139,69 @@ class PanelServerTest {
     }
 
     private void waitOnline() throws Exception {
+        waitOnline(1);
+    }
+
+    private void waitOnline(int servers) throws Exception {
         String cookie = login();
         for (int i = 0; i < 100; i++) {
-            if (get("/api/state", cookie).body().contains("\"online\":true")) return;
+            if (get("/api/state", cookie).body().split("\"online\":true", -1).length - 1 >= servers) return;
             Thread.sleep(20);
         }
-        throw new AssertionError("server never came online");
+        throw new AssertionError("servers never came online");
+    }
+
+    private HttpResponse<String> postWithCookie(String path, String cookie, String body) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + path)).header("Cookie", cookie)
+                .POST(HttpRequest.BodyPublishers.ofString(body)).build(), HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void promoteCopiesARegionIntoTheTargetsDraft() throws Exception {
+        new FakePlugin(f -> {
+            JsonObject args = f.getAsJsonObject("args");
+            assertEquals("export", f.get("op").getAsString());
+            assertEquals("world", args.get("world").getAsString());
+            return reply(200, "{\"data\":\"QUJD\",\"bytes\":3}");
+        }).connect(stagingToken, RelayProtocol.VERSION);
+        FakePlugin target = new FakePlugin(f -> {
+            JsonObject args = f.getAsJsonObject("args");
+            assertEquals("import", f.get("op").getAsString());
+            return reply(200, "{\"draft\":\"d1\",\"got\":\"" + args.get("data").getAsString() + "\",\"origin\":"
+                    + args.get("origin") + ",\"size\":" + args.get("size") + ",\"air\":" + args.get("air") + "}");
+        }).connect(serverToken, RelayProtocol.VERSION);
+        waitOnline(2);
+        String cookie = login();
+        HttpResponse<String> r = postWithCookie("/api/promote", cookie,
+                "{\"from\":\"staging\",\"to\":\"survival\",\"world\":\"world\",\"box\":[10,64,5,0,70,9],\"air\":false}");
+        assertEquals(200, r.statusCode(), r.body());
+        assertEquals("{\"draft\":\"d1\",\"got\":\"QUJD\",\"origin\":[0,64,5],\"size\":[11,7,5],\"air\":false}", r.body());
+        JsonObject label = target.received.poll(5, TimeUnit.SECONDS).getAsJsonObject("args");
+        assertTrue(label.get("label").getAsString().startsWith("promote from staging"));
+
+        assertEquals(404, postWithCookie("/api/promote", cookie,
+                "{\"from\":\"nope\",\"to\":\"survival\",\"world\":\"world\",\"box\":[0,0,0,1,1,1]}").statusCode());
+        assertEquals(400, postWithCookie("/api/promote", cookie, "{\"from\":\"staging\"}").statusCode());
+    }
+
+    @Test
+    void openDraftsShowInTheState() throws Exception {
+        FakePlugin plugin = new FakePlugin(f -> reply(200, "{}")).connect(serverToken, RelayProtocol.VERSION);
+        waitOnline();
+        String cookie = login();
+        plugin.send(JsonParser.parseString("{\"t\":\"event\",\"event\":\"draft.update\",\"draft\":{\"id\":\"d7\",\"status\":\"open\",\"added\":3}}").getAsJsonObject());
+        String state = "";
+        for (int i = 0; i < 100 && !state.contains("d7"); i++) {
+            state = get("/api/state", cookie).body();
+            Thread.sleep(20);
+        }
+        assertTrue(state.contains("\"d7\""), state);
+        plugin.send(JsonParser.parseString("{\"t\":\"event\",\"event\":\"draft.update\",\"draft\":{\"id\":\"d7\",\"status\":\"approved\"}}").getAsJsonObject());
+        for (int i = 0; i < 100 && state.contains("d7"); i++) {
+            state = get("/api/state", cookie).body();
+            Thread.sleep(20);
+        }
+        assertTrue(!state.contains("d7"), state);
     }
 
     private String login() throws Exception {

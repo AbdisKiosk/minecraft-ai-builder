@@ -10,6 +10,7 @@ import me.abdiskiosk.minecraftaibuilder.common.BlockInfo;
 import me.abdiskiosk.minecraftaibuilder.common.BlockState;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.Draft;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
@@ -213,6 +214,20 @@ public final class Tools {
             server.addProperty("note", "Block set is 1.8-1.12 (no lanterns, concrete, deepslate, new woods). Blocks that do not exist are rejected; check with block_info.");
         }
         out.add("server", server);
+        if (service.reviewOn()) {
+            JsonObject review = new JsonObject();
+            review.addProperty("note", "Edits go into a draft that a person approves before it is placed (results say placed:false). "
+                    + "Your reads show the draft; undo removes its newest edit; decorate waits until approval.");
+            Draft d = service.drafts().open(caller.world());
+            if (d != null) {
+                review.addProperty("draft", d.id());
+                review.addProperty("changes", d.size());
+                review.addProperty("edits", d.entries().size());
+            } else {
+                review.addProperty("changes", 0);
+            }
+            out.add("review", review);
+        }
         // The caller is described once, in "caller"; "players" lists everyone else.
         JsonArray others = service.sync(() -> {
             JsonArray players = new JsonArray();
@@ -403,6 +418,10 @@ public final class Tools {
         a.only("decorate", "items", "origin", "remove");
         if (!a.has("items") && !a.has("remove")) throw new EditException("give \"items\", \"remove\" or both");
         List<DecorSpec.Item> items = a.has("items") ? DecorSpec.parse(a) : List.of();
+        if (service.reviewOn()) {
+            throw new EditException("decorate is off while review is on: signs, containers and entities would skip the draft. "
+                    + "Ask for the draft to be approved, then decorate.");
+        }
         Decorator.Result r = Decorator.apply(service, a.caller(), items, a.has("remove") ? a.region("remove") : null);
         JsonObject o = new JsonObject();
         if (r.set() > 0) o.addProperty("set", r.set());
@@ -476,6 +495,10 @@ public final class Tools {
         o.addProperty("changed", r.changed());
         if (!brief) o.addProperty("ms", r.ms());
         if (r.error() != null) o.addProperty("error", r.error());
+        if (r.draft() != null) {
+            o.addProperty("draft", r.draft());
+            o.addProperty("placed", false);
+        }
         if (!r.warnings().isEmpty()) {
             JsonArray warnings = new JsonArray();
             r.warnings().forEach(warnings::add);

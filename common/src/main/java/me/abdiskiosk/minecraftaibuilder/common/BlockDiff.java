@@ -78,6 +78,12 @@ public final class BlockDiff {
             return this;
         }
 
+        /** One position; nothing is added when the states are the same. */
+        public Builder change(Vec3 pos, String before, String after) {
+            if (!same(before, after)) changes.add(new Change(pos, air(before), air(after)));
+            return this;
+        }
+
         /** Like {@link #add(Box, String[], String[])} with states looked up by index, so no arrays are built. */
         public Builder add(Box box, java.util.function.IntFunction<String> before, java.util.function.IntFunction<String> after) {
             int i = 0;
@@ -193,6 +199,26 @@ public final class BlockDiff {
                 continue;
             }
             blocks.add(new Op.BlockAt(c.pos(), c.before()));
+        }
+        return new Revert(blocks, conflicts);
+    }
+
+    /**
+     * What placing this diff would do now: the after-state goes where the world still holds the before-state.
+     * Cells already at their after-state are skipped; cells that hold something else are conflicts (reported as
+     * {@code Change(pos, expected before, now)}), and are overwritten only when {@code force}.
+     */
+    public Revert apply(Function<Vec3, String> current, boolean force) {
+        List<Op.BlockAt> blocks = new ArrayList<>();
+        List<Change> conflicts = new ArrayList<>();
+        for (Change c : changes) {
+            String now = current.apply(c.pos());
+            if (same(now, c.after())) continue;
+            if (!force && !same(now, c.before())) {
+                conflicts.add(new Change(c.pos(), c.before(), air(now)));
+                continue;
+            }
+            blocks.add(new Op.BlockAt(c.pos(), c.after()));
         }
         return new Revert(blocks, conflicts);
     }

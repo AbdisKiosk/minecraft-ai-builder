@@ -1,6 +1,7 @@
 package me.abdiskiosk.minecraftaibuilder.bridge.we7;
 
 import com.sk89q.worldedit.EditSession;
+import com.sk89q.worldedit.EditSessionBuilder;
 import com.sk89q.worldedit.IncompleteRegionException;
 import com.sk89q.worldedit.LocalSession;
 import com.sk89q.worldedit.MaxChangedBlocksException;
@@ -23,19 +24,23 @@ import com.sk89q.worldedit.math.convolution.GaussianKernel;
 import com.sk89q.worldedit.math.convolution.HeightMap;
 import com.sk89q.worldedit.math.convolution.HeightMapFilter;
 import com.sk89q.worldedit.math.transform.AffineTransform;
-import com.sk89q.worldedit.registry.state.Property;
 import com.sk89q.worldedit.regions.CuboidRegion;
 import com.sk89q.worldedit.regions.Polygonal2DRegion;
 import com.sk89q.worldedit.regions.Region;
+import com.sk89q.worldedit.registry.state.Property;
+import com.sk89q.worldedit.util.eventbus.EventBus;
 import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.block.BaseBlock;
 import com.sk89q.worldedit.world.block.BlockState;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.DryRunStore;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import me.abdiskiosk.minecraftaibuilder.common.PreviewHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
@@ -45,6 +50,7 @@ import org.bukkit.entity.Player;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -55,6 +61,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 
 /** WorldEdit 7.2+ (Minecraft 1.13 and newer), including FastAsyncWorldEdit. Loaded reflectively by the plugin. */
 public final class We7Bridge implements WorldEditBridge {
@@ -124,7 +131,50 @@ public final class We7Bridge implements WorldEditBridge {
         LocalSession session = session(actor);
         EditSession edit = WorldEdit.getInstance().newEditSessionBuilder()
                 .world(world).actor(actor).maxBlocks(-1).build();
-        return new Handle(world, actor, session, edit);
+        return new Handle(world, actor, session, edit, false);
+    }
+
+    @Override
+    public PreviewHandle preview(UUID actorId, String worldName, Function<Vec3, String> overlay, long maxBlocks) {
+        if (fawe) throw new EditException("drafts need WorldEdit: FastAsyncWorldEdit writes around the world API, so a dry run cannot be guaranteed");
+        World world = world(worldName);
+        Actor actor = actor(actorId);
+        LocalSession session = session(actor);
+        ParserContext ctx = new ParserContext();
+        ctx.setActor(actor);
+        ctx.setWorld(world);
+        ctx.setRestricted(false);
+        DryRunStore<BlockState> store = new DryRunStore<>(overlay, state -> {
+            try {
+                return WorldEdit.getInstance().getBlockFactory().parseFromInput(state, ctx).toImmutableState();
+            } catch (InputParseException e) {
+                throw new EditException("draft holds a block this server does not know: " + state);
+            }
+        }, We7Bridge::compact, maxBlocks);
+        EditSession edit = privateBuilder().world(DryWorld.wrap(world, store)).actor(actor).maxBlocks(-1).build();
+        Handle handle = new Handle(world, actor, session, edit, true);
+        return new PreviewHandle() {
+            @Override public void prepare(Op op) { handle.prepare(op); }
+            @Override public int apply(Op op) { return handle.apply(op); }
+            @Override public int paste(Blueprint blueprint, Vec3 origin, int rotation) { return handle.paste(blueprint, origin, rotation); }
+            @Override public void flush() { handle.flush(); }
+            @Override public void close() { handle.close(); }
+            @Override public BlockDiff changes() { return store.diff(); }
+        };
+    }
+
+    /**
+     * An edit session builder on a private event bus, so other plugins (loggers like CoreProtect, region guards)
+     * never see a dry run. Falls back to WorldEdit's own bus if the constructor is not reachable.
+     */
+    private static EditSessionBuilder privateBuilder() {
+        try {
+            Constructor<EditSessionBuilder> c = EditSessionBuilder.class.getDeclaredConstructor(EventBus.class);
+            c.setAccessible(true);
+            return c.newInstance(new EventBus());
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return WorldEdit.getInstance().newEditSessionBuilder();
+        }
     }
 
     @Override
@@ -211,14 +261,17 @@ public final class We7Bridge implements WorldEditBridge {
         private final Actor actor;
         private final LocalSession session;
         private final EditSession edit;
+        /** Built on a {@link DryWorld}: close must not remember the session for undo. */
+        private final boolean dryRun;
         private final Map<String, Pattern> patterns = new HashMap<>();
         private final Map<String, BaseBlock> blocks = new HashMap<>();
 
-        Handle(World world, Actor actor, LocalSession session, EditSession edit) {
+        Handle(World world, Actor actor, LocalSession session, EditSession edit, boolean dryRun) {
             this.world = world;
             this.actor = actor;
             this.session = session;
             this.edit = edit;
+            this.dryRun = dryRun;
         }
 
         private ParserContext context() {
@@ -333,7 +386,7 @@ public final class We7Bridge implements WorldEditBridge {
         @Override
         public void close() {
             edit.close();
-            session.remember(edit);
+            if (!dryRun) session.remember(edit);
         }
     }
 }

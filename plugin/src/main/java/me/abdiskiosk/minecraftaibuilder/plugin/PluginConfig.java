@@ -24,7 +24,8 @@ public record PluginConfig(
         boolean allowTeleport,
         String relayUrl,
         String relayToken,
-        History.Settings history) {
+        History.Settings history,
+        Drafts.Settings drafts) {
 
     public static PluginConfig load(FileConfiguration config) {
         ConfigurationSection zone = config.getConfigurationSection("safety.build-zone");
@@ -52,7 +53,12 @@ public record PluginConfig(
                         Math.max(1, config.getInt("history.keep", 500)),
                         Math.max(1, config.getLong("history.max-mb", 200)) * 1024 * 1024,
                         Math.max(1024, config.getLong("history.reads-per-tick", 32_768L)),
-                        config.getLong("history.max-render-volume", 1_000_000L)));
+                        config.getLong("history.max-render-volume", 1_000_000L)),
+                new Drafts.Settings(
+                        config.getBoolean("review.enabled", false),
+                        Math.max(1, config.getLong("review.max-volume", 1_000_000L)),
+                        Math.max(0, config.getInt("review.keep", 50)),
+                        Math.max(1, config.getLong("promote.max-volume", 2_000_000L))));
     }
 
     private static Vec3 vec(List<Integer> list) {

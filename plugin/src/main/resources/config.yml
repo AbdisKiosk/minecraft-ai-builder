@@ -52,3 +52,16 @@ history:
   reads-per-tick: 32768
   # Largest region the panel may render for one entry.
   max-render-volume: 1000000
+
+review:
+  # Claude's edits go into a draft instead of the world. Someone approves it in the panel (or with
+  # /aibuilder draft approve) before anything is placed; Claude's reads show the draft. Needs WorldEdit, not FAWE.
+  enabled: false
+  # Most changed blocks one draft may hold.
+  max-volume: 1000000
+  # Approved and rejected drafts kept for the panel.
+  keep: 50
+
+promote:
+  # Largest region the panel may copy out of or into this server (a promote always becomes a draft first).
+  max-volume: 2000000

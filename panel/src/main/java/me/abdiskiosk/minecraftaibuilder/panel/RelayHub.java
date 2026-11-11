@@ -87,8 +87,14 @@ final class RelayHub {
             case RelayProtocol.EVENT -> {
                 if (!c.ready) return;
                 String event = frame.get("event").getAsString();
-                JsonObject job = frame.getAsJsonObject("job");
                 ServerState s = states.get(c.serverId);
+                if (event.equals(RelayProtocol.DRAFT_UPDATE)) {
+                    JsonObject draft = frame.getAsJsonObject("draft");
+                    if (s != null) s.draft(draft);
+                    events.draft(c.serverId, draft);
+                    return;
+                }
+                JsonObject job = frame.getAsJsonObject("job");
                 if (s != null) s.job(event, job);
                 events.job(c.serverId, event, job);
             }

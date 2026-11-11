@@ -5,11 +5,12 @@ A Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp
 the web panel (`panel/`), which serves the same endpoints for many servers under `/s/<server>/`; see `docs/panel.md`.
 
 ## Modules
-- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), terrain fills (`Terrain`), PNG renderer, `WorldEditBridge` contract, edit history diffs (`RegionSnapshot`, `BlockDiff`) and the relay frame names (`RelayProtocol`), which plugin and panel share. Unit tested.
+- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), terrain fills (`Terrain`), PNG renderer, `WorldEditBridge` contract, edit history diffs (`RegionSnapshot`, `BlockDiff`), drafts (`Draft`, `DryRunStore`, `PreviewHandle`), region transfer (`StateArrays`) and the relay frame names (`RelayProtocol`), which plugin and panel share. Unit tested.
 - `bridge-we7/`: WorldEdit 7.2+ / FAWE (MC 1.13 → 26.x). Compiled against WE 7.2.20 + spigot-api 1.13.2.
+  `DryWorld` (in both bridges) is a proxy `World` that records writes for drafts; dry-run sessions use a private event bus.
 - `bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.
-- `plugin/`: HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `relay/RelayClient` (outbound WebSocket to the panel, JDK only). Compiled against spigot-api 1.8.8.
+- `plugin/`: HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only). Compiled against spigot-api 1.8.8.
 - `panel/`: standalone web panel (Javalin). Relay hub, `/s/<id>/` proxy, login, SSE live updates, static UI in `src/main/resources/web/`. Never shaded into the plugin; plugin tests use it only on the test classpath.
 - `sdk/python/aibuilder/`: stdlib-only REST client for build scripts in `builds/`.
 

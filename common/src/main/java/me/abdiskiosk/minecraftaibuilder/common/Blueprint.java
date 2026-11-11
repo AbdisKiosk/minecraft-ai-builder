@@ -95,6 +95,12 @@ public final class Blueprint {
      * @param skipAir air cells keep what is there instead of placing air
      */
     public static Blueprint ofStates(int sizeX, int sizeY, int sizeZ, String[] states, boolean skipAir) {
+        return ofStates(sizeX, sizeY, sizeZ, states, skipAir, s -> false);
+    }
+
+    /** @param skip states whose cells keep what is there, e.g. blocks this server does not have */
+    public static Blueprint ofStates(int sizeX, int sizeY, int sizeZ, String[] states, boolean skipAir,
+                                     java.util.function.Predicate<String> skip) {
         if ((long) sizeX * sizeY * sizeZ != states.length) throw new IllegalArgumentException("states do not match the size");
         Map<String, Character> keys = new java.util.HashMap<>();
         Map<Character, String> palette = new java.util.LinkedHashMap<>();
@@ -108,6 +114,7 @@ public final class Blueprint {
                     boolean air = RegionCodec.isAir(s);
                     if (air && skipAir) continue;
                     String state = air ? "air" : s;
+                    if (skip.test(state)) continue;
                     Character key = keys.get(state);
                     if (key == null) {
                         if (keys.size() > LAST_KEY - FIRST_KEY) {
