@@ -12,6 +12,8 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.11.0'
     compileOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
     testImplementation 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
+    // RelayClientTest runs the real panel; test classpath only, never shaded into the plugin.
+    testImplementation project(':panel')
 }
 
 processResources {

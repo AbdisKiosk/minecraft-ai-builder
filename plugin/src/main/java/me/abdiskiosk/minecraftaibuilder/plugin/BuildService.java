@@ -1,10 +1,13 @@
 package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import me.abdiskiosk.minecraftaibuilder.common.BlockCheck;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
+import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
@@ -25,6 +28,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
@@ -102,16 +106,92 @@ public final class BuildService {
         final List<String> warnings;
         final long started = System.currentTimeMillis();
         final CompletableFuture<JobResult> future = new CompletableFuture<>();
+        final String tool = CallContext.tool();
+        final String source = CallContext.source();
+        final Caller caller;
+        final Box bounds;
+        final long total;
         volatile long changed;
+        /** Volume of the pieces applied so far, out of {@link #total}. */
+        volatile long processed;
+        volatile String phase = "build";
+        volatile String historyId;
+        /** Set for jobs started by reverting a history entry. */
+        volatile String revertOf;
 
-        Job(String id, List<String> warnings) {
+        Job(String id, List<String> warnings, Caller caller, Box bounds, long total) {
             this.id = id;
             this.warnings = warnings;
+            this.caller = caller;
+            this.bounds = bounds;
+            this.total = total;
+        }
+
+        public String id() {
+            return id;
         }
 
         JobResult snapshot() {
             JobResult done = future.getNow(null);
             return done != null ? done : new JobResult(id, "running", changed, System.currentTimeMillis() - started, null, warnings);
+        }
+
+        public JobInfo info() {
+            JobResult r = snapshot();
+            return new JobInfo(id, r.status(), phase, tool, source, caller.name(), caller.world(), bounds, total, processed,
+                    r.changed(), started, r.ms(), r.error(), historyId, revertOf);
+        }
+    }
+
+    /** What the panel shows about a job; {@code processed} out of {@code total} is the progress. */
+    public record JobInfo(String id, String status, String phase, String tool, String source, String caller, String world,
+                          Box bounds, long total, long processed, long changed, long started, long ms, String error,
+                          String history, String revertOf) {
+    }
+
+    /** Hears about every job; called from the main thread or a FastAsyncWorldEdit thread, so it must be quick. */
+    public interface JobListener {
+        void onJob(String event, JobInfo job);
+    }
+
+    /** Snapshots edits for the history; see {@link History}. */
+    public interface Recorder {
+        /** The boxes to read before and after the job, or null to not track it (too large, or turned off). */
+        List<Box> boxes(Caller caller, List<Op> ops);
+
+        /** @param diff null when the job was not tracked */
+        String record(JobInfo job, BlockDiff diff, List<Box> boxes);
+
+        long readsPerTick();
+    }
+
+    private final List<JobListener> listeners = new CopyOnWriteArrayList<>();
+    private volatile Recorder recorder;
+
+    public void addListener(JobListener listener) {
+        listeners.add(listener);
+    }
+
+    public void setRecorder(Recorder recorder) {
+        this.recorder = recorder;
+    }
+
+    private void fire(String event, Job job) {
+        if (listeners.isEmpty()) return;
+        JobInfo info = job.info();
+        for (JobListener l : listeners) {
+            try {
+                l.onJob(event, info);
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "job listener failed", e);
+            }
+        }
+    }
+
+    /** Jobs that have not finished yet. */
+    public List<JobInfo> running() {
+        synchronized (jobs) {
+            return jobs.values().stream().filter(j -> !j.future.isDone()).map(Job::info).toList();
         }
     }
 
@@ -222,35 +302,57 @@ public final class BuildService {
 
     /** Validates and starts an edit job; every op in the list becomes one undo step together. */
     public Job submit(Caller caller, List<Op> ops) {
+        return submit(caller, ops, null);
+    }
+
+    /** @param revertOf the history entry this job reverts, or null */
+    public Job submit(Caller caller, List<Op> ops, String revertOf) {
         if (ops.isEmpty()) throw new EditException("no operations");
         List<String> warnings = validate(caller, ops);
-        Job job = new Job("j" + nextJob.getAndIncrement(), warnings);
-        synchronized (jobs) {
-            jobs.put(job.id, job);
-        }
         List<Op> pieces = new ArrayList<>();
         List<Integer> owners = new ArrayList<>();
+        long total = 0;
+        Box bounds = null;
         for (int i = 0; i < ops.size(); i++) {
+            Box b = ops.get(i).bounds();
+            bounds = bounds == null ? b : Box.of(Vec3.min(bounds.min(), b.min()), Vec3.max(bounds.max(), b.max()));
             for (Op piece : ops.get(i).split(config.blocksPerTick())) {
                 pieces.add(piece);
                 owners.add(i);
+                total += piece.volume();
             }
         }
         Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray());
+        Recorder rec = recorder;
+        List<Box> boxes = rec == null ? null : rec.boxes(caller, ops);
+        RegionSnapshot before = boxes == null ? null : new RegionSnapshot(boxes);
+
+        Job job = new Job("j" + nextJob.getAndIncrement(), warnings, caller, bounds, total);
+        job.revertOf = revertOf;
+        if (before != null) job.phase = "snapshot";
+        synchronized (jobs) {
+            jobs.put(job.id, job);
+        }
+        fire(RelayProtocol.JOB_START, job);
 
         if (bridge.async()) {
-            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runAsync(caller, plan, job));
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, () -> runAsync(caller, plan, job, before));
         } else {
-            new TickRunner(caller, plan, job).runTaskTimer(plugin, 0L, 1L);
+            new TickRunner(caller, plan, job, before).runTaskTimer(plugin, 0L, 1L);
         }
         return job;
+    }
+
+    private void progress(Job job, long volume) {
+        job.processed += volume;
+        fire(RelayProtocol.JOB_PROGRESS, job);
     }
 
     /**
      * Everything is parsed before the first block is placed, and the job only reports done after the handle
      * is closed (flushed and remembered for undo), so "done" means the blocks are in the world.
      */
-    private void runAsync(Caller caller, Plan plan, Job job) {
+    private void runAsync(Caller caller, Plan plan, Job job, RegionSnapshot before) {
         Throwable failure = null;
         int at = -1;
         EditHandle handle = null;
@@ -260,9 +362,17 @@ public final class BuildService {
                 at = i;
                 handle.prepare(plan.pieces().get(i));
             }
+            at = -1;
+            if (before != null) {
+                before.readAll(bridge, caller.world(), recorder.readsPerTick());
+                job.phase = "build";
+                fire(RelayProtocol.JOB_PROGRESS, job);
+            }
             for (int i = 0; i < plan.pieces().size(); i++) {
                 at = i;
-                job.changed += handle.apply(plan.pieces().get(i));
+                Op piece = plan.pieces().get(i);
+                job.changed += handle.apply(piece);
+                progress(job, piece.volume());
             }
             at = -1;
         } catch (Throwable t) {
@@ -278,7 +388,52 @@ public final class BuildService {
                 }
             }
         }
-        finish(job, failure == null ? null : plan.explain(failure, at));
+        RuntimeException error = failure == null ? null : plan.explain(failure, at);
+        RegionSnapshot after = null;
+        if (before != null && before.done()) {
+            job.phase = "diff";
+            try {
+                after = before.fresh();
+                after.readAll(bridge, caller.world(), recorder.readsPerTick());
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "job " + job.id + ": could not read the result for history", e);
+                after = null;
+            }
+        }
+        complete(job, error, before, after);
+    }
+
+    /** Records the job in the history (off the main thread), then reports it finished. */
+    private void complete(Job job, RuntimeException error, RegionSnapshot before, RegionSnapshot after) {
+        Recorder rec = recorder;
+        if (rec == null) {
+            finish(job, error);
+            return;
+        }
+        Runnable record = () -> {
+            try {
+                BlockDiff diff = before != null && after != null && after.done() ? RegionSnapshot.diff(before, after) : null;
+                job.phase = "done";
+                job.historyId = rec.record(provisional(job, error), diff, before == null ? null : before.boxes());
+            } catch (RuntimeException e) {
+                plugin.getLogger().log(java.util.logging.Level.WARNING, "job " + job.id + ": could not save history", e);
+            }
+            finish(job, error);
+        };
+        if (Bukkit.isPrimaryThread()) {
+            Bukkit.getScheduler().runTaskAsynchronously(plugin, record);
+        } else {
+            record.run();
+        }
+    }
+
+    /** The job as it will be reported once finished, for the history entry. */
+    private static JobInfo provisional(Job job, RuntimeException error) {
+        JobInfo i = job.info();
+        String message = error == null ? null : error.getMessage() == null ? error.toString() : error.getMessage();
+        return new JobInfo(i.id(), error == null ? "done" : "failed", "done", i.tool(), i.source(), i.caller(), i.world(),
+                i.bounds(), i.total(), i.processed(), i.changed(), i.started(), System.currentTimeMillis() - i.started(),
+                message, null, i.revertOf());
     }
 
     /** Waits up to the configured time; long jobs report "running" and keep going. */
@@ -305,6 +460,8 @@ public final class BuildService {
             String message = error.getMessage() == null ? error.toString() : error.getMessage();
             job.future.complete(new JobResult(job.id, "failed", job.changed, ms, message, job.warnings));
         }
+        job.phase = "done";
+        fire(RelayProtocol.JOB_END, job);
     }
 
     /**
@@ -315,17 +472,39 @@ public final class BuildService {
         private final Caller caller;
         private final Plan plan;
         private final Job job;
+        /** Read across ticks before the first block is placed; null when the job is not tracked. */
+        private final RegionSnapshot before;
+        private RegionSnapshot after;
         private EditHandle handle;
         private int next;
+        private boolean closed;
+        private RuntimeException failure;
 
-        TickRunner(Caller caller, Plan plan, Job job) {
+        TickRunner(Caller caller, Plan plan, Job job, RegionSnapshot before) {
             this.caller = caller;
             this.plan = plan;
             this.job = job;
+            this.before = before;
         }
 
         @Override
         public void run() {
+            if (!closed) build();
+            if (!closed) return;
+            // Read the result for the history, also after a failure: whatever was placed is in the world.
+            if (after != null && !after.done()) {
+                try {
+                    if (!after.step(bridge, caller.world(), recorder.readsPerTick())) return;
+                } catch (RuntimeException e) {
+                    plugin.getLogger().log(java.util.logging.Level.WARNING, "job " + job.id + ": could not read the result for history", e);
+                    after = null;
+                }
+            }
+            cancel();
+            complete(job, failure, before, after);
+        }
+
+        private void build() {
             int at = -1;
             List<Op> pieces = plan.pieces();
             try {
@@ -337,22 +516,32 @@ public final class BuildService {
                     }
                     at = -1;
                 }
+                if (before != null && !before.done()) {
+                    if (!before.step(bridge, caller.world(), recorder.readsPerTick())) {
+                        fire(RelayProtocol.JOB_PROGRESS, job);
+                        return;
+                    }
+                    job.phase = "build";
+                    fire(RelayProtocol.JOB_PROGRESS, job);
+                    return; // start placing next tick
+                }
                 long budget = config.blocksPerTick();
+                long applied = 0;
                 while (next < pieces.size() && budget > 0) {
                     at = next;
                     Op piece = pieces.get(next++);
                     job.changed += handle.apply(piece);
                     budget -= piece.volume();
+                    applied += piece.volume();
                 }
                 at = -1;
                 handle.flush();
+                progress(job, applied);
                 if (next >= pieces.size()) {
-                    cancel();
                     handle.close();
-                    finish(job, null);
+                    closeDone(null);
                 }
             } catch (RuntimeException e) {
-                cancel();
                 // Keep what was placed so it can still be undone as one step.
                 if (handle != null) {
                     try {
@@ -360,7 +549,17 @@ public final class BuildService {
                     } catch (RuntimeException ignored) {
                     }
                 }
-                finish(job, plan.explain(e, at));
+                closeDone(plan.explain(e, at));
+            }
+        }
+
+        private void closeDone(RuntimeException error) {
+            closed = true;
+            failure = error;
+            if (before != null && before.done()) {
+                after = before.fresh();
+                job.phase = "diff";
+                fire(RelayProtocol.JOB_PROGRESS, job);
             }
         }
     }

@@ -1,11 +1,15 @@
 package me.abdiskiosk.minecraftaibuilder.plugin;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.http.HttpApi;
+import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.ToolStats;
+import me.abdiskiosk.minecraftaibuilder.plugin.relay.RelayClient;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
 import org.bukkit.Location;
@@ -32,6 +36,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     private static final Set<String> MARKER_COMMANDS = Set.of("mark", "unmark", "marks", "note");
 
     private HttpApi http;
+    private RelayClient relay;
     private WorldEditBridge bridge;
     private PluginConfig config;
     private McpEndpoint mcp;
@@ -59,23 +64,56 @@ public final class AIBuilderPlugin extends JavaPlugin {
         }
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
+        History history = config.history().enabled() ? new History(this, service, config.history()) : null;
+        if (history != null) service.setRecorder(history);
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, getDescription().getVersion());
-        http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
-        try {
-            http.start();
-        } catch (IOException e) {
-            getLogger().log(Level.SEVERE, "Could not listen on " + config.bind() + ":" + config.port(), e);
-            getServer().getPluginManager().disablePlugin(this);
-            return;
+        if (config.httpEnabled()) {
+            http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
+            try {
+                http.start();
+            } catch (IOException e) {
+                getLogger().log(Level.SEVERE, "Could not listen on " + config.bind() + ":" + config.port(), e);
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+            getLogger().info("Using " + bridge.name() + ". MCP: " + url() + "/mcp  REST: " + url() + "/api/<tool>");
+        } else {
+            getLogger().info("Using " + bridge.name() + ". Local HTTP is off (http.enabled: false).");
         }
-        getLogger().info("Using " + bridge.name() + ". MCP: " + url() + "/mcp  REST: " + url() + "/api/<tool>");
+        if (!config.relayUrl().isEmpty()) {
+            if (config.relayToken().isEmpty()) {
+                getLogger().warning("relay.url is set but relay.token is empty; not connecting to the panel.");
+            } else {
+                try {
+                    relay = new RelayClient(config.relayUrl(), config.relayToken(), mcp, new RestApi(registry), history,
+                            service, this::relayHello, getLogger());
+                    relay.start();
+                    getLogger().info("Connecting to the panel at " + relay.uri());
+                } catch (IllegalArgumentException e) {
+                    getLogger().warning("relay.url: " + e.getMessage());
+                }
+            }
+        }
     }
 
     @Override
     public void onDisable() {
+        if (relay != null) relay.stop();
         if (http != null) http.stop();
+    }
+
+    /** What the panel shows about this server. */
+    private JsonObject relayHello() {
+        JsonObject o = new JsonObject();
+        o.addProperty("plugin", getDescription().getVersion());
+        o.addProperty("mc", BuildService.minecraftVersion());
+        o.addProperty("bridge", bridge.name());
+        JsonArray worlds = new JsonArray();
+        service.worlds().forEach(worlds::add);
+        o.add("worlds", worlds);
+        return o;
     }
 
     private String url() {
@@ -124,6 +162,11 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return true;
         }
         sender.sendMessage("AIBuilder " + getDescription().getVersion() + " using " + bridge.name());
+        if (relay != null) sender.sendMessage("Panel relay: " + relay.status());
+        if (http == null) {
+            sender.sendMessage("Local HTTP is off (http.enabled: false); connect through the panel.");
+            return true;
+        }
         sender.sendMessage("MCP endpoint: " + url() + "/mcp");
         if (sender instanceof ConsoleCommandSender) {
             sender.sendMessage("export AIBUILDER_URL=" + url() + " AIBUILDER_TOKEN=" + config.token());

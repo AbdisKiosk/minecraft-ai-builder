@@ -44,6 +44,7 @@ bin/
 .DS_Store
 ### AIBuilder ###
 plugin/run/
+panel/run/
 __pycache__/
 *.pyc
 builds/*.png

@@ -2,17 +2,15 @@ package me.abdiskiosk.minecraftaibuilder.plugin.http;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
+import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
-import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tool;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
-import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolResult;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -21,7 +19,6 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
-import java.util.Base64;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.logging.Level;
@@ -40,6 +37,7 @@ public final class HttpApi {
     private final byte[] token;
     private final McpEndpoint mcp;
     private final ToolRegistry tools;
+    private final RestApi api;
     private final Logger logger;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
     private HttpServer server;
@@ -51,6 +49,7 @@ public final class HttpApi {
         this.token = ("Bearer " + token).getBytes(StandardCharsets.UTF_8);
         this.mcp = mcp;
         this.tools = tools;
+        this.api = new RestApi(tools);
         this.logger = logger;
     }
 
@@ -116,7 +115,8 @@ public final class HttpApi {
             send(ex, 400, "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"parse error\"}}");
             return;
         }
-        JsonElement response = mcp.handle(body);
+        JsonElement message = body;
+        JsonElement response = CallContext.withSource("mcp", () -> mcp.handle(message));
         if (response == null) {
             send(ex, 202, "");
         } else {
@@ -126,9 +126,7 @@ public final class HttpApi {
 
     private void handleApi(HttpExchange ex, String name) throws IOException {
         if (name.equals("tools") && ex.getRequestMethod().equals("GET")) {
-            JsonArray list = new JsonArray();
-            for (Tool tool : tools.all()) list.add(tool.name());
-            send(ex, 200, gson.toJson(list));
+            send(ex, 200, gson.toJson(api.list().body()));
             return;
         }
         if (!ex.getRequestMethod().equals("POST")) {
@@ -147,10 +145,9 @@ public final class HttpApi {
             send(ex, 400, "{\"error\":\"body must be a JSON object\"}");
             return;
         }
-        ToolResult result = tools.call(name, args);
-        JsonObject out = result.data().deepCopy();
-        if (result.png() != null) out.addProperty("png_base64", Base64.getEncoder().encodeToString(result.png()));
-        send(ex, result.error() ? 400 : 200, gson.toJson(out));
+        JsonObject input = args;
+        RestApi.Response r = CallContext.withSource("rest", () -> api.call(name, input));
+        send(ex, r.status(), gson.toJson(r.body()));
     }
 
     private boolean authorised(HttpExchange ex) {
