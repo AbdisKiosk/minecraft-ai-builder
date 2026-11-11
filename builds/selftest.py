@@ -176,6 +176,7 @@ def main():
     # ---- argument and height validation ----
     expect_error("missing radius", lambda: b.call("sphere", center=[nx, oy, nz], pattern="stone"), "missing \"radius\"")
     expect_error("misspelled argument", lambda: b.call("sphere", center=[nx, oy, nz], raduis=3, pattern="stone"), "unknown argument \"raduis\"")
+    expect_error("unknown @marker is rejected", lambda: b.call("sphere", center="@selftest_no_such_marker", radius=1, pattern="stone"), "/aibuilder mark")
     expect_error("above build height", lambda: b.call("fill", region=box([nx, 999, nz], [nx, 999, nz]), pattern="stone"), "only allows y")
     expect_error("batch error names the op", lambda: b.call("batch", ops=[
         {"op": "fill", "region": box([nx, oy, nz], [nx, oy, nz]), "pattern": "stone"}, {"op": "sphere", "center": [nx, oy, nz], "pattern": "stone"}]), "ops[1] (sphere)")
@@ -213,6 +214,88 @@ def main():
         check("outline is exactly the six faces", shell == 16 ** 3 - 14 ** 3, f"{shell} blocks")
     except AIBuilderError as e:
         check("split shapes", False, str(e))
+
+    # ---- check_region: a clean region has no issues, a block in mid-air is floating ----
+    lx, lz = ox + 50, oz + 20
+    lint = box([lx, oy, lz], [lx + 6, oy + 4, lz + 6])
+    b.fill(box([lx, oy, lz], [lx + 6, oy, lz + 6]), "stone")
+    b.fill(box([lx + 3, oy + 1, lz + 3], [lx + 3, oy + 2, lz + 3]), "stone")
+    try:
+        b.flush()
+        res = b.check(lint)
+        check("check_region: clean region has no issues", res.get("issues") == [], str(res))
+        b.block(lx + 1, oy + 3, lz + 1, "stone")
+        b.flush()
+        res = b.check(lint, checks="floating")
+        floating = [i for i in res.get("issues", []) if i["kind"] == "floating"]
+        check("check_region: mid-air block is floating", floating and [lx + 1, oy + 3, lz + 1] in floating[0]["at"], str(res))
+    except AIBuilderError as e:
+        check("check_region", False, str(e))
+
+    # ---- clone and saved blueprints: copies turn and mirror their block states ----
+    kx, ky, kz = ox + 40, oy + 20, oz
+    src = box([kx, ky, kz], [kx, ky, kz])
+    b.block(kx, ky, kz, "oak_stairs[facing=east]")
+    try:
+        b.flush()  # clone reads its source when the batch is parsed, so the source must already be built
+        b.clone(src, [kx + 2, ky, kz], rotation=180)
+        b.clone(src, [kx + 4, ky, kz], flip="x")
+        b.clone(src, [kx, ky, kz + 3], repeat=4, step=[2, 0, 0])
+        b.flush()
+        got = read_cells(b, [(kx + 2, ky, kz), (kx + 4, ky, kz)])
+        check("clone rotation 180 turns east stairs west", matches("oak_stairs[facing=west]", got[(kx + 2, ky, kz)]), str(got))
+        check("clone flip x turns east stairs west", matches("oak_stairs[facing=west]", got[(kx + 4, ky, kz)]), str(got))
+        row = read_cells(b, [(kx + 2 * i, ky, kz + 3) for i in range(4)])
+        check("clone repeat places every copy", all(matches("oak_stairs[facing=east]", row[(kx + 2 * i, ky, kz + 3)]) for i in range(4)), str(row))
+        res = b.save_blueprint("selftest", src)
+        check("save_blueprint counts the block", res.get("saved") == "selftest" and res.get("blocks") == 1, str(res))
+        b.paste(origin=[kx, ky, kz + 6], name="selftest")
+        b.flush()
+        got = read_cells(b, [(kx, ky, kz + 6)])
+        check("place_blueprint name= reproduces the block", matches("oak_stairs[facing=east]", got[(kx, ky, kz + 6)]), str(got))
+    except AIBuilderError as e:
+        check("clone and saved blueprints", False, str(e))
+
+    # ---- terrain ops: foundation fills down to uneven ground, overlay replaces only the surface ----
+    tx, tz = ox + 50, oz + 4
+    b.fill(box([tx, oy, tz], [tx + 4, oy, tz + 2]), "stone")
+    b.fill(box([tx + 3, oy + 1, tz], [tx + 4, oy + 1, tz + 2]), "stone")  # a step up on the east side
+    b.fill(box([tx, oy, tz + 5], [tx + 4, oy, tz + 6]), "stone")
+    b.fill(box([tx, oy + 1, tz + 5], [tx + 4, oy + 1, tz + 6]), "dirt")
+    try:
+        b.flush()  # terrain ops read the ground when the batch is parsed, so it must already be built
+        b.foundation(box([tx, oy, tz], [tx + 4, oy + 3, tz + 2]), "cobblestone")
+        b.fill(box([tx, oy + 4, tz], [tx + 4, oy + 4, tz + 2]), "oak_planks")
+        b.overlay(box([tx, oy, tz + 5], [tx + 4, oy + 3, tz + 6]), "cobblestone")
+        b.flush()
+        low = read_cells(b, [(tx, oy + y, tz) for y in range(5)])
+        high = read_cells(b, [(tx + 4, oy + y, tz) for y in range(5)])
+        check("foundation fills from low ground to the platform",
+              [parse(low[(tx, oy + y, tz)])[0] for y in range(5)] == ["stone", "cobblestone", "cobblestone", "cobblestone", "oak_planks"], str(low))
+        check("foundation fills from high ground to the platform",
+              [parse(high[(tx + 4, oy + y, tz)])[0] for y in range(5)] == ["stone", "stone", "cobblestone", "cobblestone", "oak_planks"], str(high))
+        col = read_cells(b, [(tx + 2, oy + y, tz + 5) for y in range(3)])
+        check("overlay replaces only the surface block",
+              [parse(col[(tx + 2, oy + y, tz + 5)])[0] for y in range(3)] == ["stone", "cobblestone", "air"], str(col))
+    except AIBuilderError as e:
+        check("terrain ops", False, str(e))
+
+    # ---- decorate: entities through the Bukkit API, outside WorldEdit's history ----
+    dx, dz = ox + 52, oz + 52
+    deco = box([dx - 1, oy - 1, dz - 1], [dx + 3, oy + 2, dz + 3])
+    b.decorate(remove=deco)  # leftovers from an earlier run
+    b.block(dx, oy, dz, "stone")
+    b.block(dx + 2, oy - 1, dz + 1, "stone")
+    b.flush()
+    try:
+        res = b.decorate(items=[{"at": [dx, oy, dz + 1], "frame": "compass", "facing": "south"},
+                                {"at": [dx + 2, oy, dz + 1], "stand": {"yaw": 180, "head": "iron_helmet", "arms": True}}])
+        check("decorate spawns a frame and a stand", res.get("spawned") == 2, str(res))
+        res = b.decorate(remove=deco)
+        check("decorate remove takes both away", res.get("removed") == 2, str(res))
+    except AIBuilderError as e:
+        check("decorate", False, str(e))
+    expect_error("sign text on a non-sign is rejected", lambda: b.decorate(items=[{"at": [dx, oy, dz], "text": ["x"]}]), "needs a sign")
 
     # ---- undo ----
     if ctx["caller"]["name"] == "console" and legacy:

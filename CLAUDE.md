@@ -4,7 +4,7 @@ A Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp
 (`POST /api/<tool>`). Both use the same tools (`plugin/.../tools/Tools.java`).
 
 ## Modules
-- `common/`: pure Java. Op model, blueprint format, region summary/encoding, PNG renderer, `WorldEditBridge` contract. Unit tested.
+- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), terrain fills (`Terrain`), PNG renderer, `WorldEditBridge` contract. Unit tested.
 - `bridge-we7/`: WorldEdit 7.2+ / FAWE (MC 1.13 → 26.x). Compiled against WE 7.2.20 + spigot-api 1.13.2.
 - `bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.
@@ -17,8 +17,9 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 ## Commands
 - `./gradlew build`: tests + shaded jar at `plugin/build/libs/AIBuilder-<version>.jar`
 - `./gradlew :plugin:runServer` (1.21.11 + WE 7.3.19), `:plugin:runLatest` (26.3 + WE 7.4.6), `:plugin:runLegacy` (1.8.8, add WE 6.1.9 yourself)
+- `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
-- Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code.
+- Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code. Players use `/aibuilder mark|unmark|marks|note`.
 
 ## Building in Minecraft
 When the aibuilder MCP server is connected, use the `/build` skill for the workflow and `build-style` for aesthetics.

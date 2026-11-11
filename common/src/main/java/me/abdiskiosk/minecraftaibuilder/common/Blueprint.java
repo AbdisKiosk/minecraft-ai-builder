@@ -20,6 +20,8 @@ public final class Blueprint {
     /** Marks a row or layer that repeats the previous one. */
     public static final char REPEAT = '^';
     private static final int MAX_REPEAT = 4096;
+    /** The Unicode private-use area, where {@link #ofStates} takes its palette keys from. */
+    private static final char FIRST_KEY = '', LAST_KEY = '';
 
     private final Map<Character, String> palette;
     private final char[][][] grid; // [y][z][x]
@@ -84,6 +86,67 @@ public final class Blueprint {
             }
         }
         return new Blueprint(Map.copyOf(palette), grid, sizeX, cells);
+    }
+
+    /**
+     * A blueprint of block states in {@link RegionCodec#index} order (y, then z, then x). Palette keys are
+     * private-use characters, so any number of distinct states fits.
+     *
+     * @param skipAir air cells keep what is there instead of placing air
+     */
+    public static Blueprint ofStates(int sizeX, int sizeY, int sizeZ, String[] states, boolean skipAir) {
+        if ((long) sizeX * sizeY * sizeZ != states.length) throw new IllegalArgumentException("states do not match the size");
+        Map<String, Character> keys = new java.util.HashMap<>();
+        Map<Character, String> palette = new java.util.LinkedHashMap<>();
+        char[][][] grid = new char[sizeY][sizeZ][sizeX];
+        long cells = 0;
+        int i = 0;
+        for (int y = 0; y < sizeY; y++) {
+            for (int z = 0; z < sizeZ; z++) {
+                for (int x = 0; x < sizeX; x++) {
+                    String s = states[i++];
+                    boolean air = RegionCodec.isAir(s);
+                    if (air && skipAir) continue;
+                    String state = air ? "air" : s;
+                    Character key = keys.get(state);
+                    if (key == null) {
+                        if (keys.size() > LAST_KEY - FIRST_KEY) {
+                            throw new EditException("more than " + (LAST_KEY - FIRST_KEY + 1) + " distinct block states; use a smaller region");
+                        }
+                        key = (char) (FIRST_KEY + keys.size());
+                        keys.put(state, key);
+                        palette.put(key, state);
+                    }
+                    grid[y][z][x] = key;
+                    cells++;
+                }
+            }
+        }
+        return new Blueprint(Map.copyOf(palette), grid, sizeX, cells);
+    }
+
+    /**
+     * Mirrored: {@code 'x'} swaps east and west (every row reversed), {@code 'z'} north and south (the row order of
+     * every layer reversed). Block states are mirrored with {@link StateFlip}.
+     */
+    public Blueprint flipped(char axis) {
+        if (axis != 'x' && axis != 'z') throw new EditException("flip must be \"x\" or \"z\"");
+        char[][][] out = new char[sizeY()][sizeZ()][];
+        for (int y = 0; y < sizeY(); y++) {
+            for (int z = 0; z < sizeZ(); z++) {
+                char[] row = grid[y][axis == 'z' ? sizeZ() - 1 - z : z];
+                if (axis == 'z') {
+                    out[y][z] = row;
+                } else {
+                    char[] reversed = new char[sizeX]; // short rows are padded with SKIP, which lands at the start
+                    for (int x = 0; x < row.length; x++) reversed[sizeX - 1 - x] = row[x];
+                    out[y][z] = reversed;
+                }
+            }
+        }
+        Map<Character, String> flippedPalette = new java.util.HashMap<>();
+        palette.forEach((k, v) -> flippedPalette.put(k, StateFlip.flipPattern(v, axis)));
+        return new Blueprint(Map.copyOf(flippedPalette), out, sizeX, cellCount);
     }
 
     /** @return how often a {@code "^"} / {@code "3^"} marker repeats, or -1 when the row is ordinary */

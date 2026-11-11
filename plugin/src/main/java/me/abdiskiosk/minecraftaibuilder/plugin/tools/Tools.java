@@ -14,12 +14,17 @@ import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
+import me.abdiskiosk.minecraftaibuilder.common.RegionLint;
+import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
+import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
@@ -27,6 +32,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -43,7 +49,7 @@ import java.util.regex.Pattern;
 public final class Tools {
 
     private static final String VEC = """
-            {"type":"array","description":"[x,y,z]; \\"~n\\" = relative to the player"}""";
+            {"description":"[x,y,z]; \\"~n\\" = relative to the player"}""";
     private static final String REGION = """
             {"description":"\\"selection\\" or [x1,y1,z1,x2,y2,z2]"}""";
     private static final String PATTERN = """
@@ -52,13 +58,16 @@ public final class Tools {
             "player":{"type":"string"},"world":{"type":"string"}""";
     private static final long MAX_BLUEPRINT_BYTES = 5L * 1024 * 1024;
     private static final Pattern VAR = Pattern.compile("\\$([A-Za-z_][A-Za-z0-9_]*)");
+    private static final int MAX_TELL = 256;
+    private static final String TELL_PREFIX = "[AIBuilder] ";
+    private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
     private Tools() {
     }
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Players (position, facing, looked-at block), the caller's WorldEdit selection and the server version. Call first.",
+                "Players (position, facing, looked-at block), the caller's WorldEdit selection, markers, player notes and the server version. Call first.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -76,54 +85,85 @@ public final class Tools {
                 schema("\"region\":" + REGION + ",\"mode\":{\"type\":\"string\",\"enum\":[\"summary\",\"full\"]},\"heightmap\":{\"type\":\"boolean\"}", "region"),
                 a -> read(a, service)));
 
+        registry.register(new Tool("check_region",
+                "Finds build mistakes: " + String.join(", ", RegionLint.KINDS) + ". checks=comma list (default all).",
+                schema("\"region\":" + REGION + ",\"checks\":{\"type\":\"string\"}", "region"),
+                a -> check(a, service)));
+
         registry.register(new Tool("render_region",
-                "PNG of a region, cropped to its blocks: top-down map (north up) and isometric view from the south-east. size: small for quick checks, medium (default), large for a final review.",
-                schema("\"region\":" + REGION + ",\"view\":{\"type\":\"string\",\"enum\":[\"both\",\"top\",\"iso\"]},\"size\":{\"type\":\"string\",\"enum\":[\"small\",\"medium\",\"large\"]}", "region"),
+                "Region PNG cropped to its blocks. view: both (default) = top map (north up) + iso; north/south/east/west = that face seen from outside. corner = where the iso camera stands. size: small for checks, medium (default), large for final review.",
+                schema("\"region\":" + REGION + ",\"view\":{\"type\":\"string\",\"enum\":[\"both\",\"top\",\"iso\",\"north\",\"south\",\"east\",\"west\"]},\"corner\":{\"type\":\"string\",\"enum\":[\"se\",\"sw\",\"ne\",\"nw\"]},\"size\":{\"type\":\"string\",\"enum\":[\"small\",\"medium\",\"large\"]}", "region"),
                 a -> render(a, service)));
 
         registry.register(new Tool("fill",
                 "Fill a box with a pattern. mode: solid (default), walls (the four vertical sides) or outline (all six faces). from=mask (e.g. stone,dirt) replaces only matching blocks.",
                 schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN + ",\"mode\":{\"type\":\"string\",\"enum\":[\"solid\",\"walls\",\"outline\"]},\"from\":{\"type\":\"string\"}", "region", "pattern"),
-                a -> edit(a, service, List.of(parseOp("fill", a)))));
+                a -> edit(a, service, parseOp("fill", a))));
 
         // Older names for the fill modes: still valid as batch ops and over REST.
         for (String type : List.of("walls", "outline")) {
             registry.register(new Tool(type, (type.equals("walls") ? "Four vertical sides of a box" : "All six faces of a box") + " with a pattern.",
                     schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN, "region", "pattern"),
-                    a -> edit(a, service, List.of(parseOp(type, a)))).unlisted());
+                    a -> edit(a, service, parseOp(type, a))).unlisted());
         }
         registry.register(new Tool("replace", "Replace blocks matching the 'from' mask (e.g. stone,dirt) inside a box.",
                 schema("\"region\":" + REGION + ",\"from\":{\"type\":\"string\"},\"pattern\":" + PATTERN, "region", "from", "pattern"),
-                a -> edit(a, service, List.of(parseOp("replace", a)))).unlisted());
+                a -> edit(a, service, parseOp("replace", a))).unlisted());
+        // Meant as a batch op; standalone for REST scripts.
+        registry.register(new Tool("clone", "Copy a region to 'to', optionally rotated, flipped and repeated.",
+                schema("\"region\":" + REGION + ",\"to\":" + VEC, "region", "to"),
+                a -> edit(a, service, parseOp("clone", a))).unlisted());
+        registry.register(new Tool("foundation", "Fill from the ground up to the region's top.",
+                schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN, "region", "pattern"),
+                a -> edit(a, service, parseOp("foundation", a))).unlisted());
+        registry.register(new Tool("overlay", "Replace the top 'depth' ground blocks, or add 'raise' blocks on top.",
+                schema("\"region\":" + REGION + ",\"pattern\":" + PATTERN + ",\"depth\":{\"type\":\"integer\"},\"raise\":{\"type\":\"integer\"}", "region", "pattern"),
+                a -> edit(a, service, parseOp("overlay", a))).unlisted());
+        registry.register(new Tool("smooth", "Smooth the terrain like //smooth.",
+                schema("\"region\":" + REGION + ",\"iterations\":{\"type\":\"integer\"}", "region"),
+                a -> edit(a, service, parseOp("smooth", a))).unlisted());
 
         registry.register(new Tool("cylinder", "Vertical cylinder standing on 'base', growing up 'height' blocks.",
                 schema("\"base\":" + VEC + ",\"radius\":{\"type\":\"number\"},\"radius_z\":{\"type\":\"number\"},\"height\":{\"type\":\"integer\"},\"pattern\":" + PATTERN + ",\"hollow\":{\"type\":\"boolean\"}",
                         "base", "radius", "height", "pattern"),
-                a -> edit(a, service, List.of(parseOp("cylinder", a)))));
+                a -> edit(a, service, parseOp("cylinder", a))));
 
         registry.register(new Tool("sphere", "Sphere or ellipsoid around 'center'.",
                 schema("\"center\":" + VEC + ",\"radius\":{\"type\":\"number\"},\"radius_y\":{\"type\":\"number\"},\"radius_z\":{\"type\":\"number\"},\"pattern\":" + PATTERN + ",\"hollow\":{\"type\":\"boolean\"}",
                         "center", "radius", "pattern"),
-                a -> edit(a, service, List.of(parseOp("sphere", a)))));
+                a -> edit(a, service, parseOp("sphere", a))));
 
         registry.register(new Tool("line", "Straight line between two points; thickness is a radius.",
                 schema("\"from\":" + VEC + ",\"to\":" + VEC + ",\"pattern\":" + PATTERN + ",\"thickness\":{\"type\":\"number\"}", "from", "to", "pattern"),
-                a -> edit(a, service, List.of(parseOp("line", a)))));
+                a -> edit(a, service, parseOp("line", a))));
 
         registry.register(new Tool("set_blocks",
                 "Place individual blocks: {\"state\":[[x,y,z],...]} or [[x,y,z,\"state\"],...]. With 'origin', x/y/z are offsets from it. For details only; use shapes or scripts for bulk.",
                 schema("\"origin\":" + VEC + ",\"blocks\":{\"type\":[\"object\",\"array\"]}", "blocks"),
-                a -> edit(a, service, List.of(parseOp("blocks", a)))));
+                a -> edit(a, service, parseOp("blocks", a))));
 
         registry.register(new Tool("batch",
-                "Run several ops as ONE undo step: ops=[{\"op\":\"fill|cylinder|sphere|pyramid|line|blocks|paste\", ...the matching tool's args}]; blocks=set_blocks, paste=place_blueprint, pyramid takes base,size,pattern,hollow. origin=[x,y,z] makes every coordinate in ops an offset from it. vars={\"W\":\"70%stone_bricks,30%andesite\"} lets patterns and block states say $W.",
+                "Run several ops as ONE undo step: ops=[{\"op\":\"fill|cylinder|sphere|pyramid|line|blocks|paste|clone\", ...the matching tool's args}]; blocks=set_blocks, paste=place_blueprint, pyramid takes base,size,pattern,hollow, clone copies a built region: region,to,rotation,flip=x|z,repeat,step=[dx,dy,dz],air. Terrain ops see the ground as before the batch: foundation (region,pattern) fills up to region top; overlay (region,pattern,depth=1|raise) covers it; smooth (region,iterations=2). origin=[x,y,z] makes every coordinate in ops an offset from it. vars={\"W\":\"70%stone_bricks,30%andesite\"} lets patterns and block states say $W.",
                 schema("\"ops\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}},\"origin\":" + VEC + ",\"vars\":{\"type\":\"object\"}", "ops"),
                 a -> edit(a, service, batchOps(a))));
 
         registry.register(new Tool("place_blueprint",
-                "Paste a structure. blueprint={palette:{\"S\":\"stone_bricks\",\"_\":\"air\"},layers:[[row z0,row z1,..] per y]}; row chars run along +x, \"4S\" repeats a block, '.' keeps what is there, a row \"^\" or \"3^\" repeats the row before it, a layer [\"^\"] the layer below. Or path=absolute .json file. origin=min corner, rotation=0/90/180/270.",
-                schema("\"blueprint\":{\"type\":\"object\"},\"path\":{\"type\":\"string\"},\"origin\":" + VEC + ",\"rotation\":{\"type\":\"integer\"}", "origin"),
-                a -> edit(a, service, List.of(parseOp("paste", a)))));
+                "Paste a structure. blueprint={palette:{\"S\":\"stone_bricks\",\"_\":\"air\"},layers:[[row z0,row z1,..] per y]}; row chars run along +x, \"4S\" repeats a block, '.' keeps what is there, a row \"^\" or \"3^\" repeats the row before it, a layer [\"^\"] the layer below. Or path=absolute .json/.schem file, or name=saved. origin=min corner, rotation=0/90/180/270.",
+                schema("\"blueprint\":{\"type\":\"object\"},\"path\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"origin\":" + VEC + ",\"rotation\":{\"type\":\"integer\"}", "origin"),
+                a -> edit(a, service, parseOp("paste", a))));
+
+        registry.register(new Tool("save_blueprint", "Save a region for place_blueprint name=.",
+                schema("\"name\":{\"type\":\"string\"},\"region\":" + REGION, "name", "region"),
+                a -> saveBlueprint(a, service)));
+
+        registry.register(new Tool("decorate",
+                "Sign text, chest items, item frames, armor stands; no undo. items:[{at,text:[lines]|contents:{item:n}|frame:item,facing|stand:{yaw,head,chest,legs,feet,hand,arms,small,base}}]; remove=region clears frames/stands first.",
+                schema("\"items\":{\"type\":\"array\"},\"origin\":" + VEC + ",\"remove\":" + REGION),
+                a -> decorate(a, service)));
+
+        registry.register(new Tool("tell", "Chat message to the player; teleport=[x,y,z] puts their feet there.",
+                schema("\"message\":{\"type\":\"string\"},\"teleport\":" + VEC, "message"),
+                a -> tell(a, service)));
 
         registry.register(new Tool("undo", "Undo the caller's last edits (same history as //undo).",
                 schema("\"steps\":{\"type\":\"integer\"}"),
@@ -205,6 +245,25 @@ public final class Tools {
             worldNames.forEach(worlds::add);
             out.add("worlds", worlds);
         }
+        List<String> saved = savedBlueprints(service);
+        if (!saved.isEmpty()) {
+            JsonArray blueprints = new JsonArray();
+            saved.stream().limit(50).forEach(blueprints::add);
+            out.add("blueprints", blueprints);
+        }
+        Map<String, Vec3> markers = service.markers().list(caller.world());
+        if (!markers.isEmpty()) {
+            JsonObject m = new JsonObject();
+            markers.forEach((name, v) -> m.add(name, vec(v)));
+            out.add("markers", m);
+        }
+        JsonArray notes = new JsonArray();
+        if (caller.isPlayer()) {
+            service.markers().takeNotes(caller.name()).forEach(notes::add);
+        } else {
+            service.markers().takeAllNotes().forEach((player, list) -> list.forEach(n -> notes.add(player + ": " + n)));
+        }
+        if (!notes.isEmpty()) out.add("notes", notes);
         return ToolResult.of(out);
     }
 
@@ -248,32 +307,156 @@ public final class Tools {
         return ToolResult.of(summaryJson(RegionCodec.summarize(box, states, 15, a.bool("heightmap", false))));
     }
 
-    private static ToolResult render(Args a, BuildService service) {
-        a.only("render_region", "region", "view", "size");
+    private static ToolResult check(Args a, BuildService service) {
+        a.only("check_region", "region", "checks");
         Box box = a.region("region");
-        IsoRenderer.View view = switch (a.str("view", "both")) {
-            case "both" -> IsoRenderer.View.BOTH;
-            case "top" -> IsoRenderer.View.TOP;
-            case "iso" -> IsoRenderer.View.ISO;
-            default -> throw new EditException("view must be both, top or iso");
-        };
+        Set<String> kinds = null;
+        if (a.has("checks")) {
+            kinds = new LinkedHashSet<>();
+            for (String kind : a.str("checks").split(",")) {
+                String k = kind.trim();
+                if (k.isEmpty()) continue;
+                if (!RegionLint.KINDS.contains(k)) {
+                    throw new EditException("unknown check '" + k + "'; use " + String.join(", ", RegionLint.KINDS));
+                }
+                kinds.add(k);
+            }
+            if (kinds.isEmpty()) kinds = null;
+        }
+        String[] states = service.read(a.caller().world(), box);
+        JsonArray issues = new JsonArray();
+        for (RegionLint.Issue issue : RegionLint.check(box, states, kinds, service.bridge().catalog().legacy())) {
+            JsonObject o = new JsonObject();
+            o.addProperty("kind", issue.kind());
+            o.addProperty("count", issue.count());
+            JsonArray at = new JsonArray();
+            issue.at().forEach(v -> at.add(vec(v)));
+            o.add("at", at);
+            o.addProperty("hint", issue.hint());
+            issues.add(o);
+        }
+        JsonObject out = new JsonObject();
+        out.add("issues", issues);
+        return ToolResult.of(out);
+    }
+
+    private static ToolResult render(Args a, BuildService service) {
+        a.only("render_region", "region", "view", "corner", "size");
+        Box box = a.region("region");
+        IsoRenderer.View view = renderView(a.str("view", "both"));
+        IsoRenderer.Corner corner = renderCorner(a.str("corner", null), view);
         IsoRenderer.Size size = switch (a.str("size", "medium")) {
             case "small" -> IsoRenderer.Size.SMALL;
             case "medium" -> IsoRenderer.Size.MEDIUM;
             case "large" -> IsoRenderer.Size.LARGE;
             default -> throw new EditException("size must be small, medium or large");
         };
-        IsoRenderer.Rendered rendered = IsoRenderer.render(box, service.read(a.caller().world(), box), view, size);
+        IsoRenderer.Rendered rendered = IsoRenderer.render(box, service.read(a.caller().world(), box), view, corner, size);
         JsonObject meta = new JsonObject();
         meta.add("box", region(rendered.box())); // what the image shows: the region cropped to its blocks
         return ToolResult.image(rendered.png(), meta);
     }
 
+    static IsoRenderer.View renderView(String view) {
+        return switch (view) {
+            case "both" -> IsoRenderer.View.BOTH;
+            case "top" -> IsoRenderer.View.TOP;
+            case "iso" -> IsoRenderer.View.ISO;
+            case "north" -> IsoRenderer.View.NORTH;
+            case "south" -> IsoRenderer.View.SOUTH;
+            case "east" -> IsoRenderer.View.EAST;
+            case "west" -> IsoRenderer.View.WEST;
+            default -> throw new EditException("view must be both, top, iso, north, south, east or west");
+        };
+    }
+
+    /** @param corner null when not given */
+    static IsoRenderer.Corner renderCorner(String corner, IsoRenderer.View view) {
+        if (corner == null) return IsoRenderer.Corner.SE;
+        if (view != IsoRenderer.View.ISO && view != IsoRenderer.View.BOTH) {
+            throw new EditException("corner only applies to view iso or both; leave it out for view " + view.name().toLowerCase(java.util.Locale.ROOT));
+        }
+        return switch (corner) {
+            case "se" -> IsoRenderer.Corner.SE;
+            case "sw" -> IsoRenderer.Corner.SW;
+            case "ne" -> IsoRenderer.Corner.NE;
+            case "nw" -> IsoRenderer.Corner.NW;
+            default -> throw new EditException("corner must be se, sw, ne or nw");
+        };
+    }
+
     private static ToolResult edit(Args a, BuildService service, List<Op> ops) {
+        if (ops.isEmpty()) {
+            // Only foundation or overlay can leave nothing to do, when the ground already is as asked.
+            JsonObject o = new JsonObject();
+            o.addProperty("changed", 0);
+            o.addProperty("note", "nothing to change: the terrain already fits");
+            return ToolResult.of(o);
+        }
         BuildService.JobResult result = service.await(service.submit(a.caller(), ops));
         ToolResult out = jobJson(result, true);
         if (!soleOnlinePlayer(a.caller())) out.data().addProperty("as", a.caller().name());
         return out;
+    }
+
+    private static ToolResult decorate(Args a, BuildService service) {
+        a.only("decorate", "items", "origin", "remove");
+        if (!a.has("items") && !a.has("remove")) throw new EditException("give \"items\", \"remove\" or both");
+        List<DecorSpec.Item> items = a.has("items") ? DecorSpec.parse(a) : List.of();
+        Decorator.Result r = Decorator.apply(service, a.caller(), items, a.has("remove") ? a.region("remove") : null);
+        JsonObject o = new JsonObject();
+        if (r.set() > 0) o.addProperty("set", r.set());
+        if (r.spawned() > 0) o.addProperty("spawned", r.spawned());
+        if (r.removed() > 0) o.addProperty("removed", r.removed());
+        return ToolResult.of(o);
+    }
+
+    /**
+     * Chat to the acting player, or to everyone when the console acts; optionally teleports the acting player so
+     * their feet are at the given block, keeping where they look.
+     */
+    private static ToolResult tell(Args a, BuildService service) {
+        a.only("tell", "message", "teleport");
+        String message = a.str("message").replaceAll("\\p{Cntrl}", " ").replace("§", "").trim();
+        if (message.isEmpty()) throw new EditException("message is empty");
+        if (message.length() > MAX_TELL) throw new EditException("message is " + message.length() + " characters; max " + MAX_TELL);
+        BuildService.Caller caller = a.caller();
+        Vec3 to = null;
+        if (a.has("teleport")) {
+            if (!service.config().allowTeleport()) throw new EditException("teleport is off; set players.allow-teleport: true in config.yml");
+            caller.requirePlayer("teleport");
+            to = a.vec("teleport");
+        }
+        Vec3 target = to;
+        JsonArray told = service.sync(() -> {
+            List<Player> players = new ArrayList<>();
+            if (caller.isPlayer()) {
+                Player p = Bukkit.getPlayer(caller.id());
+                if (p == null) throw new EditException(caller.name() + " is no longer online");
+                players.add(p);
+            } else {
+                players.addAll(Bukkit.getOnlinePlayers());
+            }
+            if (target != null) {
+                World world = Bukkit.getWorld(caller.world());
+                if (world == null) throw new EditException("unknown world '" + caller.world() + "'");
+                Player p = players.get(0);
+                Location from = p.getLocation();
+                // A marker set by looking at a block is that block: stand on it, not in it.
+                int y = target.y();
+                for (int up = 0; up < 3 && !world.getBlockAt(target.x(), y, target.z()).isEmpty(); up++) y++;
+                p.teleport(new Location(world, target.x() + 0.5, y, target.z() + 0.5, from.getYaw(), from.getPitch()));
+            }
+            JsonArray names = new JsonArray();
+            for (Player p : players) {
+                p.sendMessage(TELL_PREFIX + message);
+                names.add(p.getName());
+            }
+            return names;
+        });
+        JsonObject out = new JsonObject();
+        out.add("told", told);
+        return ToolResult.of(out);
     }
 
     /** Nobody needs to be told who acted when there is only one player it could have been. */
@@ -343,6 +526,7 @@ public final class Tools {
         Map<String, String> vars = vars(a);
         List<Op> ops = new ArrayList<>();
         JsonArray list = a.array("ops");
+        if (list.isEmpty()) throw new EditException("ops is empty");
         for (int i = 0; i < list.size(); i++) {
             String type = "?";
             try {
@@ -351,7 +535,7 @@ public final class Tools {
                 if (op.has("op") && op.get("op").isJsonPrimitive()) type = op.get("op").getAsString();
                 Args opArgs = a.with(vars.isEmpty() ? op : withVars(op, vars), origin);
                 type = opArgs.str("op");
-                ops.add(parseOp(type, opArgs));
+                ops.addAll(parseOp(type, opArgs));
             } catch (EditException e) {
                 throw new EditException("ops[" + i + "] (" + type + "): " + e.getMessage(), e);
             } catch (RuntimeException e) {
@@ -422,7 +606,16 @@ public final class Tools {
         return m.appendTail(out).toString();
     }
 
-    static Op parseOp(String type, Args a) {
+    /** One op, one per copy for {@code clone}, or any number (none included) for the terrain ops. */
+    static List<Op> parseOp(String type, Args a) {
+        return switch (type) {
+            case "clone" -> cloneOps(a);
+            case "foundation", "overlay" -> terrainOps(type, a);
+            default -> List.of(parseOne(type, a));
+        };
+    }
+
+    private static Op parseOne(String type, Args a) {
         return switch (type) {
             case "fill" -> {
                 a.only("fill", "region", "pattern", "mode", "from");
@@ -476,13 +669,75 @@ public final class Tools {
                 yield blocks(a);
             }
             case "paste", "place_blueprint" -> {
-                a.only("place_blueprint", "blueprint", "path", "origin", "rotation");
+                a.only("place_blueprint", "blueprint", "path", "name", "origin", "rotation");
                 int rotation = a.integer("rotation", 0);
                 if (rotation % 90 != 0) throw new EditException("rotation must be a multiple of 90");
                 yield new Op.Paste(blueprint(a), a.vec("origin"), rotation);
             }
-            default -> throw new EditException("unknown op '" + type + "'; use fill, cylinder, sphere, pyramid, line, blocks or paste");
+            case "smooth" -> {
+                a.only("smooth", "region", "iterations");
+                yield new Op.Smooth(a.region("region"), range(a, "iterations", 2, 1, 10));
+            }
+            default -> throw new EditException("unknown op '" + type + "'; use fill, cylinder, sphere, pyramid, line, blocks, paste, clone, "
+                    + "foundation (region,pattern), overlay (region,pattern,depth|raise) or smooth (region,iterations)");
         };
+    }
+
+    private static List<Op> cloneOps(Args a) {
+        a.only("clone", "region", "to", "rotation", "flip", "repeat", "step", "air");
+        Box box = a.region("region");
+        Vec3 to = a.vec("to");
+        int rotation = a.integer("rotation", 0);
+        if (rotation != 0 && rotation != 90 && rotation != 180 && rotation != 270) {
+            throw new EditException("rotation must be 0, 90, 180 or 270");
+        }
+        String flip = a.str("flip", null);
+        if (flip != null && !flip.equals("x") && !flip.equals("z")) throw new EditException("flip must be \"x\" or \"z\"");
+        int repeat = a.integer("repeat", 1);
+        if (repeat < 1 || repeat > 64) throw new EditException("repeat must be 1..64");
+        int[] step = {0, 0, 0};
+        if (a.has("step")) {
+            // Plain offsets between copies, so a batch origin does not shift them.
+            JsonElement s = a.json().get("step");
+            if (!s.isJsonArray() || s.getAsJsonArray().size() != 3) throw new EditException("\"step\" must be [dx,dy,dz]");
+            for (int i = 0; i < 3; i++) {
+                JsonElement d = s.getAsJsonArray().get(i);
+                if (!d.isJsonPrimitive() || !d.getAsJsonPrimitive().isNumber()) throw new EditException("\"step\" must be [dx,dy,dz] numbers");
+                step[i] = d.getAsInt();
+            }
+        } else if (repeat > 1) {
+            throw new EditException("repeat needs \"step\": [dx,dy,dz] between copies");
+        }
+        // Read now, before the batch places anything, so the source and the copies may overlap.
+        // Only block states are copied: sign text and container contents are not.
+        Blueprint bp = Blueprint.ofStates(box.sizeX(), box.sizeY(), box.sizeZ(),
+                a.service().read(a.caller().world(), box), !a.bool("air", false));
+        if (flip != null) bp = bp.flipped(flip.charAt(0));
+        List<Op> ops = new ArrayList<>();
+        for (int i = 0; i < repeat; i++) ops.add(new Op.Paste(bp, to.add(step[0] * i, step[1] * i, step[2] * i), rotation));
+        return ops;
+    }
+
+    private static List<Op> terrainOps(String type, Args a) {
+        if (type.equals("foundation")) {
+            a.only("foundation", "region", "pattern");
+        } else {
+            a.only("overlay", "region", "pattern", "depth", "raise");
+            if (a.has("depth") && a.has("raise")) throw new EditException("give \"depth\" or \"raise\", not both");
+        }
+        Box box = a.region("region");
+        String pattern = a.str("pattern");
+        int depth = type.equals("overlay") ? range(a, "depth", 1, 1, 16) : 0;
+        int raise = type.equals("overlay") ? range(a, "raise", 0, 0, 16) : 0;
+        // Read now, while the batch is parsed: the ops follow the terrain as it is before the batch runs.
+        String[] states = a.service().read(a.caller().world(), box);
+        return type.equals("foundation") ? Terrain.foundation(box, states, pattern) : Terrain.overlay(box, states, pattern, depth, raise);
+    }
+
+    private static int range(Args a, String name, int def, int min, int max) {
+        int v = a.integer(name, def);
+        if (v < min || v > max) throw new EditException(name + " must be " + min + ".." + max);
+        return v;
     }
 
     /** Blocks grouped by state, {@code {"state":[[x,y,z],...]}}, or one by one, {@code [[x,y,z,"state"],...]}. */
@@ -536,13 +791,21 @@ public final class Tools {
     }
 
     private static Blueprint blueprint(Args a) {
+        int given = (a.has("blueprint") ? 1 : 0) + (a.has("path") ? 1 : 0) + (a.has("name") ? 1 : 0);
+        if (given != 1) throw new EditException("give exactly one of \"blueprint\", \"path\" or \"name\"");
         JsonObject json;
         if (a.has("blueprint")) {
             json = a.object("blueprint");
-        } else if (a.has("path")) {
-            json = readBlueprintFile(a.str("path"), a);
+        } else if (a.has("name")) {
+            json = readSavedBlueprint(a.str("name"), a.service());
         } else {
-            throw new EditException("give either \"blueprint\" or \"path\"");
+            Path path = blueprintPath(a.str("path"), a);
+            if (path.getFileName().toString().endsWith(".json")) {
+                json = readBlueprintFile(path);
+            } else {
+                Schematic s = a.service().bridge().readSchematic(path, a.service().config().maxVolumePerOp());
+                return Blueprint.ofStates(s.sizeX(), s.sizeY(), s.sizeZ(), s.states(), true);
+            }
         }
         if (!json.has("palette") || !json.has("layers")) throw new EditException("blueprint needs palette and layers");
         Map<Character, String> palette = new LinkedHashMap<>();
@@ -559,15 +822,92 @@ public final class Tools {
         return Blueprint.of(palette, layers);
     }
 
-    private static JsonObject readBlueprintFile(String pathString, Args a) {
+    /** An absolute .json, .schem or .schematic path inside {@code safety.blueprint-dirs}, at most 5 MB. */
+    private static Path blueprintPath(String pathString, Args a) {
         Path path = Path.of(pathString);
         if (!path.isAbsolute()) throw new EditException("path must be absolute");
         path = path.normalize();
-        if (!path.getFileName().toString().endsWith(".json")) throw new EditException("path must be a .json file");
+        String file = path.getFileName().toString();
+        if (!file.endsWith(".json") && !file.endsWith(".schem") && !file.endsWith(".schematic")) {
+            throw new EditException("path must be a .json, .schem or .schematic file");
+        }
         List<Path> allowed = a.blueprintDirs();
         if (!allowed.isEmpty() && allowed.stream().noneMatch(path::startsWith)) {
             throw new EditException("path is outside safety.blueprint-dirs");
         }
+        try {
+            if (Files.size(path) > MAX_BLUEPRINT_BYTES) throw new EditException("blueprint file is larger than 5 MB");
+        } catch (IOException e) {
+            throw new EditException("cannot read " + path.getFileName() + ": " + e.getClass().getSimpleName());
+        }
+        return path;
+    }
+
+    private static Path savedDir(BuildService service) {
+        return service.dataDir().resolve("blueprints");
+    }
+
+    private static String savedName(String name) {
+        if (!SAVED_NAME.matcher(name).matches()) throw new EditException("name must be 1-40 of a-z, 0-9, _ and -");
+        return name;
+    }
+
+    /** Names of saved blueprints, sorted. */
+    private static List<String> savedBlueprints(BuildService service) {
+        try (var files = Files.list(savedDir(service))) {
+            return files.map(p -> p.getFileName().toString()).filter(f -> f.endsWith(".json"))
+                    .map(f -> f.substring(0, f.length() - 5)).filter(n -> SAVED_NAME.matcher(n).matches()).sorted().toList();
+        } catch (IOException e) {
+            return List.of();
+        }
+    }
+
+    private static JsonObject readSavedBlueprint(String name, BuildService service) {
+        Path path = savedDir(service).resolve(savedName(name) + ".json");
+        if (!Files.isRegularFile(path)) {
+            List<String> saved = savedBlueprints(service);
+            throw new EditException("no saved blueprint '" + name + "'; " + (saved.isEmpty()
+                    ? "none saved yet (use save_blueprint)" : "saved: " + String.join(", ", saved)));
+        }
+        return readBlueprintFile(path);
+    }
+
+    private static ToolResult saveBlueprint(Args a, BuildService service) {
+        a.only("save_blueprint", "name", "region");
+        String name = savedName(a.str("name"));
+        Box box = a.region("region");
+        String[] states = service.read(a.caller().world(), box);
+        RegionCodec.Encoded enc;
+        try {
+            enc = RegionCodec.encode(box, states);
+        } catch (EditException e) {
+            throw new EditException(e.getMessage().replace("read a smaller region", "save a smaller region"), e);
+        }
+        JsonObject json = new JsonObject();
+        JsonObject palette = new JsonObject();
+        enc.palette().forEach((k, v) -> palette.addProperty(String.valueOf(k), v));
+        json.add("palette", palette);
+        JsonArray layers = new JsonArray();
+        for (List<String> layer : enc.layers()) {
+            JsonArray rows = new JsonArray();
+            layer.forEach(rows::add);
+            layers.add(rows);
+        }
+        json.add("layers", layers);
+        try {
+            Files.createDirectories(savedDir(service));
+            Files.writeString(savedDir(service).resolve(name + ".json"), json.toString());
+        } catch (IOException e) {
+            throw new EditException("cannot save " + name + ": " + e.getClass().getSimpleName());
+        }
+        JsonObject out = new JsonObject();
+        out.addProperty("saved", name);
+        out.addProperty("size", box.sizeX() + "x" + box.sizeY() + "x" + box.sizeZ());
+        out.addProperty("blocks", java.util.Arrays.stream(states).filter(s -> !RegionCodec.isAir(s)).count());
+        return ToolResult.of(out);
+    }
+
+    private static JsonObject readBlueprintFile(Path path) {
         try {
             if (Files.size(path) > MAX_BLUEPRINT_BYTES) throw new EditException("blueprint file is larger than 5 MB");
             return JsonParser.parseString(Files.readString(path)).getAsJsonObject();

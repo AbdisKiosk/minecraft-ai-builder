@@ -28,13 +28,19 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
-from .vox import Vox, pick
+from .vox import Vox, pick, transform_state
 
-__all__ = ["Builder", "AIBuilderError", "Vox", "box", "circle", "decode", "expand_layers", "pick", "SELECTION"]
+__all__ = ["Builder", "AIBuilderError", "Vox", "box", "circle", "decode", "expand_layers", "pick", "SELECTION",
+           "transform_state"]
 
 SELECTION = "selection"
 
 Vec = Sequence[Any]  # [x, y, z]; parts may be ints or "~n" relative strings
+
+
+def _pos(position):
+    """A position for the API: [x, y, z], or a "@marker" name left as it is."""
+    return position if isinstance(position, str) else list(position)
 
 
 class AIBuilderError(RuntimeError):
@@ -116,19 +122,43 @@ class Builder:
     def read(self, region, mode: str = "summary", heightmap: bool = False) -> dict:
         return self.call("read_region", region=region, mode=mode, heightmap=heightmap)
 
+    def check(self, region, checks: str | None = None) -> dict:
+        """Build mistakes as {"issues": [{"kind", "count", "at", "hint"}]}; checks="floating,dark" runs only those."""
+        return self.call("check_region", region=region, checks=checks)
+
     def render(self, region, view: str = "both", save_to: str | os.PathLike | None = None,
-               size: str | None = None) -> bytes:
+               size: str | None = None, corner: str | None = None) -> bytes:
         """PNG of a region (absolute coordinates). size: "small", "medium" (default) or "large".
+        view: "both", "top", "iso" or an elevation "north"/"south"/"east"/"west"; corner: "se" (default), "sw", "ne"
+        or "nw", where the iso camera stands.
 
         Looking at the picture costs Claude about width*height/750 tokens, so use "small" for progress checks.
         """
-        png = base64.b64decode(self.call("render_region", region=region, view=view, size=size)["png_base64"])
+        png = base64.b64decode(self.call("render_region", region=region, view=view, size=size,
+                                         corner=corner)["png_base64"])
         if save_to:
             Path(save_to).write_bytes(png)
         return png
 
     def undo(self, steps: int = 1) -> int:
         return self.call("undo", steps=steps)["undone"]
+
+    def decorate(self, items: list | None = None, origin: Vec | None = None, remove=None) -> dict:
+        """Sign text, container contents, item frames and armor stands; runs now, not queued.
+
+        Each item is {"at": [x, y, z]} plus one of text=[lines], contents={item: count}, frame=item with
+        facing, or stand={yaw, head, chest, legs, feet, hand, arms, small, base}. `remove` (a region) first
+        deletes item frames and armor stands in it. NOT undoable: `undo` does not revert it, so flush the blocks
+        it needs (signs, chests, walls) before calling. Returns {"set": n, "spawned": n, "removed": n}, zeros left out.
+        """
+        return self.call("decorate", items=items, origin=_pos(origin) if origin is not None else None, remove=remove)
+
+    def tell(self, message: str, teleport: Vec | str | None = None) -> dict:
+        """Chat message (max 256 characters) to the acting player, or to everyone when the console acts; runs now.
+
+        teleport ([x, y, z] or "@marker") puts the acting player's feet there. Returns {"told": [names]}.
+        """
+        return self.call("tell", message=message, teleport=_pos(teleport) if teleport is not None else None)
 
     # ---- edits (queued until flush) ----
 
@@ -138,7 +168,7 @@ class Builder:
         Applies to a whole flush, so anything already queued is sent first. Reads and renders stay absolute.
         """
         self.flush()
-        self._origin = list(origin) if origin is not None else None
+        self._origin = _pos(origin) if origin is not None else None
         return self
 
     def _queue(self, op: str, **args) -> "Builder":
@@ -159,19 +189,19 @@ class Builder:
 
     def cylinder(self, base: Vec, radius: float, height: int, pattern: str,
                  hollow: bool = False, radius_z: float | None = None):
-        return self._queue("cylinder", base=list(base), radius=radius, radius_z=radius_z,
+        return self._queue("cylinder", base=_pos(base), radius=radius, radius_z=radius_z,
                            height=height, pattern=pattern, hollow=hollow)
 
     def sphere(self, center: Vec, radius: float, pattern: str, hollow: bool = False,
                radius_y: float | None = None, radius_z: float | None = None):
-        return self._queue("sphere", center=list(center), radius=radius, radius_y=radius_y,
+        return self._queue("sphere", center=_pos(center), radius=radius, radius_y=radius_y,
                            radius_z=radius_z, pattern=pattern, hollow=hollow)
 
     def pyramid(self, base: Vec, size: int, pattern: str, hollow: bool = False):
-        return self._queue("pyramid", base=list(base), size=size, pattern=pattern, hollow=hollow)
+        return self._queue("pyramid", base=_pos(base), size=size, pattern=pattern, hollow=hollow)
 
     def line(self, start: Vec, end: Vec, pattern: str, thickness: float = 0):
-        return self._queue("line", **{"from": list(start)}, to=list(end), pattern=pattern, thickness=thickness)
+        return self._queue("line", **{"from": _pos(start)}, to=_pos(end), pattern=pattern, thickness=thickness)
 
     def block(self, x, y, z, state: str):
         """Queues one block. Consecutive calls are merged into a single 'blocks' op."""
@@ -183,13 +213,56 @@ class Builder:
 
     def blocks(self, items: Iterable[Sequence[Any]], origin: Vec | None = None):
         """Queues [x, y, z, state] items; with origin they are offsets from it."""
-        return self._queue("blocks", blocks=[list(i) for i in items], origin=list(origin) if origin else None)
+        return self._queue("blocks", blocks=[list(i) for i in items], origin=_pos(origin) if origin else None)
 
-    def paste(self, blueprint: dict | str | os.PathLike, origin: Vec, rotation: int = 0):
-        """Queues a blueprint paste. A path is read here, so the file never has to reach the server's disk."""
+    def paste(self, blueprint: dict | str | os.PathLike | None = None, origin: Vec | None = None,
+              rotation: int = 0, name: str | None = None):
+        """Queues a blueprint paste: a dict, a path, or name= of one saved with save_blueprint.
+
+        A .json path is read here, so the file never has to reach the server's disk; a .schem/.schematic path
+        is read by the server's WorldEdit, so it must be a file the server can see.
+        """
+        if origin is None:
+            raise AIBuilderError("paste needs an origin")
+        if name is not None:
+            return self._queue("paste", name=name, origin=_pos(origin), rotation=rotation)
         if not isinstance(blueprint, dict):
-            blueprint = json.loads(Path(blueprint).read_text())
-        return self._queue("paste", blueprint=blueprint, origin=list(origin), rotation=rotation)
+            path = Path(blueprint)
+            if path.suffix in (".schem", ".schematic"):
+                return self._queue("paste", path=str(path.resolve()), origin=_pos(origin), rotation=rotation)
+            blueprint = json.loads(path.read_text())
+        return self._queue("paste", blueprint=blueprint, origin=_pos(origin), rotation=rotation)
+
+    def clone(self, region, to: Vec, rotation: int = 0, flip: str | None = None, repeat: int = 1,
+              step: Vec | None = None, air: bool = False):
+        """Queues a copy of a built region with its min corner at `to`; flip="x"|"z" mirrors before rotating.
+
+        repeat > 1 places more copies, each `step` ([dx, dy, dz], never shifted by at()) further on. air=True
+        copies air too instead of merging with what is there. Sign text and container contents are not copied.
+        """
+        return self._queue("clone", region=region, to=_pos(to), rotation=rotation or None, flip=flip,
+                           repeat=repeat if repeat != 1 else None, step=list(step) if step else None, air=air or None)
+
+    # The terrain ops read the ground when the batch is sent, before any queued op runs.
+    def foundation(self, region, pattern: str):
+        """Queues a fill from each column's ground up to the region's top (the level just under a build)."""
+        return self._queue("foundation", region=region, pattern=pattern)
+
+    def overlay(self, region, pattern: str, depth: int = 1, raise_: int = 0):
+        """Queues replacing the top `depth` ground blocks, or with raise_ > 0 placing that many on top instead."""
+        return self._queue("overlay", region=region, pattern=pattern, depth=depth if depth != 1 else None,
+                           **{"raise": raise_ or None})
+
+    def smooth(self, region, iterations: int = 2):
+        """Queues WorldEdit's //smooth over the region."""
+        return self._queue("smooth", region=region, iterations=iterations if iterations != 2 else None)
+
+    def save_blueprint(self, name: str, region) -> dict:
+        """Saves a region on the server ({"saved", "size", "blocks"}); paste(name=...) places it.
+
+        Runs immediately: flush() first if the region is still queued.
+        """
+        return self.call("save_blueprint", name=name, region=region)
 
     def flush(self, wait: bool = True) -> dict | None:
         """Sends everything queued as one batch (= one undo step). Returns the result, {"changed": n} when done.

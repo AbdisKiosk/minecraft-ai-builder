@@ -9,12 +9,19 @@ import com.sk89q.worldedit.bukkit.BukkitAdapter;
 import com.sk89q.worldedit.extension.input.InputParseException;
 import com.sk89q.worldedit.extension.input.ParserContext;
 import com.sk89q.worldedit.extension.platform.Actor;
+import com.sk89q.worldedit.extent.clipboard.Clipboard;
+import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormat;
+import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormats;
+import com.sk89q.worldedit.extent.clipboard.io.ClipboardReader;
 import com.sk89q.worldedit.extent.transform.BlockTransformExtent;
 import com.sk89q.worldedit.function.mask.Mask;
 import com.sk89q.worldedit.function.pattern.Pattern;
 import com.sk89q.worldedit.math.BlockVector2;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.math.Vector3;
+import com.sk89q.worldedit.math.convolution.GaussianKernel;
+import com.sk89q.worldedit.math.convolution.HeightMap;
+import com.sk89q.worldedit.math.convolution.HeightMapFilter;
 import com.sk89q.worldedit.math.transform.AffineTransform;
 import com.sk89q.worldedit.registry.state.Property;
 import com.sk89q.worldedit.regions.CuboidRegion;
@@ -29,12 +36,17 @@ import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 
+import java.io.IOException;
+import java.io.InputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -139,6 +151,32 @@ public final class We7Bridge implements WorldEditBridge {
             }
         }
         return out;
+    }
+
+    @Override
+    public Schematic readSchematic(Path file, long maxVolume) {
+        ClipboardFormat format = ClipboardFormats.findByFile(file.toFile());
+        if (format == null) throw new EditException(file.getFileName() + " is not a schematic format WorldEdit knows");
+        Clipboard clipboard;
+        try (InputStream in = Files.newInputStream(file); ClipboardReader reader = format.getReader(in)) {
+            clipboard = reader.read();
+        } catch (IOException e) {
+            throw new EditException("cannot read " + file.getFileName() + ": " + e.getMessage());
+        }
+        BlockVector3 min = clipboard.getRegion().getMinimumPoint(), max = clipboard.getRegion().getMaximumPoint();
+        int sx = max.getBlockX() - min.getBlockX() + 1, sy = max.getBlockY() - min.getBlockY() + 1, sz = max.getBlockZ() - min.getBlockZ() + 1;
+        long volume = (long) sx * sy * sz;
+        if (volume > maxVolume) throw new EditException(file.getFileName() + " has " + volume + " blocks; max per op is " + maxVolume);
+        String[] states = new String[(int) volume];
+        int i = 0;
+        for (int y = 0; y < sy; y++) {
+            for (int z = 0; z < sz; z++) {
+                for (int x = 0; x < sx; x++) {
+                    states[i++] = compact(clipboard.getBlock(min.add(x, y, z)));
+                }
+            }
+        }
+        return new Schematic(sx, sy, sz, states);
     }
 
     /** {@code oak_stairs[facing=east]}: namespace and properties that equal the block's default are left out. */
@@ -249,6 +287,11 @@ public final class We7Bridge implements WorldEditBridge {
                         if (edit.setBlock(vec(b.pos()), block(b.state()))) changed++;
                     }
                     return changed;
+                }
+                if (op instanceof Op.Smooth o) {
+                    // As //smooth without a mask: the heightmap follows blocks that stop movement.
+                    HeightMap map = new HeightMap(edit, region(world, o.box()), (Mask) null);
+                    return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
                 throw new EditException("unsupported op " + op.getClass().getSimpleName());

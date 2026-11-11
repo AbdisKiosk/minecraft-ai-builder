@@ -26,3 +26,7 @@ safety:
     max: [0, 0, 0]
   # Directories place_blueprint may read files from. Empty = any absolute path.
   blueprint-dirs: []
+
+players:
+  # Whether the tell tool may teleport the acting player to a build.
+  allow-teleport: true

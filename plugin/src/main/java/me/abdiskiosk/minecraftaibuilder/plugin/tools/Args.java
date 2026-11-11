@@ -9,6 +9,7 @@ import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
 
 import java.util.List;
 import java.util.Set;
@@ -16,7 +17,7 @@ import java.util.TreeSet;
 
 /**
  * Typed access to tool arguments. Coordinates are {@code [x,y,z]}; each part may be a number or
- * {@code "~n"}, relative to the caller's feet. A region is {@code "selection"}, {@code [x1,y1,z1,x2,y2,z2]} or
+ * {@code "~n"}, relative to the caller's feet; {@code "@name"} is a marker. A region is {@code "selection"}, {@code [x1,y1,z1,x2,y2,z2]} or
  * {@code {"min":[..],"max":[..]}}. Inside a batch with an origin, plain numbers are offsets from that origin.
  */
 public final class Args {
@@ -60,6 +61,10 @@ public final class Args {
 
     public BuildService.Caller caller() {
         return caller;
+    }
+
+    public BuildService service() {
+        return service;
     }
 
     public java.util.List<java.nio.file.Path> blueprintDirs() {
@@ -130,11 +135,23 @@ public final class Args {
     }
 
     public Vec3 vec(JsonElement element, String what) {
+        if (element.isJsonPrimitive() && element.getAsString().startsWith("@")) return marker(element.getAsString().substring(1));
         if (!element.isJsonArray() || element.getAsJsonArray().size() != 3) {
-            throw new EditException("\"" + what + "\" must be [x,y,z]");
+            throw new EditException("\"" + what + "\" must be [x,y,z] or \"@marker\"");
         }
         JsonArray a = element.getAsJsonArray();
         return new Vec3(coord(a.get(0), 0, what), coord(a.get(1), 1, what), coord(a.get(2), 2, what));
+    }
+
+    /** A marker is an absolute position, so a batch origin does not shift it. */
+    private Vec3 marker(String name) {
+        Markers markers = service.markers();
+        return markers.get(caller.world(), name).orElseThrow(() -> {
+            Set<String> known = markers.list(caller.world()).keySet();
+            return new EditException("unknown marker \"@" + name + "\" in world '" + caller.world() + "'; "
+                    + (known.isEmpty() ? "none set yet" : "markers: " + String.join(", ", known))
+                    + ". A player sets one with /aibuilder mark <name>.");
+        });
     }
 
     private int coord(JsonElement e, int axis, String what) {

@@ -175,6 +175,12 @@ public sealed interface Op {
         }
     }
 
+    /** WorldEdit's {@code //smooth} on the box's heightmap; one piece, since every pass reads the whole box. */
+    record Smooth(Box box, int iterations) implements Op {
+        public long volume() { return box.volume(); }
+        public Box bounds() { return box; }
+    }
+
     record BlockAt(Vec3 pos, String state) {
     }
 

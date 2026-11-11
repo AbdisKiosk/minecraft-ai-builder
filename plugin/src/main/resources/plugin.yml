@@ -7,8 +7,8 @@ depend: [WorldEdit]
 softdepend: [FastAsyncWorldEdit]
 commands:
   aibuilder:
-    description: Shows AIBuilder status and connection details; "stats" shows what MCP calls cost in tokens.
-    usage: /aibuilder [stats [reset]]
+    description: Shows AIBuilder status and connection details; "stats" shows what MCP calls cost in tokens; mark, marks, unmark and note point Claude at places and leave it notes.
+    usage: /aibuilder [stats [reset] | mark <name> | unmark <name> | marks | note <text>]
     permission: aibuilder.admin
 permissions:
   aibuilder.admin:

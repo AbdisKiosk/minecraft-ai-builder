@@ -20,9 +20,10 @@ description: Minecraft building aesthetics - palettes, depth, roofs, detailing. 
 - Use stairs and slabs for roof slopes and window sills, `[half=top]` stairs under eaves, and fences/walls for railings.
 
 ## Roofs
-- Gable: stairs facing outward on each side, rising one block per step, with a full block or slab ridge. The roof should overhang the walls by one block.
+- Gable: each side's stairs have `facing` pointing toward the ridge (the direction the slope rises), rising one block per step, with a full block or slab ridge. The roof should overhang the walls by one block.
 - Steeper roofs (two blocks up per step, using stair + full block) read as gothic or alpine. Shallow slab roofs read as modern.
 - Close the gable ends with the trim block or planks, not the main wall block.
+- In scripts use `Vox.roof_gable` / `Vox.roof_hip` (then `connect()` for the corners) instead of placing roof stairs by hand.
 
 ## Details (last phase)
 - Light every ~8 blocks: lanterns, wall torches, or glowstone hidden under carpet.

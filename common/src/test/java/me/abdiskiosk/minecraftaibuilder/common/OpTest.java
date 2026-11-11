@@ -129,4 +129,15 @@ class OpTest {
         assertEquals(new Vec3(1, 1, -3), box.min());
         assertEquals(120, box.volume());
     }
+
+    @Test
+    void smoothCoversItsBoxInOnePiece() {
+        Box box = Box.of(new Vec3(0, 60, 0), new Vec3(9, 69, 9));
+        Op.Smooth smooth = new Op.Smooth(box, 2);
+        assertEquals(box, smooth.bounds());
+        assertEquals(1000, smooth.volume());
+        assertEquals(List.of(smooth), smooth.split(10));
+        assertTrue(smooth.patterns().isEmpty());
+        assertEquals("smooth", smooth.kind());
+    }
 }
