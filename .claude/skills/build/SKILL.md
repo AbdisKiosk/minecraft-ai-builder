@@ -10,6 +10,7 @@ The MCP server's instructions cover coordinates, regions, patterns and undo. Thi
 ## 1. Look first
 - `get_context`: player position and facing, selection, `server.legacy_blocks` (true = 1.8-1.12 block set).
 - With a selection, pass `"region": "selection"`. Otherwise choose an origin near the player and say where it is.
+- A place that is hard to describe: ask the player to stand there or look at it and run `/aibuilder mark <name>`, then use `"@name"` as a position or `origin`. `get_context` also returns notes the player left with `/aibuilder note`. When done, `tell` the player where the build is.
 - `read_region` (summary; add `heightmap` when the terrain matters) on the site. `mode=full` only for regions up to about 10x10x10.
 - Unfamiliar block or state: `block_info`. Bad blocks are rejected before anything is placed, so a failed call leaves nothing behind.
 

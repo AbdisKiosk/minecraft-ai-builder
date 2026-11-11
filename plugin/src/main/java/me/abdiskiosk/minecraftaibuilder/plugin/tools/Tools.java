@@ -24,6 +24,7 @@ import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
@@ -48,7 +49,7 @@ import java.util.regex.Pattern;
 public final class Tools {
 
     private static final String VEC = """
-            {"type":"array","description":"[x,y,z]; \\"~n\\" = relative to the player"}""";
+            {"description":"[x,y,z]; \\"~n\\" = relative to the player"}""";
     private static final String REGION = """
             {"description":"\\"selection\\" or [x1,y1,z1,x2,y2,z2]"}""";
     private static final String PATTERN = """
@@ -57,6 +58,8 @@ public final class Tools {
             "player":{"type":"string"},"world":{"type":"string"}""";
     private static final long MAX_BLUEPRINT_BYTES = 5L * 1024 * 1024;
     private static final Pattern VAR = Pattern.compile("\\$([A-Za-z_][A-Za-z0-9_]*)");
+    private static final int MAX_TELL = 256;
+    private static final String TELL_PREFIX = "[AIBuilder] ";
     private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
     private Tools() {
@@ -64,7 +67,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Players (position, facing, looked-at block), the caller's WorldEdit selection and the server version. Call first.",
+                "Players (position, facing, looked-at block), the caller's WorldEdit selection, markers, player notes and the server version. Call first.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -158,6 +161,10 @@ public final class Tools {
                 schema("\"items\":{\"type\":\"array\"},\"origin\":" + VEC + ",\"remove\":" + REGION),
                 a -> decorate(a, service)));
 
+        registry.register(new Tool("tell", "Chat message to the player; teleport=[x,y,z] puts their feet there.",
+                schema("\"message\":{\"type\":\"string\"},\"teleport\":" + VEC, "message"),
+                a -> tell(a, service)));
+
         registry.register(new Tool("undo", "Undo the caller's last edits (same history as //undo).",
                 schema("\"steps\":{\"type\":\"integer\"}"),
                 a -> {
@@ -244,6 +251,19 @@ public final class Tools {
             saved.stream().limit(50).forEach(blueprints::add);
             out.add("blueprints", blueprints);
         }
+        Map<String, Vec3> markers = service.markers().list(caller.world());
+        if (!markers.isEmpty()) {
+            JsonObject m = new JsonObject();
+            markers.forEach((name, v) -> m.add(name, vec(v)));
+            out.add("markers", m);
+        }
+        JsonArray notes = new JsonArray();
+        if (caller.isPlayer()) {
+            service.markers().takeNotes(caller.name()).forEach(notes::add);
+        } else {
+            service.markers().takeAllNotes().forEach((player, list) -> list.forEach(n -> notes.add(player + ": " + n)));
+        }
+        if (!notes.isEmpty()) out.add("notes", notes);
         return ToolResult.of(out);
     }
 
@@ -389,6 +409,54 @@ public final class Tools {
         if (r.spawned() > 0) o.addProperty("spawned", r.spawned());
         if (r.removed() > 0) o.addProperty("removed", r.removed());
         return ToolResult.of(o);
+    }
+
+    /**
+     * Chat to the acting player, or to everyone when the console acts; optionally teleports the acting player so
+     * their feet are at the given block, keeping where they look.
+     */
+    private static ToolResult tell(Args a, BuildService service) {
+        a.only("tell", "message", "teleport");
+        String message = a.str("message").replaceAll("\\p{Cntrl}", " ").replace("§", "").trim();
+        if (message.isEmpty()) throw new EditException("message is empty");
+        if (message.length() > MAX_TELL) throw new EditException("message is " + message.length() + " characters; max " + MAX_TELL);
+        BuildService.Caller caller = a.caller();
+        Vec3 to = null;
+        if (a.has("teleport")) {
+            if (!service.config().allowTeleport()) throw new EditException("teleport is off; set players.allow-teleport: true in config.yml");
+            caller.requirePlayer("teleport");
+            to = a.vec("teleport");
+        }
+        Vec3 target = to;
+        JsonArray told = service.sync(() -> {
+            List<Player> players = new ArrayList<>();
+            if (caller.isPlayer()) {
+                Player p = Bukkit.getPlayer(caller.id());
+                if (p == null) throw new EditException(caller.name() + " is no longer online");
+                players.add(p);
+            } else {
+                players.addAll(Bukkit.getOnlinePlayers());
+            }
+            if (target != null) {
+                World world = Bukkit.getWorld(caller.world());
+                if (world == null) throw new EditException("unknown world '" + caller.world() + "'");
+                Player p = players.get(0);
+                Location from = p.getLocation();
+                // A marker set by looking at a block is that block: stand on it, not in it.
+                int y = target.y();
+                for (int up = 0; up < 3 && !world.getBlockAt(target.x(), y, target.z()).isEmpty(); up++) y++;
+                p.teleport(new Location(world, target.x() + 0.5, y, target.z() + 0.5, from.getYaw(), from.getPitch()));
+            }
+            JsonArray names = new JsonArray();
+            for (Player p : players) {
+                p.sendMessage(TELL_PREFIX + message);
+                names.add(p.getName());
+            }
+            return names;
+        });
+        JsonObject out = new JsonObject();
+        out.add("told", told);
+        return ToolResult.of(out);
     }
 
     /** Nobody needs to be told who acted when there is only one player it could have been. */

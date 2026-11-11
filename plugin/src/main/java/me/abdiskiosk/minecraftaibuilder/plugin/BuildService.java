@@ -40,6 +40,7 @@ public final class BuildService {
     private final WorldEditBridge bridge;
     private final PluginConfig config;
     private final Path dataDir;
+    private final Markers markers;
     private final AtomicInteger nextJob = new AtomicInteger(1);
     private final Map<String, Job> jobs = new LinkedHashMap<>() {
         @Override
@@ -54,6 +55,7 @@ public final class BuildService {
         this.bridge = bridge;
         this.config = config;
         this.dataDir = dataDir;
+        this.markers = new Markers(dataDir);
     }
 
     public WorldEditBridge bridge() {
@@ -66,6 +68,11 @@ public final class BuildService {
 
     public Path dataDir() {
         return dataDir;
+    }
+
+    /** Markers and notes set with /aibuilder mark and /aibuilder note. */
+    public Markers markers() {
+        return markers;
     }
 
     /**

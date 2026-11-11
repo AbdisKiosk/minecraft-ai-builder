@@ -176,6 +176,7 @@ def main():
     # ---- argument and height validation ----
     expect_error("missing radius", lambda: b.call("sphere", center=[nx, oy, nz], pattern="stone"), "missing \"radius\"")
     expect_error("misspelled argument", lambda: b.call("sphere", center=[nx, oy, nz], raduis=3, pattern="stone"), "unknown argument \"raduis\"")
+    expect_error("unknown @marker is rejected", lambda: b.call("sphere", center="@selftest_no_such_marker", radius=1, pattern="stone"), "/aibuilder mark")
     expect_error("above build height", lambda: b.call("fill", region=box([nx, 999, nz], [nx, 999, nz]), pattern="stone"), "only allows y")
     expect_error("batch error names the op", lambda: b.call("batch", ops=[
         {"op": "fill", "region": box([nx, oy, nz], [nx, oy, nz]), "pattern": "stone"}, {"op": "sphere", "center": [nx, oy, nz], "pattern": "stone"}]), "ops[1] (sphere)")

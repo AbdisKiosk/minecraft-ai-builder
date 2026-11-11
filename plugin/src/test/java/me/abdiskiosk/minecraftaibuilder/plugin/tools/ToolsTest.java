@@ -93,7 +93,7 @@ class ToolsTest {
     }
 
     private final PluginConfig config = new PluginConfig("127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
-            List.of(), "", null, List.of());
+            List.of(), "", null, List.of(), true);
     private final Path dataDir = tempDir();
     private final BuildService service = new BuildService(null, new FakeBridge(), config, dataDir);
 
@@ -373,5 +373,43 @@ class ToolsTest {
                 single("smooth", args("{\"region\":[0,60,0,9,70,9]}")));
         assertEquals("iterations must be 1..10", error("smooth", "{\"region\":[0,60,0,9,70,9],\"iterations\":0}"));
         assertEquals("iterations must be 1..10", error("smooth", "{\"region\":[0,60,0,9,70,9],\"iterations\":11}"));
+    }
+
+    @Test
+    void markersArePositionsThatAnOriginDoesNotShift() {
+        service.markers().set("world", "door", new Vec3(5, 64, 7));
+        assertEquals(new Vec3(5, 64, 7), ((Op.Sphere) single("sphere", args("{\"center\":\"@door\",\"radius\":2,\"pattern\":\"stone\"}"))).center());
+        List<Op> ops = Tools.batchOps(args("{\"origin\":\"@door\",\"ops\":["
+                + "{\"op\":\"fill\",\"region\":[0,0,0,1,1,1],\"pattern\":\"stone\"},"
+                + "{\"op\":\"line\",\"from\":\"@Door\",\"to\":[2,0,0],\"pattern\":\"stone\"}]}"));
+        assertEquals(Box.of(new Vec3(5, 64, 7), new Vec3(6, 65, 8)), ((Op.Fill) ops.get(0)).box());
+        assertEquals(new Vec3(5, 64, 7), ((Op.Line) ops.get(1)).from());
+        assertEquals(new Vec3(7, 64, 7), ((Op.Line) ops.get(1)).to());
+        assertEquals(new Vec3(5, 64, 7), ((Op.Blocks) single("blocks", args("{\"origin\":\"@door\",\"blocks\":[[0,0,0,\"stone\"]]}"))).blocks().get(0).pos());
+    }
+
+    @Test
+    void anUnknownMarkerListsTheKnownOnes() {
+        assertTrue(error("sphere", "{\"center\":\"@gate\",\"radius\":2,\"pattern\":\"stone\"}").contains("none set yet. A player sets one with /aibuilder mark <name>"));
+        service.markers().set("world", "well", new Vec3(0, 64, 0));
+        service.markers().set("world", "door", new Vec3(5, 64, 7));
+        assertEquals("unknown marker \"@gate\" in world 'world'; markers: door, well. A player sets one with /aibuilder mark <name>.",
+                error("sphere", "{\"center\":\"@gate\",\"radius\":2,\"pattern\":\"stone\"}"));
+    }
+
+    @Test
+    void tellChecksItsArguments() {
+        assertEquals("missing \"message\"", error("tell", "{}"));
+        assertEquals("message is 257 characters; max 256", error("tell", "{\"message\":\"" + "x".repeat(257) + "\"}"));
+        assertEquals("message is empty", error("tell", "{\"message\":\"\\u00a7\\n\"}"));
+        assertTrue(error("tell", "{\"message\":\"hi\",\"teleport\":[0,64,0]}").startsWith("teleport needs a player. 2 players are online"));
+
+        PluginConfig noTeleport = new PluginConfig("127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
+                List.of(), "", null, List.of(), false);
+        ToolRegistry other = new ToolRegistry(service, Logger.getAnonymousLogger());
+        Tools.registerAll(other, new BuildService(null, new FakeBridge(), noTeleport, null));
+        Tool tell = other.all().stream().filter(x -> x.name().equals("tell")).findFirst().orElseThrow();
+        assertEquals("teleport is off; set players.allow-teleport: true in config.yml", assertThrows(EditException.class,
+                () -> tell.handler().call(args("{\"message\":\"hi\",\"teleport\":[0,64,0]}"))).getMessage());
     }
 }

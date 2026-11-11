@@ -38,6 +38,11 @@ SELECTION = "selection"
 Vec = Sequence[Any]  # [x, y, z]; parts may be ints or "~n" relative strings
 
 
+def _pos(position):
+    """A position for the API: [x, y, z], or a "@marker" name left as it is."""
+    return position if isinstance(position, str) else list(position)
+
+
 class AIBuilderError(RuntimeError):
     """A tool call failed (unknown block, outside build zone, server unreachable, ...).
 
@@ -146,7 +151,14 @@ class Builder:
         deletes item frames and armor stands in it. NOT undoable: `undo` does not revert it, so flush the blocks
         it needs (signs, chests, walls) before calling. Returns {"set": n, "spawned": n, "removed": n}, zeros left out.
         """
-        return self.call("decorate", items=items, origin=list(origin) if origin is not None else None, remove=remove)
+        return self.call("decorate", items=items, origin=_pos(origin) if origin is not None else None, remove=remove)
+
+    def tell(self, message: str, teleport: Vec | str | None = None) -> dict:
+        """Chat message (max 256 characters) to the acting player, or to everyone when the console acts; runs now.
+
+        teleport ([x, y, z] or "@marker") puts the acting player's feet there. Returns {"told": [names]}.
+        """
+        return self.call("tell", message=message, teleport=_pos(teleport) if teleport is not None else None)
 
     # ---- edits (queued until flush) ----
 
@@ -156,7 +168,7 @@ class Builder:
         Applies to a whole flush, so anything already queued is sent first. Reads and renders stay absolute.
         """
         self.flush()
-        self._origin = list(origin) if origin is not None else None
+        self._origin = _pos(origin) if origin is not None else None
         return self
 
     def _queue(self, op: str, **args) -> "Builder":
@@ -177,19 +189,19 @@ class Builder:
 
     def cylinder(self, base: Vec, radius: float, height: int, pattern: str,
                  hollow: bool = False, radius_z: float | None = None):
-        return self._queue("cylinder", base=list(base), radius=radius, radius_z=radius_z,
+        return self._queue("cylinder", base=_pos(base), radius=radius, radius_z=radius_z,
                            height=height, pattern=pattern, hollow=hollow)
 
     def sphere(self, center: Vec, radius: float, pattern: str, hollow: bool = False,
                radius_y: float | None = None, radius_z: float | None = None):
-        return self._queue("sphere", center=list(center), radius=radius, radius_y=radius_y,
+        return self._queue("sphere", center=_pos(center), radius=radius, radius_y=radius_y,
                            radius_z=radius_z, pattern=pattern, hollow=hollow)
 
     def pyramid(self, base: Vec, size: int, pattern: str, hollow: bool = False):
-        return self._queue("pyramid", base=list(base), size=size, pattern=pattern, hollow=hollow)
+        return self._queue("pyramid", base=_pos(base), size=size, pattern=pattern, hollow=hollow)
 
     def line(self, start: Vec, end: Vec, pattern: str, thickness: float = 0):
-        return self._queue("line", **{"from": list(start)}, to=list(end), pattern=pattern, thickness=thickness)
+        return self._queue("line", **{"from": _pos(start)}, to=_pos(end), pattern=pattern, thickness=thickness)
 
     def block(self, x, y, z, state: str):
         """Queues one block. Consecutive calls are merged into a single 'blocks' op."""
@@ -201,7 +213,7 @@ class Builder:
 
     def blocks(self, items: Iterable[Sequence[Any]], origin: Vec | None = None):
         """Queues [x, y, z, state] items; with origin they are offsets from it."""
-        return self._queue("blocks", blocks=[list(i) for i in items], origin=list(origin) if origin else None)
+        return self._queue("blocks", blocks=[list(i) for i in items], origin=_pos(origin) if origin else None)
 
     def paste(self, blueprint: dict | str | os.PathLike | None = None, origin: Vec | None = None,
               rotation: int = 0, name: str | None = None):
@@ -213,13 +225,13 @@ class Builder:
         if origin is None:
             raise AIBuilderError("paste needs an origin")
         if name is not None:
-            return self._queue("paste", name=name, origin=list(origin), rotation=rotation)
+            return self._queue("paste", name=name, origin=_pos(origin), rotation=rotation)
         if not isinstance(blueprint, dict):
             path = Path(blueprint)
             if path.suffix in (".schem", ".schematic"):
-                return self._queue("paste", path=str(path.resolve()), origin=list(origin), rotation=rotation)
+                return self._queue("paste", path=str(path.resolve()), origin=_pos(origin), rotation=rotation)
             blueprint = json.loads(path.read_text())
-        return self._queue("paste", blueprint=blueprint, origin=list(origin), rotation=rotation)
+        return self._queue("paste", blueprint=blueprint, origin=_pos(origin), rotation=rotation)
 
     def clone(self, region, to: Vec, rotation: int = 0, flip: str | None = None, repeat: int = 1,
               step: Vec | None = None, air: bool = False):
@@ -228,7 +240,7 @@ class Builder:
         repeat > 1 places more copies, each `step` ([dx, dy, dz], never shifted by at()) further on. air=True
         copies air too instead of merging with what is there. Sign text and container contents are not copied.
         """
-        return self._queue("clone", region=region, to=list(to), rotation=rotation or None, flip=flip,
+        return self._queue("clone", region=region, to=_pos(to), rotation=rotation or None, flip=flip,
                            repeat=repeat if repeat != 1 else None, step=list(step) if step else None, air=air or None)
 
     # The terrain ops read the ground when the batch is sent, before any queued op runs.

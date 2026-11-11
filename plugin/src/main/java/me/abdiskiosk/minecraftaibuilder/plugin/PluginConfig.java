@@ -19,7 +19,8 @@ public record PluginConfig(
         List<String> allowedWorlds,
         String zoneWorld,
         Box zone,
-        List<Path> blueprintDirs) {
+        List<Path> blueprintDirs,
+        boolean allowTeleport) {
 
     public static PluginConfig load(FileConfiguration config) {
         ConfigurationSection zone = config.getConfigurationSection("safety.build-zone");
@@ -36,7 +37,8 @@ public record PluginConfig(
                 config.getStringList("safety.allowed-worlds"),
                 zoneWorld,
                 zoneBox,
-                config.getStringList("safety.blueprint-dirs").stream().map(p -> Path.of(p).toAbsolutePath().normalize()).toList());
+                config.getStringList("safety.blueprint-dirs").stream().map(p -> Path.of(p).toAbsolutePath().normalize()).toList(),
+                config.getBoolean("players.allow-teleport", true));
     }
 
     private static Vec3 vec(List<Integer> list) {
