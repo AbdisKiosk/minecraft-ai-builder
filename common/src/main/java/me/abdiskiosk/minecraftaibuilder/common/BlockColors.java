@@ -2,6 +2,7 @@ package me.abdiskiosk.minecraftaibuilder.common;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /** Approximate map colours by block name keyword. Good enough for Claude to judge shape and palette. */
@@ -40,6 +41,13 @@ public final class BlockColors {
         put("blue", 0x35399D); put("purple", 0x792AAC); put("magenta", 0xBD44B3); put("pink", 0xED8DAC);
     }
 
+    // light_gray and light_blue before gray and blue, which they end with.
+    private static final String[] DYES = {"light_gray", "light_blue", "white", "gray", "black", "brown", "red", "orange",
+            "yellow", "lime", "green", "cyan", "blue", "purple", "magenta", "pink"};
+    private static final Set<String> DYED = Set.of("wool", "carpet", "concrete", "concrete_powder", "terracotta",
+            "glazed_terracotta", "stained_glass", "stained_glass_pane", "stained_clay", "bed", "banner", "wall_banner",
+            "candle", "shulker_box");
+
     private static void put(String keyword, int rgb) {
         KEYWORDS.put(keyword, rgb);
     }
@@ -55,9 +63,10 @@ public final class BlockColors {
     }
 
     private static int lookup(String type) {
-        // Colour words describe the block better than its material (red_wool, white_concrete).
-        for (String colour : new String[]{"light_gray", "light_blue"}) {
-            if (type.startsWith(colour + "_")) return KEYWORDS.get(colour);
+        // A dyed block has its dye's colour, not its material's: red_wool is red although "wool" alone is white.
+        // Only for dyeable materials, so red_sandstone, blue_ice and white_tulip keep their own colours.
+        for (String dye : DYES) {
+            if (type.startsWith(dye + "_") && DYED.contains(type.substring(dye.length() + 1))) return KEYWORDS.get(dye);
         }
         for (Map.Entry<String, Integer> e : KEYWORDS.entrySet()) {
             if (type.contains(e.getKey())) return e.getValue();
