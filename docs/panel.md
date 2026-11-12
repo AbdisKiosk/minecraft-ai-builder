@@ -44,18 +44,19 @@ from `plugin/` for the panel to offer as a download (in Coolify: base directory 
 `/panel/Dockerfile`):
 
 ```bash
-docker build -f panel/Dockerfile -t aibuilder-panel .
+docker build -f panel/Dockerfile --build-arg GIT_COMMIT=$(git rev-parse --short HEAD) -t aibuilder-panel .
 docker run --env-file panel.env -p 3000:3000 aibuilder-panel
 ```
 
 Set the variables from `.env.example`, with `APP_BASE_URL` the public `https://` address; the plugins then use the
-matching `wss://` address. The container listens on port 3000 and answers `GET /api/health`. Put TLS in front of it:
+matching `wss://` address. `GIT_COMMIT` (or `SOURCE_COMMIT`, which Coolify passes) is the commit in the plugin jar's
+name; without it the downloads are named without one. The container listens on port 3000 and answers `GET /api/health`. Put TLS in front of it:
 tokens and the session cookie travel in every request.
 
 ## Connect a Minecraft server
 
 On the dashboard, name the server and press **Add server & download plugin**. The panel makes the server and downloads
-`AIBuilder.jar` with the server's relay settings inside (`aibuilder-setup.properties`, added by
+`AIBuilder-<server>-<commit>.jar` with the server's relay settings inside (`aibuilder-setup.properties`, added by
 `lib/server/jarSetup.ts`). Put it in the server's `plugins` folder next to WorldEdit and restart: on start the plugin
 writes those settings into `plugins/AIBuilder/config.yml` (`JarSetup`) and connects. The setup page waits for that
 connection live and then shows how to connect Claude Code.

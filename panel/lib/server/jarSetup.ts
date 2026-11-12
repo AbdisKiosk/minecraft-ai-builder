@@ -9,7 +9,18 @@ export function setupProperties(url: string, token: string): string {
   return `# This server's connection to the AIBuilder panel. Keep this jar private: it contains the server's key.\nurl=${url}\ntoken=${token}\n`;
 }
 
-const EOCD = 0x06054b50, CEN = 0x02014b50, LOC = 0x04034b50;
+/**
+ * The name of a server's download: AIBuilder-<server>-<commit>.jar, the commit coming from the built jar's name
+ * (AIBuilder-<version>+<commit>.jar, see plugin/core/build.gradle). ASCII only, so it fits a plain Content-Disposition.
+ */
+export function downloadName(serverName: string, jarName: string): string {
+  const server = serverName.normalize('NFKD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+    .replace(/-+$/, '');
+  const commit = /\+([0-9A-Za-z.-]+)\.jar$/.exec(jarName)?.[1];
+  return ['AIBuilder', server, commit].filter(Boolean).join('-') + '.jar';
+}
+
+const EOCD =0x06054b50, CEN = 0x02014b50, LOC = 0x04034b50;
 
 /**
  * The jar with one more stored (uncompressed) file at the end. The original entries keep their bytes and offsets;

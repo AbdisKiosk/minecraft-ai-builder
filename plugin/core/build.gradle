@@ -22,9 +22,19 @@ processResources {
     filesMatching('plugin.yml') { expand(props) }
 }
 
+// The commit the jar is built from, as build metadata in its name (AIBuilder-0.1.0-SNAPSHOT+f7e20c1.jar), which the
+// panel copies into the name of the jar it hands out. GIT_COMMIT wins: the panel's Docker build has no .git to ask.
+def commit = providers.environmentVariable('GIT_COMMIT').orElse(providers.exec {
+    commandLine 'git', 'describe', '--always', '--dirty', '--abbrev=7'
+    ignoreExitValue = true
+}.standardOutput.asText).map { it.trim().replaceFirst(/^([0-9a-f]{7})[0-9a-f]{33}$/, '$1') }.getOrElse('')
+
 shadowJar {
     archiveBaseName = 'AIBuilder'
     archiveClassifier = ''
+    if (commit ==~ /[0-9A-Za-z.-]+/) archiveVersion = "${project.version}+${commit}"
+    // Each commit names its own jar; drop the earlier ones so build/libs holds only this build's.
+    doFirst { delete fileTree(destinationDirectory) { include 'AIBuilder-*.jar' } }
     relocate 'com.google.gson', 'me.abdiskiosk.minecraftaibuilder.libs.gson'
     exclude 'META-INF/maven/**', 'META-INF/proguard/**', 'META-INF/versions/**/module-info.class', 'module-info.class', 'com/google/errorprone/**'
 }

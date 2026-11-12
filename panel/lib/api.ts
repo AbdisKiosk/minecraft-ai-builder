@@ -26,13 +26,14 @@ export function message(ex: unknown): string {
 
 export const serverApi = (id: string) => `/api/servers/${encodeURIComponent(id)}`;
 
-const downloads = new Map<string, Promise<void>>();
+const downloads = new Map<string, Promise<string>>();
 
 /**
- * Downloads the server's own copy of the plugin (AIBuilder.jar with its connection inside). The promise is kept, so
- * the setup page can show how a download started on the dashboard went.
+ * Downloads the server's own copy of the plugin (the jar with its connection inside) and resolves to the file's name,
+ * AIBuilder-<server>-<commit>.jar. The promise is kept, so the setup page can show how a download started on the
+ * dashboard went.
  */
-export function downloadPlugin(serverId: string): Promise<void> {
+export function downloadPlugin(serverId: string): Promise<string> {
   const p = (async () => {
     const res = await fetch(`${serverApi(serverId)}/plugin`, { method: 'POST', credentials: 'same-origin' });
     if (res.status === 401) {
@@ -43,14 +44,16 @@ export function downloadPlugin(serverId: string): Promise<void> {
       const body = await res.json().catch(() => null);
       throw new Error(body?.error || `${res.status} ${res.statusText}`);
     }
+    const name = /filename="([^"]+)"/.exec(res.headers.get('Content-Disposition') ?? '')?.[1] ?? 'AIBuilder.jar';
     const url = URL.createObjectURL(await res.blob());
     const a = document.createElement('a');
     a.href = url;
-    a.download = 'AIBuilder.jar';
+    a.download = name;
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    return name;
   })();
   downloads.set(serverId, p);
   return p;
