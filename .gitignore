@@ -48,3 +48,10 @@ panel/run/
 __pycache__/
 *.pyc
 builds/*.png
+
+### Hosted panel (web/) ###
+web/node_modules/
+web/.next/
+web/dist/
+web/.env*
+!web/.env.example
