@@ -198,6 +198,27 @@ public final class Blueprint {
         return out.toString().toCharArray();
     }
 
+    /** A copy whose cells of the matching palette values keep what is there, e.g. blocks this server does not have. */
+    public Blueprint without(java.util.function.Predicate<String> drop) {
+        Map<Character, String> kept = new java.util.HashMap<>();
+        palette.forEach((k, v) -> { if (!drop.test(v)) kept.put(k, v); });
+        if (kept.size() == palette.size()) return this;
+        char[][][] out = new char[sizeY()][sizeZ()][];
+        long cells = 0;
+        for (int y = 0; y < sizeY(); y++) {
+            for (int z = 0; z < sizeZ(); z++) {
+                char[] row = grid[y][z].clone();
+                for (int x = 0; x < row.length; x++) {
+                    if (row[x] == SKIP) continue;
+                    if (kept.containsKey(row[x])) cells++;
+                    else row[x] = SKIP;
+                }
+                out[y][z] = row;
+            }
+        }
+        return new Blueprint(Map.copyOf(kept), out, sizeX, cells);
+    }
+
     /** Layers {@code fromY} (inclusive) to {@code toY} (exclusive); keeps the footprint so rotated pieces line up. */
     public Blueprint slice(int fromY, int toY) {
         char[][][] part = java.util.Arrays.copyOfRange(grid, fromY, toY);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { api, assetApi, assetsApi, message } from '../lib/api';
 import { ago, num } from '../lib/format';
+import { capped, placeWarning } from '../lib/mcVersion';
 import { draftHref, go } from '../lib/routes';
 import { can, type Asset, type AssetList } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
@@ -138,7 +139,10 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: 
   const [to, setTo] = useState(targets.find(s => s.online)?.id ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  // Shown instead of the form when the import left blocks out, before going to the draft.
+  const [placed, setPlaced] = useState<{ draft?: string; skipped: string[] } | null>(null);
   const worlds = servers.get(to)?.info?.worlds ?? [];
+  const warning = to ? placeWarning(asset.mc, servers.get(to)?.info?.mc) : null;
 
   const submit = async (ev: FormEvent<HTMLFormElement>) => {
     ev.preventDefault();
@@ -151,6 +155,7 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: 
       const r = await api<{ draft?: string; error?: string; skipped?: string[] }>(`${assetApi(asset.id)}/place`, { method: 'POST',
         body: JSON.stringify({ server: to, world: String(f.get('world') || ''), origin, air: f.has('air'), skipUnknown: f.has('skipUnknown') }) });
       if (r.error) throw new Error(r.error);
+      if (r.skipped?.length) return setPlaced({ draft: r.draft, skipped: r.skipped });
       onClose();
       if (r.draft) go(draftHref(to, r.draft));
       else alert('Nothing changed on that server: it already has these blocks there.');
@@ -159,6 +164,28 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: 
       setBusy(false);
     }
   };
+
+  if (placed) {
+    const { shown, more } = capped(placed.skipped, 20);
+    return (
+      <Modal className="form-dialog" onClose={onClose}><div style={{ display: 'grid', gap: 12 }}>
+        <div className="dialog-head"><h2>Placed {asset.name}</h2></div>
+        <p style={{ margin: 0 }}>{placed.draft ? 'The draft is ready.' : 'Nothing changed on that server.'} It leaves out
+          {' '}{placed.skipped.length === 1 ? 'one block state' : `${num(placed.skipped.length)} block states`} that server
+          does not have; where they were, the world keeps what is there.</p>
+        <ul className="mono" style={{ margin: 0, overflowWrap: 'anywhere' }}>
+          {shown.map(s => <li key={s}>{s}</li>)}
+          {more > 0 && <li className="muted">and {num(more)} more</li>}
+        </ul>
+        <div className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
+          {placed.draft ? <>
+            <button type="button" className="ghost" onClick={onClose}>Close</button>
+            <button type="button" onClick={() => { onClose(); go(draftHref(to, placed.draft!)); }}>Open draft</button>
+          </> : <button type="button" onClick={onClose}>Close</button>}
+        </div>
+      </div></Modal>
+    );
+  }
 
   return (
     <Modal className="form-dialog" onClose={onClose}>
@@ -170,6 +197,7 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: 
           <label>Server <select name="to" required value={to} onChange={e => setTo(e.target.value)}>
             {targets.map(s => <option key={s.id} value={s.id} disabled={!s.online}>{s.name}{s.online ? '' : ' (offline)'}</option>)}
           </select></label>
+          {warning && <p className="warn" style={{ margin: 0 }}>{warning}</p>}
           <label>World {worlds.length
             ? <select key={to} name="world" required defaultValue={worlds[0]}>{worlds.map(w => <option key={w}>{w}</option>)}</select>
             : <input type="text" name="world" defaultValue="world" required />}</label>

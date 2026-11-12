@@ -5,7 +5,8 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan, except the `.schem` upload, which is built (see "Upload a .schem" in `panel.md`).
+Phase 3 is a plan, except the `.schem` upload (see "Upload a .schem" in `panel.md`) and version-mismatch reporting,
+which are built.
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -53,7 +54,10 @@ Built with these deviations:
 - **Anchor and facing:** store which block is the attachment point and which way the asset faces, so Claude can rotate
   a window onto any wall instead of guessing from the min corner.
 - **Version mismatch:** an asset saved on 1.21 and pasted on 1.8 goes through the existing unknown-block handling. The
-  result reports what was skipped.
+  result reports what was skipped. Built, report-only (see "Assets" in `panel.md`): Place… warns before a newer asset
+  goes to an older server and lists the states the import left out; `paste name=` of a library asset leaves out the
+  states the server lacks and names them in `skipped`. Nothing is remapped, so a state that exists on both versions
+  with a changed meaning is not detected.
 - **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. This needs a link between a Minecraft
   player and a panel account, which does not exist yet.
 - **`.schem` upload** on the Library page. Built: Sponge versions 2 and 3, parsed on the panel

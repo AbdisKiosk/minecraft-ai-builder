@@ -277,6 +277,12 @@ not to a server, so they can be placed on every server where the user is a build
 - The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
   the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
   and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+- Other Minecraft versions: **Place…** warns when the asset was saved on a newer version than the chosen server
+  reports, or when either version is unknown (`lib/mcVersion.ts`). The warning is advisory; the import still refuses
+  block states the server does not have unless **leave out blocks that server does not have** is ticked, and then the
+  dialog lists the states it left out (the first 20 and a count) before opening the draft. Those cells keep what is in
+  the world. Only states the server does not know are caught: nothing is renamed or remapped, and a state that exists
+  on both versions but means something else on the older one is placed as it is.
 - **Upload .schem** on the Assets page (any signed-in user, no server role): a WorldEdit `.schem` of at most 8 MB, with
   a name (prefilled from the file name), description and tags as above. See "Upload a .schem" below.
 - Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Each asset is at most 2,000,000 blocks and 5 MB
@@ -316,6 +322,11 @@ that account's library on every server where it is a builder.
 - `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters.
   If the library cannot be reached, it says so in `assets_error` and the rest of the context is still returned.
 - `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library.
+- A library asset may hold block states this server does not have (it was saved on a newer version). `paste` leaves
+  those cells as they are in the world and places the rest; the result names them in `skipped` (a missing block by
+  its name, a bad property value by the whole state; at most 10, sorted, with `skipped_total` when there are more).
+  An asset with nothing but such states and air is refused. Blueprints Claude writes, saved blueprints and files are
+  still refused as a whole on an unknown state. As in the panel, nothing is remapped.
 - `save_blueprint` (with an optional `description`) saves to the caller's library only, never on the server. A save
   that fails, for example on quota or a taken name, is not saved on the server instead.
 - Ownership: for each tool call the panel gives the plugin a random grant that ends with the call (at most 6 minutes).

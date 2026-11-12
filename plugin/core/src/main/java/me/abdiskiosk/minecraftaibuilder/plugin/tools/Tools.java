@@ -84,6 +84,8 @@ public final class Tools {
     private static final int MAX_BLOCKS_PER_OP = 200_000;
     private static final int MAX_ROOF_SIDE = 256;
     private static final int MAX_LISTED_REGIONS = 30;
+    /** Block states a library paste names as left out; more only adds skipped_total. */
+    private static final int MAX_SKIPPED = 10;
     private static final String TELL_PREFIX = "[AIBuilder] ";
     private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
@@ -482,7 +484,17 @@ public final class Tools {
         BuildService.JobResult result = service.await(service.submit(a.caller(), ops));
         ToolResult out = jobJson(result, true);
         if (ambiguousCaller(a.caller())) out.data().addProperty("as", a.caller().name());
+        addSkipped(out.data(), a.skipped());
         return out;
+    }
+
+    /** What library pastes left out, capped: the result must not grow with the asset. */
+    static void addSkipped(JsonObject o, Set<String> skipped) {
+        if (skipped.isEmpty()) return;
+        JsonArray list = new JsonArray();
+        skipped.stream().sorted().limit(MAX_SKIPPED).forEach(list::add);
+        o.add("skipped", list);
+        if (skipped.size() > MAX_SKIPPED) o.addProperty("skipped_total", skipped.size());
     }
 
     private static ToolResult decorate(Args a, BuildService service) {
@@ -945,11 +957,13 @@ public final class Tools {
             String name = savedName(a.str("name"));
             AssetLibrary library = a.service().personalLibrary();
             if (!Files.isRegularFile(savedDir(a.service()).resolve(name + ".json")) && library != null) {
+                Blueprint asset;
                 try {
-                    return library.load(name, a.service().config().maxVolumePerOp());
+                    asset = library.load(name, a.service().config().maxVolumePerOp());
                 } catch (EditException e) {
                     throw new EditException("no local blueprint '" + name + "'; " + e.getMessage(), e);
                 }
+                return withoutUnknown(asset, name, a);
             }
             json = readSavedBlueprint(name, a.service());
         } else {
@@ -974,6 +988,33 @@ public final class Tools {
             layers.add(rows);
         }
         return Blueprint.of(palette, layers);
+    }
+
+    /**
+     * A library asset may come from a newer Minecraft. Its states this server lacks keep what is there, as promote's
+     * skip unknown blocks does, and are named in the result; a blueprint Claude wrote still fails on them.
+     */
+    private static Blueprint withoutUnknown(Blueprint asset, String name, Args a) {
+        BlockCatalog catalog = a.service().bridge().catalog();
+        Set<String> unknown = new java.util.HashSet<>(), names = new java.util.TreeSet<>();
+        for (String state : asset.palette().values()) {
+            if (RegionCodec.isAir(state)) continue;
+            Set<String> errors = new java.util.HashSet<>();
+            me.abdiskiosk.minecraftaibuilder.common.BlockCheck.checkBlock(catalog, state, errors, new java.util.HashSet<>());
+            if (errors.isEmpty()) continue;
+            unknown.add(state);
+            // A missing block by its name, a bad property value by the whole state.
+            String type = state.indexOf('[') < 0 ? state : state.substring(0, state.indexOf('['));
+            names.add(catalog.info(type).isPresent() ? state : type);
+        }
+        if (unknown.isEmpty()) return asset;
+        Blueprint kept = asset.without(unknown::contains);
+        if (kept.palette().values().stream().allMatch(RegionCodec::isAir)) {
+            throw new EditException("this server has none of the blocks of asset '" + name + "': "
+                    + String.join(", ", names.stream().limit(MAX_SKIPPED).toList()));
+        }
+        a.skipped().addAll(names);
+        return kept;
     }
 
     /** An absolute .json, .schem or .schematic path inside {@code safety.blueprint-dirs}, at most 5 MB. */
