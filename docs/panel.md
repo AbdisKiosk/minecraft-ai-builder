@@ -277,6 +277,8 @@ not to a server, so they can be placed on every server where the user is a build
 - The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
   the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
   and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+- **Upload .schem** on the Assets page (any signed-in user, no server role): a WorldEdit `.schem` of at most 8 MB, with
+  a name (prefilled from the file name), description and tags as above. See "Upload a .schem" below.
 - Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Each asset is at most 2,000,000 blocks and 5 MB
   of compressed region data, whether saved on the panel or by Claude. Nobody can see, change or place another user's
   asset; saving and placing need the builder role on the server, as promote does.
@@ -285,6 +287,26 @@ not to a server, so they can be placed on every server where the user is a build
   properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
   view; a wrong guess changes only how the preview draws a block, never what is placed. Migration
   `006_asset_usage.sql` adds `last_used_at`, which orders the list Claude sees.
+
+### Upload a .schem
+
+`POST /api/assets/upload` takes a multipart form with `file`, `name`, `description` and `tags` (comma-separated) and
+answers 201 with the asset. The file is parsed on the panel (`lib/server/schem.ts`) and saved through the same code as
+an asset saved from a server, so quota, name, ownership and the 3D view work the same and the asset can be placed or
+pasted by Claude like any other.
+
+- Supported: Sponge schematic versions 2 and 3, which WorldEdit 7 writes. Refused, each with its own message: MCEdit
+  `.schematic`, Sponge version 1, Litematica, and anything that is not gzipped NBT.
+- Only block states are kept; block entities (sign text, chest contents), entities and biomes are dropped. The
+  schematic's `Offset` is ignored: the asset starts at 0 0 0, in the same orientation as a saved region. States lose the
+  `minecraft:` namespace; other namespaces stay as written; `cave_air` and `void_air` become `air`.
+- The Minecraft version comes from `DataVersion` through a table of releases (1.13 to 1.21.10, and 26.3). Any other
+  data version is stored as unknown, so the 3D view is not shown for it.
+- Bounds, since the file comes from a browser: 8 MB uploaded (by `Content-Length` before reading, while reading and
+  after), 64 MB unpacked, the asset limits (2,000,000 blocks, 5 MB of region data), 65,536 palette entries, 256
+  characters per state, NBT nested at most 64 deep. Lengths in the file are checked against the bytes left before
+  anything is read from them. A palette index the palette lacks, block data shorter or longer than the region, and
+  data after the end are refused. Next.js buffers request bodies through the proxy up to 10 MB, above the 8 MB bound.
 
 ### Assets in Claude's calls
 

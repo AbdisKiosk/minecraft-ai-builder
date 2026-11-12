@@ -5,7 +5,7 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan.
+Phase 3 is a plan, except the `.schem` upload, which is built (see "Upload a .schem" in `panel.md`).
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -56,7 +56,8 @@ Built with these deviations:
   result reports what was skipped.
 - **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. This needs a link between a Minecraft
   player and a panel account, which does not exist yet.
-- **`.schem` upload** on the Library page.
+- **`.schem` upload** on the Library page. Built: Sponge versions 2 and 3, parsed on the panel
+  (`lib/server/schem.ts`) and saved through the same path as every other asset; only the blocks are kept.
 - **Sharing an asset with a server** so all its members can use it.
 
 ## Tests and limits

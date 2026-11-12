@@ -8,6 +8,7 @@ import Modal from './Modal';
 import { Viewer3d } from './Pictures';
 import { parseTags } from './SaveAssetDialog';
 import { Badge } from './shared';
+import UploadAssetDialog from './UploadAssetDialog';
 
 const NAME = /^[a-z0-9_-]{1,40}$/;
 const mb = (bytes: number) => (bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0) + ' MB';
@@ -19,6 +20,7 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
   const [open, setOpen] = useState<string | null>(null);
   const [editing, setEditing] = useState<Asset | null>(null);
   const [placing, setPlacing] = useState<Asset | null>(null);
+  const [uploading, setUploading] = useState(false);
   // The 3D view needs room to drag in.
   const [small, setSmall] = useState(false);
   useEffect(() => setSmall(window.matchMedia('(max-width: 700px)').matches), []);
@@ -44,8 +46,9 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
     <>
       <div className="page-head"><div><h1>Assets</h1>
         <div className="muted">Pieces you saved (a window, a pillar, a tree), kept with your account rather than a server.
-          Save one from a server&apos;s <b>Map</b> with <b>Save as asset</b>.
-          {list && <> {list.quota.count} of {list.quota.maxCount} assets, {mb(list.quota.bytes)} of {mb(list.quota.maxBytes)}.</>}</div></div></div>
+          Save one from a server&apos;s <b>Map</b> with <b>Save as asset</b>, or upload a WorldEdit <span className="mono">.schem</span>.
+          {list && <> {list.quota.count} of {list.quota.maxCount} assets, {mb(list.quota.bytes)} of {mb(list.quota.maxBytes)}.</>}</div></div>
+        <button onClick={() => setUploading(true)}>Upload .schem</button></div>
       {error && <p className="error">{error}</p>}
       {shown && (
         <section className="card" style={{ marginBottom: 16 }}>
@@ -86,6 +89,7 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
         )}
       {editing && <EditAssetDialog asset={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {placing && <PlaceAssetDialog asset={placing} servers={servers} onClose={() => setPlacing(null)} />}
+      {uploading && <UploadAssetDialog onClose={() => setUploading(false)} onSaved={load} />}
     </>
   );
 }
