@@ -181,6 +181,25 @@ public sealed interface Op {
         public Box bounds() { return box; }
     }
 
+    /**
+     * A tree grown by the server's own generator, so it looks like a natural one. {@code type} is a WorldEdit tree
+     * name (oak, birch, spruce, ...); the tree stands on {@code at}, which must be free and have soil below it.
+     */
+    record Tree(Vec3 at, String type) implements Op {
+        public long volume() { return 500; }
+        public Box bounds() { return Box.of(at.add(-3, 0, -3), at.add(3, 10, 3)); }
+    }
+
+    /**
+     * Places {@code block} on dark floors of the box until {@link RegionLint}'s dark check is clean. It reads the
+     * world after the other ops of its call have run, so it can light what the same call builds.
+     */
+    record Light(Box box, String block) implements Op {
+        public long volume() { return box.volume(); }
+        public Box bounds() { return box; }
+        public List<String> patterns() { return List.of(block); }
+    }
+
     record BlockAt(Vec3 pos, String state) {
     }
 

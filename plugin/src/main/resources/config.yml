@@ -13,8 +13,8 @@ limits:
   blocks-per-tick: 4000
   # Largest single operation, in blocks.
   max-volume-per-op: 2000000
-  # Largest region read_region / render_region may read (64^3 = 262144).
-  max-read-volume: 262144
+  # Largest region a read, check, render or light may cover. Reads are spread over ticks, 100000 blocks at a time.
+  max-read-volume: 2000000
   # How long a tool call waits for its job before returning "running".
   job-wait-seconds: 30
 

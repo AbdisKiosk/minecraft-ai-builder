@@ -37,7 +37,7 @@ public record PluginConfig(
                 config.getString("http.token", ""),
                 Math.max(100, config.getInt("limits.blocks-per-tick", 4000)),
                 config.getLong("limits.max-volume-per-op", 2_000_000L),
-                config.getLong("limits.max-read-volume", 262_144L),
+                config.getLong("limits.max-read-volume", 2_000_000L),
                 Math.max(1, config.getInt("limits.job-wait-seconds", 30)),
                 config.getStringList("safety.allowed-worlds"),
                 zoneWorld,

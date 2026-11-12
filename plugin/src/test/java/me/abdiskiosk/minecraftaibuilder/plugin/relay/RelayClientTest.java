@@ -120,7 +120,7 @@ class RelayClientTest {
         assertEquals(202, send("POST", "/s/test/mcp", "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}").statusCode());
 
         HttpResponse<String> list = send("POST", "/s/test/mcp", "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}");
-        assertTrue(list.body().contains("\"fill\""), list.body());
+        assertTrue(list.body().contains("\"build\""), list.body());
 
         assertEquals(400, send("POST", "/s/test/api/fill", "[1,2]").statusCode());
     }
