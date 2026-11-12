@@ -2,6 +2,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin.tools;
 
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
@@ -15,6 +16,9 @@ import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.AssetLibrary;
+import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
+import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
@@ -380,6 +384,101 @@ class ToolsTest {
         assertEquals("give exactly one of \"blueprint\", \"path\" or \"name\"",
                 error("place_blueprint", "{\"name\":\"hut-1\",\"path\":\"/tmp/x.json\",\"origin\":[0,0,0]}"));
         assertEquals("give exactly one of \"blueprint\", \"path\" or \"name\"", error("place_blueprint", "{\"origin\":[0,0,0]}"));
+    }
+
+    @Test
+    void authenticatedSavesUseTheLibraryAndLocalNamesStillWin() throws IOException {
+        java.util.List<String> operations = new java.util.ArrayList<>();
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> {
+            operations.add(op);
+            if (op.equals("list")) return JsonParser.parseString("{\"assets\":[{\"name\":\"window\",\"size\":[1,1,1],\"description\":\"oak\"}]}").getAsJsonObject();
+            if (op.equals("save")) {
+                assertEquals("oak window", data.get("description").getAsString());
+                assertArrayEquals(new String[]{"stone"}, StateArrays.decode(java.util.Base64.getDecoder().decode(data.get("data").getAsString()), 1));
+                return JsonParser.parseString("{\"saved\":\"window\",\"library\":true}").getAsJsonObject();
+            }
+            if (op.equals("check")) return new JsonObject();
+            throw new AssertionError("local names must not request a personal asset");
+        }));
+        world.put(new Vec3(0, 64, 0), "stone");
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            JsonObject saved = call("save_blueprint", "{\"name\":\"window\",\"region\":[0,64,0,0,64,0],\"description\":\"oak window\"}").data();
+            assertTrue(saved.get("library").getAsBoolean());
+            assertFalse(Files.exists(dataDir.resolve("blueprints/window.json")));
+            JsonObject context = registry.call("get_context", new JsonObject()).data();
+            assertEquals("window", context.getAsJsonArray("assets").get(0).getAsJsonObject().get("name").getAsString());
+            return null;
+        });
+        assertEquals(List.of("check", "save", "list"), operations);
+        // A local blueprint remains usable even during a personal-library outage/name collision.
+        call("save_blueprint", "{\"name\":\"window\",\"region\":[0,64,0,0,64,0]}");
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            assertInstanceOf(Op.Paste.class, single("paste", args("{\"name\":\"window\",\"origin\":[5,64,0]}")));
+            return null;
+        });
+        assertEquals(3, operations.size());
+    }
+
+    @Test
+    void failingLibraryDoesNotHideContextOrSilentlySaveLocally() {
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> { throw new EditException("asset storage is down"); }));
+        world.put(new Vec3(0, 64, 0), "stone");
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            assertEquals("asset storage is down", registry.call("get_context", new JsonObject()).data().get("assets_error").getAsString());
+            assertEquals("asset storage is down", error("save_blueprint", "{\"name\":\"window\",\"region\":[0,64,0,0,64,0]}"));
+            assertFalse(Files.exists(dataDir.resolve("blueprints/window.json")));
+            EditException e = assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"origin\":[5,64,0]}")));
+            assertEquals("no local blueprint 'window'; asset storage is down", e.getMessage(), "says where it looked");
+            return null;
+        });
+    }
+
+    @Test
+    void withoutALibraryOnThePanelAnAccountCallKeepsServerBlueprints() {
+        // welcome without "assets" (an older panel, or one without object storage): as if the call had no account.
+        java.util.List<String> operations = new java.util.ArrayList<>();
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> { operations.add(op); throw new AssertionError(op); }, () -> false));
+        world.put(new Vec3(0, 64, 0), "stone");
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            JsonObject context = registry.call("get_context", new JsonObject()).data();
+            assertFalse(context.has("assets"));
+            assertFalse(context.has("assets_error"));
+            String missing = assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"origin\":[5,64,0]}"))).getMessage();
+            assertFalse(missing.contains("library"), missing);
+            assertTrue(missing.startsWith("no saved blueprint 'window'"), missing);
+            JsonObject saved = call("save_blueprint", "{\"name\":\"window\",\"region\":[0,64,0,0,64,0],\"description\":\"oak\"}").data();
+            assertFalse(saved.has("library"));
+            assertTrue(Files.exists(dataDir.resolve("blueprints/window.json")));
+            assertInstanceOf(Op.Paste.class, single("paste", args("{\"name\":\"window\",\"origin\":[5,64,0]}")));
+            return null;
+        });
+        assertEquals(List.of(), operations);
+    }
+
+    /** The largest asset listing get_context can carry: 30 assets, 40-character names, huge sizes, 80-character descriptions. */
+    @Test
+    void largestAssetListingStaysSmall() {
+        JsonArray assets = new JsonArray();
+        for (int i = 0; i < 40; i++) { // more than the panel sends: the plugin keeps 30
+            JsonObject a = new JsonObject();
+            a.addProperty("name", String.format("%02d", i) + "x".repeat(38));
+            JsonArray size = new JsonArray();
+            size.add(1_999_999); size.add(1); size.add(1);
+            a.add("size", size);
+            a.addProperty("description", "\"quoted\" \\ " + "d".repeat(69)); // 80 characters, some escaped in JSON
+            assets.add(a);
+        }
+        JsonObject answer = new JsonObject();
+        answer.add("assets", assets);
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> answer));
+        JsonObject plain = registry.call("get_context", new JsonObject()).data();
+        JsonObject context = CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)),
+                () -> registry.call("get_context", new JsonObject()).data());
+        assertEquals(AssetLibrary.MAX_LISTED, context.getAsJsonArray("assets").size());
+        int added = context.toString().length() - plain.toString().length();
+        // 30 x (name 40 + size 15 + description 80 + JSON punctuation and escapes) = 5,201 characters, about 1.5k tokens.
+        assertEquals(5_201, added);
+        assertTrue(added <= 5_500, "get_context's asset listing is capped at 5,500 characters; it was " + added);
     }
 
     @Test

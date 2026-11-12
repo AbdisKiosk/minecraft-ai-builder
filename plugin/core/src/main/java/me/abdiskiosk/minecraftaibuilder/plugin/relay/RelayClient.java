@@ -13,6 +13,7 @@ import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.AssetLibrary;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 import me.abdiskiosk.minecraftaibuilder.plugin.Drafts;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
@@ -51,6 +52,7 @@ public final class RelayClient implements BuildService.JobListener {
     private static final long DEAD_MILLIS = 65_000;
     private static final long MAX_BACKOFF = 60;
     private static final long PROGRESS_EVERY_MS = 250;
+    private static final String REFUSED = "the panel refused: ";
 
     private final URI uri;
     private final String token;
@@ -74,6 +76,7 @@ public final class RelayClient implements BuildService.JobListener {
     private final java.util.concurrent.atomic.AtomicBoolean uploadQueued = new java.util.concurrent.atomic.AtomicBoolean();
     /** The panel on this connection keeps history in object storage. */
     private volatile boolean archive;
+    private volatile boolean assets;
 
     private volatile WebSocket socket;
     private volatile boolean stopped;
@@ -101,6 +104,8 @@ public final class RelayClient implements BuildService.JobListener {
         this.service = service;
         this.hello = hello;
         this.logger = logger;
+        // Only a panel whose welcome said "assets":true has a library; without one, calls keep server blueprints.
+        service.setAssetLibrary(new AssetLibrary(service.dataDir(), this::asset, () -> assets));
     }
 
     /** Accepts {@code https://panel.example.com} as well as {@code wss://panel.example.com/relay}. */
@@ -174,6 +179,7 @@ public final class RelayClient implements BuildService.JobListener {
     private synchronized void failed(String why) {
         socket = null;
         archive = false;
+        assets = false;
         for (CompletableFuture<JsonObject> f : answers.values()) f.completeExceptionally(new IllegalStateException("disconnected"));
         answers.clear();
         if (stopped) return;
@@ -275,7 +281,7 @@ public final class RelayClient implements BuildService.JobListener {
         workers.submit(() -> {
             RestApi.Response r;
             try {
-                r = switch (type) {
+                r = CallContext.withIdentity(identity(frame), () -> switch (type) {
                     case RelayProtocol.MCP -> {
                         JsonElement body = frame.get("body");
                         JsonElement out = CallContext.withSource("panel mcp", () -> mcp.handle(body));
@@ -290,7 +296,7 @@ public final class RelayClient implements BuildService.JobListener {
                     case RelayProtocol.DRAFT -> draft(frame);
                     case RelayProtocol.LESSONS -> lessons(frame);
                     default -> RestApi.error(400, "unknown frame type '" + type + "'");
-                };
+                });
             } catch (EditException e) {
                 r = RestApi.error(400, e.getMessage());
             } catch (RuntimeException e) {
@@ -341,10 +347,41 @@ public final class RelayClient implements BuildService.JobListener {
     // ---- history archive ----
 
     private void welcome(JsonObject frame) {
+        assets = frame.has("assets") && frame.get("assets").getAsBoolean();
         if (history == null || !frame.has("archive") || !frame.get("archive").getAsBoolean()) return;
         archive = true;
         history.archiveTo(this::scheduleUploads);
         scheduleUploads();
+    }
+
+    private static CallContext.Identity identity(JsonObject frame) {
+        if (!frame.has("user")) return null; // old panels and non-tool requests keep local blueprint behaviour
+        long user = frame.get("user").getAsLong();
+        // No grant: the panel has too many calls open on this socket; asset operations then refuse, others run.
+        String key = frame.has("assetKey") ? frame.get("assetKey").getAsString() : null;
+        if (user < 1 || (key != null && !key.matches("[a-f0-9]{64}"))) throw new EditException("invalid authenticated asset caller");
+        return new CallContext.Identity(user, key);
+    }
+
+    private JsonObject asset(String op, JsonObject args) {
+        CallContext.Identity caller = CallContext.identity();
+        if (caller == null || !assets || socket == null) throw new EditException("the personal asset library is unavailable; connect an updated panel with object storage");
+        if (caller.assetKey() == null) throw new EditException("the panel is busy and could not open your asset library; try again");
+        JsonObject frame = new JsonObject();
+        frame.addProperty("t", RelayProtocol.ASSET);
+        frame.addProperty("op", op);
+        frame.addProperty("assetKey", caller.assetKey());
+        frame.add("args", args);
+        try {
+            return answered(frame);
+        } catch (IOException e) {
+            // The panel's own words name the library ("no asset 'x' in your library"); a transport failure does not.
+            String msg = e.getMessage();
+            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : "asset library: " + msg);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EditException("asset request interrupted");
+        }
     }
 
     /** Uploads the entries the panel does not have yet, one at a time, on the upload thread. */
@@ -431,7 +468,7 @@ public final class RelayClient implements BuildService.JobListener {
         if (status / 100 != 2) {
             String msg = body != null && body.isJsonObject() && body.getAsJsonObject().has("error")
                     ? body.getAsJsonObject().get("error").getAsString() : "status " + status;
-            throw new IOException("the panel refused: " + msg);
+            throw new IOException(REFUSED + msg);
         }
         return body != null && body.isJsonObject() ? body.getAsJsonObject() : new JsonObject();
     }

@@ -8,6 +8,10 @@ import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
+import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
+import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tool;
+import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolResult;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
@@ -25,6 +29,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -39,6 +44,7 @@ class RelayClientTest {
     private McpEndpoint mcp;
     private RestApi api;
     private BuildService service;
+    private ToolRegistry registry;
     private String url;
 
     @BeforeEach
@@ -54,7 +60,7 @@ class RelayClientTest {
         service = new BuildService(null, bridge, config, dir);
         History.Settings settings = new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000);
         history = new History(null, service, settings);
-        ToolRegistry registry = new ToolRegistry(service, Logger.getAnonymousLogger());
+        registry = new ToolRegistry(service, Logger.getAnonymousLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, "test");
         api = new RestApi(registry);
@@ -191,6 +197,134 @@ class RelayClientTest {
         assertEquals(id, row.get("id").getAsString());
         assertEquals(1, row.get("placed").getAsInt());
         assertTrue(!row.has("corrected"), "listing statistics needs no world read and does not turn unknown into zero");
+    }
+
+    /** Tools read the world through Bukkit; this stand-in says every thread is the server thread. */
+    private static void fakeServer() {
+        if (org.bukkit.Bukkit.getServer() == null) {
+            var world = (org.bukkit.World) Proxy.newProxyInstance(org.bukkit.World.class.getClassLoader(), new Class<?>[]{org.bukkit.World.class},
+                    (p, m, a) -> switch (m.getName()) {
+                        case "getName" -> "world";
+                        case "getMaxHeight" -> 256;
+                        default -> null;
+                    });
+            org.bukkit.Bukkit.setServer((org.bukkit.Server) Proxy.newProxyInstance(org.bukkit.Server.class.getClassLoader(), new Class<?>[]{org.bukkit.Server.class},
+                    (p, m, a) -> switch (m.getName()) {
+                        case "isPrimaryThread" -> true;
+                        case "getOnlinePlayers" -> List.of();
+                        case "getWorlds" -> List.of(world);
+                        case "getWorld" -> world;
+                        case "getLogger" -> Logger.getAnonymousLogger();
+                        case "getName", "getVersion", "getBukkitVersion" -> "test";
+                        default -> null;
+                    }));
+        }
+    }
+
+    /** A test tool that reports what the tools decide: the caller's account and whether it has a library. */
+    private void registerProbe() {
+        registry.register(new Tool("library_probe", "test", new JsonObject(), args -> {
+            JsonObject out = new JsonObject();
+            var identity = CallContext.identity();
+            out.addProperty("user", identity == null ? 0 : identity.user());
+            out.addProperty("library", service.personalLibrary() != null);
+            if (args.has("name")) out.addProperty("blocks", service.personalLibrary().load(args.str("name"), 10).cellCount());
+            return ToolResult.of(out);
+        }).unlisted());
+    }
+
+    @Test
+    void aPanelWithoutALibraryLeavesAccountCallsOnServerBlueprints() throws Exception {
+        fakeServer();
+        registerProbe();
+        panel.hello();
+        panel.send("{\"t\":\"welcome\",\"archive\":false}"); // an older panel, or one without object storage
+        java.util.concurrent.atomic.AtomicInteger asked = new java.util.concurrent.atomic.AtomicInteger();
+        panel.assetHandler = request -> { asked.incrementAndGet(); return new JsonObject(); };
+        String key = "a".repeat(64);
+        JsonObject probe = panel.request(frame("{\"t\":\"api\",\"tool\":\"library_probe\",\"user\":7,\"assetKey\":\"" + key + "\",\"args\":{}}"));
+        assertEquals(7, probe.getAsJsonObject("body").get("user").getAsInt(), "the account is still known");
+        assertFalse(probe.getAsJsonObject("body").get("library").getAsBoolean());
+        // get_context and save_blueprint decide by the same personalLibrary(): ToolsTest covers them without a library.
+        JsonObject paste = panel.request(frame("{\"t\":\"api\",\"tool\":\"build\",\"user\":7,\"assetKey\":\"" + key
+                + "\",\"args\":{\"ops\":[{\"op\":\"paste\",\"name\":\"window\",\"origin\":[0,64,0]}]}}"));
+        String error = paste.getAsJsonObject("body").toString();
+        assertTrue(error.contains("no saved blueprint 'window'"), error);
+        assertFalse(error.contains("library"), error);
+        assertEquals(0, asked.get(), "no asset frame goes to a panel that has no library");
+    }
+
+    @Test
+    void anAccountCallWithoutAGrantRunsButCannotUseTheLibrary() throws Exception {
+        registerProbe();
+        panel.hello();
+        // The panel had too many calls open on this socket to issue another grant.
+        JsonObject plain = panel.request(frame("{\"t\":\"api\",\"tool\":\"library_probe\",\"user\":7,\"args\":{}}"));
+        assertEquals(200, plain.get("status").getAsInt(), plain.toString());
+        assertTrue(plain.getAsJsonObject("body").get("library").getAsBoolean());
+        JsonObject asset = panel.request(frame("{\"t\":\"api\",\"tool\":\"library_probe\",\"user\":7,\"args\":{\"name\":\"window\"}}"));
+        assertTrue(asset.getAsJsonObject("body").toString().contains("the panel is busy and could not open your asset library"), asset.toString());
+        JsonObject bad = panel.request(frame("{\"t\":\"api\",\"tool\":\"library_probe\",\"user\":7,\"assetKey\":\"../x\",\"args\":{}}"));
+        assertEquals(400, bad.get("status").getAsInt(), bad.toString());
+    }
+
+    @Test
+    void thePanelsRefusalReachesClaudeInItsOwnWords() throws Exception {
+        registerProbe();
+        panel.hello();
+        panel.assetStatus = 404;
+        panel.assetHandler = request -> frame("{\"error\":\"no asset 'window' in your library\"}");
+        JsonObject asset = panel.request(frame("{\"t\":\"api\",\"tool\":\"library_probe\",\"user\":7,\"assetKey\":\""
+                + "a".repeat(64) + "\",\"args\":{\"name\":\"window\"}}"));
+        assertEquals("no asset 'window' in your library", asset.getAsJsonObject("body").get("error").getAsString(), asset.toString());
+    }
+
+    @Test
+    void authenticatedMcpAndRestCallsFetchAssetsAndRestoreWorkerIdentity() throws Exception {
+        fakeServer();
+        byte[] bytes = StateArrays.encode(new String[]{"stone"});
+        var storage = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        java.util.concurrent.atomic.AtomicInteger downloads = new java.util.concurrent.atomic.AtomicInteger();
+        storage.createContext("/region", exchange -> {
+            downloads.incrementAndGet(); exchange.sendResponseHeaders(200, bytes.length);
+            exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        storage.start();
+        try {
+            JsonObject meta = frame("{\"id\":\"abcdefgh2345\",\"size\":[1,1,1]}");
+            meta.addProperty("bytes", bytes.length);
+            meta.addProperty("sha256", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes)));
+            meta.addProperty("url", "http://127.0.0.1:" + storage.getAddress().getPort() + "/region");
+            java.util.concurrent.atomic.AtomicInteger requests = new java.util.concurrent.atomic.AtomicInteger();
+            panel.assetHandler = request -> {
+                assertEquals("get", request.get("op").getAsString());
+                assertTrue(List.of("a".repeat(64), "b".repeat(64)).contains(request.get("assetKey").getAsString()));
+                assertEquals("window", request.getAsJsonObject("args").get("name").getAsString());
+                assertTrue(!request.has("user"), "the panel authorizes a grant, not a plugin's choice of owner");
+                requests.incrementAndGet(); return meta;
+            };
+            registry.register(new Tool("asset_probe", "test", new JsonObject(), args -> {
+                JsonObject out = new JsonObject();
+                var identity = CallContext.identity();
+                out.addProperty("user", identity == null ? 0 : identity.user());
+                if (identity != null) out.addProperty("blocks", service.assetLibrary().load("window", 10).cellCount());
+                return ToolResult.of(out);
+            }).unlisted());
+            JsonObject rest = panel.request(frame("{\"t\":\"api\",\"tool\":\"asset_probe\",\"user\":7,\"assetKey\":\"" + "a".repeat(64)
+                    + "\",\"args\":{\"user\":99}}"));
+            assertEquals(7, rest.getAsJsonObject("body").get("user").getAsInt());
+            JsonObject mcp = panel.request(frame("{\"t\":\"mcp\",\"user\":8,\"assetKey\":\"" + "b".repeat(64)
+                    + "\",\"body\":{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":\"asset_probe\",\"arguments\":{}}}}"));
+            assertTrue(mcp.getAsJsonObject("body").getAsJsonObject("result").toString().contains("\\\"user\\\":8"), mcp.toString());
+            for (int i = 0; i < 8; i++) {
+                JsonObject anonymous = panel.request(frame("{\"t\":\"api\",\"tool\":\"asset_probe\",\"args\":{}}"));
+                assertEquals(0, anonymous.getAsJsonObject("body").get("user").getAsInt(), "pooled workers must not retain identity");
+            }
+            assertEquals(2, requests.get());
+            assertEquals(2, downloads.get());
+        } finally {
+            storage.stop(0);
+        }
     }
 
     @Test

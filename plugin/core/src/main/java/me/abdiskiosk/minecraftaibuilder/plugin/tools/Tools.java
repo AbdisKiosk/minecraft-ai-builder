@@ -24,6 +24,8 @@ import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.AssetLibrary;
+import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
@@ -90,7 +92,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, regions, player notes, lessons, server version.",
+                "Call first: players (position/facing/looked-at block), WorldEdit selection, markers, areas, regions, notes, lessons, assets, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -122,8 +124,8 @@ public final class Tools {
                 schema("\"items\":{\"type\":\"array\"},\"origin\":" + VEC + ",\"remove\":" + REGION),
                 a -> decorate(a, service)));
 
-        registry.register(new Tool("save_blueprint", "Save a region under a name for the paste op.",
-                schema("\"name\":{\"type\":\"string\"},\"region\":" + REGION, "name", "region"),
+        registry.register(new Tool("save_blueprint", "Save for paste by name; signed-in saves go to library.",
+                schema("\"name\":{\"type\":\"string\"},\"region\":" + REGION + ",\"description\":{\"type\":\"string\"}", "name", "region"),
                 a -> saveBlueprint(a, service)));
 
         registry.register(new Tool("undo", "Undo the caller's last build calls (same history as //undo).",
@@ -138,7 +140,7 @@ public final class Tools {
                     return ToolResult.of(o);
                 }));
 
-        registry.register(new Tool("job_status", "Status of a build that answered \"running\".",
+        registry.register(new Tool("job_status", "Poll a running build.",
                 schema("\"job\":{\"type\":\"string\"}", "job"),
                 a -> service.job(a.str("job")).map(r -> jobJson(r, false))
                         .orElseThrow(() -> new EditException("unknown job " + a.str("job")))));
@@ -302,6 +304,16 @@ public final class Tools {
             JsonArray blueprints = new JsonArray();
             saved.stream().limit(50).forEach(blueprints::add);
             out.add("blueprints", blueprints);
+        }
+        AssetLibrary library = service.personalLibrary();
+        if (library != null) {
+            try {
+                JsonArray assets = library.list();
+                if (!assets.isEmpty()) out.add("assets", assets);
+            } catch (EditException e) {
+                // A storage outage must not hide player positions, lessons or server-local blueprints.
+                out.addProperty("assets_error", e.getMessage());
+            }
         }
         Map<String, Vec3> markers = service.markers().list(caller.world());
         if (!markers.isEmpty()) {
@@ -930,7 +942,16 @@ public final class Tools {
         if (a.has("blueprint")) {
             json = a.object("blueprint");
         } else if (a.has("name")) {
-            json = readSavedBlueprint(a.str("name"), a.service());
+            String name = savedName(a.str("name"));
+            AssetLibrary library = a.service().personalLibrary();
+            if (!Files.isRegularFile(savedDir(a.service()).resolve(name + ".json")) && library != null) {
+                try {
+                    return library.load(name, a.service().config().maxVolumePerOp());
+                } catch (EditException e) {
+                    throw new EditException("no local blueprint '" + name + "'; " + e.getMessage(), e);
+                }
+            }
+            json = readSavedBlueprint(name, a.service());
         } else {
             Path path = blueprintPath(a.str("path"), a);
             if (path.getFileName().toString().endsWith(".json")) {
@@ -1006,10 +1027,23 @@ public final class Tools {
     }
 
     private static ToolResult saveBlueprint(Args a, BuildService service) {
-        a.only("save_blueprint", "name", "region");
+        a.only("save_blueprint", "name", "region", "description");
         String name = savedName(a.str("name"));
         Box box = a.region("region");
-        String[] states = service.read(a.caller().world(), box);
+        String description = a.str("description", "").trim();
+        if (description.length() > 1000) throw new EditException("description is longer than 1000 characters");
+        AssetLibrary library = service.personalLibrary();
+        if (library != null) {
+            if (box.volume() > 2_000_000) throw new EditException("assets are limited to 2000000 blocks; save a smaller region");
+            library.check(name); // quota/name failures before loading any chunks
+            byte[] data = service.reading(a.caller().world(), box,
+                    () -> StateArrays.encode(service.read(a.caller().world(), box)));
+            JsonObject result = library.save(name, description, box.sizeX(), box.sizeY(), box.sizeZ(), data);
+            if (Files.isRegularFile(savedDir(service).resolve(name + ".json")))
+                result.addProperty("note", "a local blueprint has this name and takes precedence when pasting on this server");
+            return ToolResult.of(result);
+        }
+        String[] states = service.reading(a.caller().world(), box, () -> service.read(a.caller().world(), box));
         RegionCodec.Encoded enc;
         try {
             enc = RegionCodec.encode(box, states);

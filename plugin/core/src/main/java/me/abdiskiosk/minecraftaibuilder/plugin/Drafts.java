@@ -307,8 +307,10 @@ public final class Drafts {
             throw new EditException("region is " + box.volume() + " blocks; promote is limited to " + settings.promoteMaxVolume()
                     + " (promote.max-volume)");
         }
-        String[] states = service.readStepped(world, List.of(box), history.readsPerTick()).array(0);
-        byte[] data = StateArrays.encode(states);
+        // With the other large reads, one at a time and with its memory reserved, so two exports (or an export beside
+        // a large check) never hold their chunks and arrays at once.
+        byte[] data = service.readingLarge(world, box,
+                () -> StateArrays.encode(service.readStepped(world, List.of(box), history.readsPerTick()).array(0)));
         JsonObject o = new JsonObject();
         o.addProperty("world", world);
         o.add("box", DiffImages.box(box));

@@ -6,8 +6,8 @@ package me.abdiskiosk.minecraftaibuilder.common;
  *
  * <pre>
  * plugin → panel  {"t":"hello","protocol":1,"plugin":"0.1.0","mc":"1.21.11","bridge":"...","worlds":[...]}
- * panel → plugin  {"t":"mcp","id":7,"body":{...JSON-RPC...}}
- *                 {"t":"api","id":7,"tool":"fill","args":{...}}
+ * panel → plugin  {"t":"mcp","id":7,"user":12,"assetKey":"<opaque grant>","body":{...JSON-RPC...}}
+ *                 {"t":"api","id":7,"user":12,"assetKey":"<opaque grant>","tool":"fill","args":{...}}
  *                 {"t":"history","id":7,"op":"list|get|render|revert","args":{...}}
  *                 {"t":"draft","id":7,"op":"list|get|render|approve|reject|export|import","args":{...}}
  *                 {"t":"map","id":7,"op":"index|tile|area|unarea","args":{...}}   (only when hello said "map":true)
@@ -21,12 +21,25 @@ package me.abdiskiosk.minecraftaibuilder.common;
  * outlives the server's own copy. The plugin never holds storage credentials: it PUTs to the URLs it is given.
  *
  * <pre>
- * panel → plugin  {"t":"welcome","archive":true}   (after hello)
+ * panel → plugin  {"t":"welcome","archive":true,"assets":true}   (after hello)
  * plugin → panel  {"t":"upload","id":3,"kind":"history","entry":"h1x","files":[{"name":"diff","size":812},...]}
  * panel → plugin  {"t":"answer","id":3,"status":200,"body":{"urls":{"diff":"https://...",...}}}
  * plugin → panel  {"t":"uploaded","id":4,"kind":"history","entry":"h1x","detail":{...entry, stats, types, changes...}}
  * panel → plugin  {"t":"answer","id":4,"status":200,"body":{}}
  * </pre>
+ *
+ * Personal assets use additive frames (no protocol bump). The grant is scoped to one authenticated request on
+ * this socket and revoked on reply, timeout or disconnect. User ids in plugin frames do not authorize access.
+ * <pre>
+ * plugin → panel  {"t":"asset","id":5,"assetKey":"...","op":"list|get|check|save","args":{...}}
+ * panel → plugin  {"t":"answer","id":5,"status":200,"body":{...}}
+ * </pre>
+ * List returns up to 30 {name,size,description}. Get takes name and returns {id,size,bytes,sha256,url}; the download
+ * URL expires after 60 seconds. Check preflights a new name/quota. Save takes {name,description,size,data}, where
+ * data is base64 StateArrays (at most 5 MB compressed, 2 million cells); ownership comes only from the grant.
+ * Without welcome.assets (no object storage, or an older panel) there is no library: calls keep server-local
+ * blueprints even with a user, and the panel sends none then. A call with a user but no assetKey (the panel had too
+ * many calls open) runs, but its asset operations fail.
  *
  * Without a welcome that says {@code "archive":true}, the plugin keeps its entries and asks for nothing.
  *
@@ -52,6 +65,7 @@ public final class RelayProtocol {
     public static final String UPLOAD = "upload";
     public static final String UPLOADED = "uploaded";
     public static final String ANSWER = "answer";
+    public static final String ASSET = "asset";
 
     public static final String JOB_START = "job.start";
     public static final String JOB_PROGRESS = "job.progress";
