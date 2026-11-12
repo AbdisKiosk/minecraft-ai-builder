@@ -52,10 +52,28 @@ export async function read(key: string): Promise<{ body: ReadableStream<Uint8Arr
 }
 
 /** The whole object in memory, or null when there is none. For small objects only. */
-export async function readBytes(key: string): Promise<Uint8Array | null> {
+export async function readBytes(key: string, maxBytes?: number): Promise<Uint8Array | null> {
   try {
     const r = await r2().send(new GetObjectCommand({ Bucket: bucket(), Key: key }));
-    return r.Body ? await r.Body.transformToByteArray() : null;
+    if (!r.Body) return null;
+    if (maxBytes === undefined) return await r.Body.transformToByteArray();
+    const reader = r.Body.transformToWebStream().getReader();
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    try {
+      if ((r.ContentLength ?? 0) > maxBytes) throw new RangeError('stored object exceeds the download limit');
+      while (true) {
+        const next = await reader.read();
+        if (next.done) break;
+        size += next.value.byteLength;
+        if (size > maxBytes) throw new RangeError('stored object exceeds the download limit');
+        chunks.push(next.value);
+      }
+      return Buffer.concat(chunks, size);
+    } finally {
+      await reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   } catch (e) {
     if (missing(e)) return null;
     throw e;
@@ -70,6 +88,11 @@ export async function write(key: string, body: Uint8Array, contentType: string):
 export async function uploadUrl(key: string, size: number, contentType: string, seconds = 900): Promise<string> {
   return getSignedUrl(r2(), new PutObjectCommand({ Bucket: bucket(), Key: key, ContentType: contentType, ContentLength: size }),
     { expiresIn: seconds, signableHeaders: new Set(['content-type', 'content-length']) });
+}
+
+/** Short-lived bearer URL for one immutable asset file; issued only after checking its owner. */
+export async function downloadUrl(key: string, seconds = 60): Promise<string> {
+  return getSignedUrl(r2(), new GetObjectCommand({ Bucket: bucket(), Key: key }), { expiresIn: seconds });
 }
 
 /** Deletes up to a thousand keys at a time. */

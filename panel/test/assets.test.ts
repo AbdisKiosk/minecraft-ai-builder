@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import {
   AssetError, type AssetRow, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps, getAsset,
-  listAssets, MAX_ASSETS, MAX_BYTES, placeAsset, solidBlocks, assetBlocks, updateAsset, viewerBlocks,
+  listAssets, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, solidBlocks, assetBlocks, updateAsset, viewerBlocks,
 } from '../lib/server/assets.ts';
 import { decode } from '../lib/schematic.ts';
 
@@ -67,6 +67,7 @@ function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'build
       async remove(owner, id) {
         if (rows.get(id)?.owner === owner) rows.delete(id);
       },
+      async touch() {},
     },
     files: {
       write: async (owner, id, name, bytes) => { blobs.set(`${owner}/${id}/${name}`, bytes); },
@@ -222,4 +223,25 @@ test('the owner renames, describes, tags, places and deletes', async () => {
   assert.equal(f.rows.has(a.id), false);
   assert.deepEqual([...f.blobs.keys()].filter(k => k.includes(a.id)), []);
   assert.equal((await listAssets(f.deps, 1)).quota.count, 1);
+});
+
+test('Save as asset names the 2,000,000-block and 5 MB limits and asks for a smaller region', async () => {
+  const f = fakes();
+  // 201 x 100 x 100: refused before the server is asked to read anything.
+  await assert.rejects(save(f.deps, user(1), 'huge', { box: [0, 0, 0, 200, 99, 99] }), (e: unknown) => e instanceof AssetError
+    && e.status === 400 && e.message === 'this region is 2,010,000 blocks; an asset is at most 2,000,000 blocks. Select a smaller region.');
+  assert.deepEqual(f.frames, []);
+  // Exactly 2,000,000 blocks is allowed past that check.
+  f.deps.relay = async () => ({ status: 200, body: { data: Buffer.alloc(MAX_REGION_BYTES + 1).toString('base64') } });
+  await assert.rejects(save(f.deps, user(1), 'dense', { box: [0, 0, 0, 199, 99, 99] }), (e: unknown) => e instanceof AssetError
+    && e.status === 400 && /^the region's block data is 5\.00 MB compressed; an asset is at most 5 MB\. Select a smaller region\.$/.test(e.message));
+  assert.equal(f.rows.size + f.blobs.size, 0);
+});
+
+test('a failing usage update does not fail a place that happened', async () => {
+  const f = fakes();
+  const a = await save(f.deps, user(1), 'stair');
+  f.deps.store.touch = async () => { throw new Error('database is read-only'); };
+  const reply = await placeAsset(f.deps, user(1), a.id, { server: 'a', world: 'world', origin: [0, 64, 0] });
+  assert.equal(reply.status, 200);
 });

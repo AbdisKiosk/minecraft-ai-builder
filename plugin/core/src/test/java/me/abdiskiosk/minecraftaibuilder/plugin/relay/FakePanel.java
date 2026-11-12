@@ -25,6 +25,8 @@ final class FakePanel extends WebSocketServer {
 
     /** The {@code event} frames the plugin sent, in order. */
     final BlockingQueue<JsonObject> events = new LinkedBlockingQueue<>();
+    volatile java.util.function.Function<JsonObject, JsonObject> assetHandler = frame -> new JsonObject();
+    volatile int assetStatus = 200;
 
     private final String token;
     private final CompletableFuture<JsonObject> hello = new CompletableFuture<>();
@@ -49,6 +51,12 @@ final class FakePanel extends WebSocketServer {
     /** The plugin's hello frame, once it has connected. */
     JsonObject hello() throws Exception {
         return hello.get(10, TimeUnit.SECONDS);
+    }
+
+    /** Sends a frame as it is, such as another welcome. */
+    void send(String text) throws Exception {
+        hello();
+        plugin.send(text);
     }
 
     /** Sends a request frame (without id) to the plugin and waits for its reply frame. */
@@ -84,7 +92,7 @@ final class FakePanel extends WebSocketServer {
                     return;
                 }
                 plugin = conn;
-                conn.send("{\"t\":\"" + RelayProtocol.WELCOME + "\",\"archive\":false}");
+                conn.send("{\"t\":\"" + RelayProtocol.WELCOME + "\",\"archive\":false,\"assets\":true}");
                 hello.complete(frame);
             }
             case RelayProtocol.REPLY -> {
@@ -92,6 +100,14 @@ final class FakePanel extends WebSocketServer {
                 if (reply != null) reply.complete(frame);
             }
             case RelayProtocol.EVENT -> events.add(frame);
+            case RelayProtocol.ASSET -> {
+                JsonObject answer = new JsonObject();
+                answer.addProperty("t", RelayProtocol.ANSWER);
+                answer.add("id", frame.get("id"));
+                answer.add("body", assetHandler.apply(frame));
+                answer.addProperty("status", assetStatus);
+                conn.send(answer.toString());
+            }
             default -> throw new AssertionError("unexpected frame from the plugin: " + text);
         }
     }

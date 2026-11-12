@@ -291,12 +291,13 @@ class Builder:
         """
         return self._queue("light", region=region, block=block if block != "torch" else None)
 
-    def save_blueprint(self, name: str, region) -> dict:
-        """Saves a region on the server ({"saved", "size", "blocks"}); paste(name=...) places it.
+    def save_blueprint(self, name: str, region, description: str | None = None) -> dict:
+        """Saves a region to your asset library on the panel ({"saved", "size", "blocks"}); paste(name=...) places it.
 
-        Runs immediately: flush() first if the region is still queued.
+        Behind an older panel it is saved on the server instead. `description` (at most 1000 characters, the first
+        80 shown in get_context) is sent only when given. Runs immediately: flush() first if the region is queued.
         """
-        return self.call("save_blueprint", name=name, region=region)
+        return self.call("save_blueprint", name=name, region=region, description=description)
 
     def flush(self, wait: bool = True) -> dict | None:
         """Sends everything queued as one batch (= one undo step). Returns the result, {"changed": n} when done.

@@ -277,12 +277,39 @@ not to a server, so they can be placed on every server where the user is a build
 - The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
   the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
   and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
-- Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Nobody can see, change or place another user's
+- Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Each asset is at most 2,000,000 blocks and 5 MB
+  of compressed region data, whether saved on the panel or by Claude. Nobody can see, change or place another user's
   asset; saving and placing need the builder role on the server, as promote does.
 - Storage: one MySQL row per asset (`assets`), and in R2 under `users/<user>/assets/<id>/` the export frame's data
   (`region.bin`, which the import frame takes back) and the 3D view's blocks (`blocks.json.gz`). The export leaves out
   properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
-  view; a wrong guess changes only how the preview draws a block, never what is placed.
+  view; a wrong guess changes only how the preview draws a block, never what is placed. Migration
+  `006_asset_usage.sql` adds `last_used_at`, which orders the list Claude sees.
+
+### Assets in Claude's calls
+
+Every MCP and REST call through `/s/<server>/` carries the account of its access token, so Claude and SDK scripts use
+that account's library on every server where it is a builder.
+
+- `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters.
+  If the library cannot be reached, it says so in `assets_error` and the rest of the context is still returned.
+- `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library.
+- `save_blueprint` (with an optional `description`) saves to the caller's library only, never on the server. A save
+  that fails, for example on quota or a taken name, is not saved on the server instead.
+- Ownership: for each tool call the panel gives the plugin a random grant that ends with the call (at most 6 minutes).
+  The plugin's asset requests carry the grant, and the panel takes the owner from it and checks the builder role
+  again; a user id sent by the plugin is never trusted.
+- Saves go up the relay as base64. A paste fetches a download URL from R2 that is valid for 60 seconds; the plugin
+  checks the file's SHA-256. There is no per-user download rate limit.
+- Cache: `plugins/AIBuilder/asset-cache/<user>/`, at most 128 MB per server in all (oldest files go first), not
+  configurable. Every paste asks the panel again before using a cached file, so a deleted asset cannot be pasted.
+- Without R2 there is no library: the relay `welcome` frame carries `assets: false` and calls carry no grant. Calls
+  then work as they do without the panel: `save_blueprint` saves on the server, `paste` with `name=` looks only in the
+  server's saved blueprints, and `get_context` has neither `assets` nor `assets_error`. A library that exists but
+  fails (quota, taken name, storage error, expired grant) still fails the call and is never replaced by a server save.
+- Compatibility: the new frame fields are additive and the protocol version is unchanged. A new plugin with an older
+  panel gets no account, so it behaves as before (server blueprints only). An older plugin with a new panel ignores
+  the grant and never uses the library.
 
 ## Drafts: approve edits before they are placed
 

@@ -51,17 +51,25 @@ public final class StateArrays {
             if (in.readInt() != MAGIC) throw new IOException("not a state array");
             int length = in.readInt();
             if (length < 0 || length > maxLength) throw new IOException(length + " states is more than " + maxLength);
-            String[] palette = new String[in.readInt()];
-            for (int i = 0; i < palette.length; i++) palette[i] = in.readUTF();
+            int paletteSize = in.readInt();
+            if (paletteSize < 0 || paletteSize > Math.min(length, 65536)) throw new IOException("bad palette size");
+            String[] palette = new String[paletteSize];
+            long characters = 0;
+            for (int i = 0; i < palette.length; i++) {
+                palette[i] = in.readUTF();
+                characters += palette[i].length();
+                if (palette[i].isEmpty() || characters > 4 * 1024 * 1024) throw new IOException("bad palette");
+            }
             String[] out = new String[length];
             int i = 0;
             while (i < length) {
                 String s = palette[in.readInt()];
                 int run = in.readInt();
-                if (run <= 0 || i + run > length) throw new IOException("bad run");
+                if (run <= 0 || run > length - i) throw new IOException("bad run");
                 java.util.Arrays.fill(out, i, i + run, s);
                 i += run;
             }
+            if (in.read() != -1) throw new IOException("trailing region data");
             return out;
         } catch (IOException | ArrayIndexOutOfBoundsException e) {
             throw new EditException("corrupt region data: " + e.getMessage(), e);

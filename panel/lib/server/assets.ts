@@ -15,6 +15,9 @@ export const PROMOTE_ROLE: Role = 'builder';
 /** Same as the plugin's saved blueprints (Tools#savedName), so Claude can paste an asset by name later. */
 export const NAME = /^[a-z0-9_-]{1,40}$/;
 export const MAX_DESCRIPTION = 1000;
+/** Bounds both plugin downloads and new uploads, before decoding compressed region data. */
+export const MAX_REGION_BYTES = 5 * 1024 * 1024;
+export const MAX_REGION_VOLUME = 2_000_000;
 export const MAX_TAGS = 10;
 const TAG = /^[a-z0-9][a-z0-9 _-]{0,31}$/;
 const ID = /^[a-z0-9]{12}$/;
@@ -69,12 +72,13 @@ export interface AssetStore {
   /** A taken name is refused with a 409 AssetError. */
   update(owner: number, id: string, changes: Changes): Promise<void>;
   remove(owner: number, id: string): Promise<void>;
+  touch(owner: number, id: string): Promise<void>;
 }
 
 /** The asset files (R2). */
 export interface AssetFiles {
   write(owner: number, id: string, name: FileName, bytes: Uint8Array): Promise<void>;
-  read(owner: number, id: string, name: FileName): Promise<Uint8Array | null>;
+  read(owner: number, id: string, name: FileName, maxBytes?: number): Promise<Uint8Array | null>;
   removeAll(owner: number, id: string): Promise<void>;
 }
 
@@ -121,9 +125,18 @@ export function checkQuota(usage: Usage, count: number, bytes: number): void {
     throw new AssetError(409, `your library is full: ${usage.count} of ${MAX_ASSETS} assets. Delete some to save more.`);
   }
   if (usage.bytes + bytes > MAX_BYTES) {
-    const mb = (n: number) => (n / 1024 ** 2).toFixed(1);
     throw new AssetError(409, `this asset needs ${mb(bytes)} MB and your library has ${mb(Math.max(0, MAX_BYTES - usage.bytes))} MB `
       + `of ${mb(MAX_BYTES)} MB left. Delete some assets, or save a smaller region.`);
+  }
+}
+
+const mb = (n: number) => (n / 1024 ** 2).toFixed(1);
+
+/** The 2,000,000-block cap of every asset, whether saved on the panel or by Claude; refused before reading the world. */
+function checkVolume(volume: number): void {
+  if (volume > MAX_REGION_VOLUME) {
+    throw new AssetError(400, `this region is ${volume.toLocaleString('en-US')} blocks; an asset is at most `
+      + `${MAX_REGION_VOLUME.toLocaleString('en-US')} blocks. Select a smaller region.`);
   }
 }
 
@@ -190,6 +203,7 @@ export function decodeStates(gz: Uint8Array, maxLength: number): StateRuns {
     else runs.push([p, run]);
     total += run;
   }
+  if (at !== raw.byteLength) throw new AssetError(502, 'the region data has trailing bytes');
   return { length, palette, runs };
 }
 
@@ -256,16 +270,34 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
   const tags = checkTags(b.tags);
   await deps.requireRole(server, PROMOTE_ROLE);
   // Refuse early what will be refused anyway, before the server reads the region.
+  const size: [number, number, number] = [Math.abs(box[3] - box[0]) + 1, Math.abs(box[4] - box[1]) + 1, Math.abs(box[5] - box[2]) + 1];
+  checkVolume(size[0] * size[1] * size[2]);
   checkQuota(await deps.store.usage(userId), 1, 0);
   if (await deps.store.byName(userId, name)) throw new AssetError(409, `you already have an asset named '${name}'`);
 
-  const size: [number, number, number] = [Math.abs(box[3] - box[0]) + 1, Math.abs(box[4] - box[1]) + 1, Math.abs(box[5] - box[2]) + 1];
-  const volume = size[0] * size[1] * size[2];
   const exported = await deps.relay(server, { t: 'draft', op: 'export', args: { world, box } });
   const body = exported.body as { data?: unknown; error?: unknown } | null;
   if (exported.status !== 200) throw new AssetError(exported.status, typeof body?.error === 'string' ? body.error : 'the server could not read the region');
   if (typeof body?.data !== 'string') throw new AssetError(502, 'the server sent no region data');
   const region = new Uint8Array(Buffer.from(body.data, 'base64'));
+  return saveAssetData(deps, userId, { name, description, tags, size }, region, await deps.mcVersion(server));
+}
+
+/** Shared by panel exports and authenticated relay saves; bytes and dimensions are never trusted. */
+export async function saveAssetData(deps: Deps, userId: number, b: Json, region: Uint8Array, mc: string | null): Promise<Asset> {
+  const name = checkName(b.name), description = checkDescription(b.description), tags = checkTags(b.tags);
+  const dimensions = ints(b.size, 3);
+  if (!dimensions || dimensions.some(n => n < 1)) throw new AssetError(400, 'give the asset dimensions as three positive whole numbers');
+  const size = dimensions as [number, number, number];
+  const volume = size[0] * size[1] * size[2];
+  checkVolume(volume);
+  if (!region.byteLength) throw new AssetError(400, 'the region data is empty');
+  if (region.byteLength > MAX_REGION_BYTES) {
+    throw new AssetError(400, `the region's block data is ${(region.byteLength / 1024 ** 2).toFixed(2)} MB compressed; an asset is `
+      + `at most ${MAX_REGION_BYTES / 1024 ** 2} MB. Select a smaller region.`);
+  }
+  checkQuota(await deps.store.usage(userId), 1, 0);
+  if (await deps.store.byName(userId, name)) throw new AssetError(409, `you already have an asset named '${name}'`);
   const states = decodeStates(region, volume);
   if (states.length !== volume) throw new AssetError(502, `the server sent ${states.length} blocks for a region of ${volume}`);
   const blocks = solidBlocks(states);
@@ -276,12 +308,12 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
 
   const now = Date.now();
   const row: AssetRow = {
-    id: newId(), owner: userId, name, description, tags, size, blocks, mc: await deps.mcVersion(server), bytes, created: now, updated: now,
+    id: newId(), owner: userId, name, description, tags, size, blocks, mc, bytes, created: now, updated: now,
   };
   // Files first, so a row never points at missing files; they go again if the row is refused.
-  await deps.files.write(userId, row.id, 'region', region);
-  await deps.files.write(userId, row.id, 'blocks', viewer);
   try {
+    await deps.files.write(userId, row.id, 'region', region);
+    await deps.files.write(userId, row.id, 'blocks', viewer);
     await deps.store.insert(row, usage => checkQuota(usage, 1, bytes));
   } catch (e) {
     await deps.files.removeAll(userId, row.id).catch(() => {});
@@ -324,10 +356,13 @@ export async function placeAsset(deps: Deps, userId: number, id: unknown, b: Jso
   await deps.requireRole(server, PROMOTE_ROLE);
   const region = await deps.files.read(row.owner, row.id, 'region');
   if (!region) throw new AssetError(410, 'the blocks of this asset are missing from storage');
-  return deps.relay(server, {
+  const reply = await deps.relay(server, {
     t: 'draft', op: 'import', args: {
       world, origin, size: row.size, data: Buffer.from(region).toString('base64'),
       air: b.air !== false, skipUnknown: b.skipUnknown === true, label: `asset ${row.name}`,
     },
   });
+  // Only orders the list Claude sees: the import already happened, so a failed touch must not fail it.
+  if (reply.status >= 200 && reply.status < 300) await deps.store.touch(userId, row.id).catch(() => {});
+  return reply;
 }

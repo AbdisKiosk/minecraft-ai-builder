@@ -10,6 +10,26 @@ public final class CallContext {
 
     private static final ThreadLocal<String> SOURCE = new ThreadLocal<>();
     private static final ThreadLocal<String> TOOL = new ThreadLocal<>();
+    private static final ThreadLocal<Identity> IDENTITY = new ThreadLocal<>();
+
+    /**
+     * The panel account a call came from, with the opaque per-request grant for its asset library (null when the panel
+     * could not issue one). Never a tool argument or Minecraft player id.
+     */
+    public record Identity(long user, String assetKey) {}
+
+    public static <T> T withIdentity(Identity identity, Supplier<T> body) {
+        Identity old = IDENTITY.get();
+        IDENTITY.set(identity);
+        try {
+            return body.get();
+        } finally {
+            if (old == null) IDENTITY.remove();
+            else IDENTITY.set(old);
+        }
+    }
+
+    public static Identity identity() { return IDENTITY.get(); }
 
     private CallContext() {
     }

@@ -2,10 +2,13 @@ import { EventEmitter } from 'node:events';
 import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
-import { serverForRelayToken } from './access';
+import { roleOf, serverForRelayToken } from './access';
 import { ArchiveError, commit, uploadUrls } from './archive';
+import { AssetGrants, assetRequest } from './assetRelay';
+import { AssetError } from './assets';
 import { exec } from './db';
-import { configured as r2Configured } from './r2';
+import { configured as r2Configured, downloadUrl } from './r2';
+import { atLeast } from './roles';
 import { bearer } from './tokens';
 
 /**
@@ -97,12 +100,20 @@ class ServerState {
 }
 
 class Connection {
+  readonly assets = new AssetGrants();
   ready = false;
   lastHeard = Date.now();
   private nextId = 1;
   private pending = new Map<number, { resolve: (r: Json) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }>();
 
-  constructor(readonly serverId: string, readonly socket: WebSocket) {}
+  readonly serverId: string;
+  readonly socket: WebSocket;
+
+  // Plain fields, not parameter properties: Node's strip-only TypeScript runs this file in the tests.
+  constructor(serverId: string, socket: WebSocket) {
+    this.serverId = serverId;
+    this.socket = socket;
+  }
 
   request(frame: Json, timeoutMs: number): Promise<Json> {
     const id = this.nextId++;
@@ -130,6 +141,7 @@ class Connection {
   }
 
   failAll() {
+    this.assets.clear();
     for (const p of this.pending.values()) {
       clearTimeout(p.timer);
       p.reject(new OfflineError(this.serverId));
@@ -220,6 +232,9 @@ export class RelayHub {
       case 'uploaded':
         if (c.ready) this.archive(c, frame);
         return;
+      case 'asset':
+        if (c.ready && this.live.get(c.serverId) === c) this.asset(c, frame);
+        return;
       case 'event': {
         if (!c.ready) return;
         const s = this.state(c.serverId);
@@ -255,7 +270,7 @@ export class RelayHub {
     s.connected(frame);
     console.info(`relay: server ${c.serverId} connected (${frame.mc ?? '?'} ${frame.bridge ?? '?'}, ${frame.plugin ?? '?'})`);
     // History goes to R2 when it is configured: the plugin then uploads each entry (see archive.ts).
-    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true }));
+    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured() }));
     exec('UPDATE servers SET info = ?, last_seen_at = NOW() WHERE id = ?', [JSON.stringify(s.info), c.serverId])
       .catch(e => console.warn('relay: could not save server info', e.message));
     this.emit({ type: 'server', server: c.serverId, state: s.toJson() });
@@ -279,6 +294,33 @@ export class RelayHub {
       console.warn(`archive: ${frame.t} ${frame.entry} from ${c.serverId} failed`, e);
       answer(500, { error: 'the panel could not store it; try again later' });
     });
+  }
+
+  /** Authorize against this socket's active request, never frame.user; issue only short-lived object URLs. */
+  private async asset(c: Connection, frame: Json) {
+    if (typeof frame.id !== 'number') return;
+    let status = 200, body: unknown;
+    try {
+      const user = c.assets.owner(frame.assetKey);
+      if (!r2Configured()) throw new AssetError(503, 'the panel asset library needs object storage configured');
+      // Lazy loading avoids the storage adapter's hub/route import cycle during process startup.
+      const { store, files } = await import('./assetStore');
+      body = await assetRequest({
+        store, files,
+        async requireRole(server, needed) {
+          c.assets.owner(frame.assetKey);
+          const role = await roleOf(user, server);
+          if (!role || !atLeast(role, needed)) throw new AssetError(403, 'asset access needs builder membership on this server');
+        },
+        relay: async () => { throw new Error('nested export not supported'); },
+        mcVersion: async () => null,
+      }, user, c.serverId, this.state(c.serverId).info.mc ?? null, frame, downloadUrl);
+    } catch (e) {
+      status = e instanceof AssetError ? e.status : 500;
+      body = { error: e instanceof AssetError ? e.message : 'the panel could not access the asset library; try again later' };
+      if (!(e instanceof AssetError)) console.warn('relay asset request failed', e);
+    }
+    if (c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ t: 'answer', id: frame.id, status, body }));
   }
 
   private onClose(c: Connection, code: number, reason: string) {
@@ -321,6 +363,29 @@ export class RelayHub {
     if (!c) throw new OfflineError(serverId);
     const reply = await c.request(frame, timeoutMs);
     return { status: typeof reply.status === 'number' ? reply.status : 502, body: reply.body ?? null };
+  }
+
+  /**
+   * Identity comes from the access token, outside tool arguments. Grants die on reply, timeout or disconnect. Without
+   * object storage there is no library, so the call goes as one without an account (the plugin then keeps server
+   * blueprints). With too many calls open the call still runs, with the account but no grant: only asset use fails.
+   */
+  async requestAsUser(serverId: string, frame: Json, user: number, timeoutMs: number): Promise<Reply> {
+    const c = this.live.get(serverId);
+    if (!c) throw new OfflineError(serverId);
+    if (!r2Configured()) return this.request(serverId, frame, timeoutMs);
+    let key: string | null = null;
+    try {
+      key = c.assets.issue(user, timeoutMs);
+    } catch (e) {
+      if ((e as { status?: unknown }).status !== 429) throw e;
+    }
+    try {
+      const reply = await c.request(key ? { ...frame, user, assetKey: key } : { ...frame, user }, timeoutMs);
+      return { status: typeof reply.status === 'number' ? reply.status : 502, body: reply.body ?? null };
+    } finally {
+      if (key) c.assets.revoke(key);
+    }
   }
 
   /** Closes a server's socket and forgets its state: the server was deleted or its token replaced. */

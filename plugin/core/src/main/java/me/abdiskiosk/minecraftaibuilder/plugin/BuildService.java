@@ -58,11 +58,30 @@ public final class BuildService {
     private final Path dataDir;
     private final Markers markers;
     private final Lessons lessons;
+    private volatile AssetLibrary assetLibrary;
+
+    public void setAssetLibrary(AssetLibrary library) { this.assetLibrary = library; }
+
+    public AssetLibrary assetLibrary() {
+        if (assetLibrary == null) throw new EditException("the personal asset library needs a connected, updated panel");
+        return assetLibrary;
+    }
+
+    /**
+     * The calling account's library, or null when the call has no account or the panel has no library: then names
+     * resolve and save on this server only, as without a panel. A library that exists but fails throws instead.
+     */
+    public AssetLibrary personalLibrary() {
+        AssetLibrary library = assetLibrary;
+        return CallContext.identity() == null || library == null || !library.available() ? null : library;
+    }
     private final MemoryGuard memory;
     private volatile RegionGuard guard;
     private volatile boolean protect;
     /** Large reads run one at a time, so the arrays of several checks never sit in the heap together. */
-    private final Semaphore largeReads = new Semaphore(1, true);
+    final Semaphore largeReads = new Semaphore(1, true);
+    /** How long a large read waits for the one before it; tests shorten it. */
+    long largeReadWaitMs = 60_000;
     /** Set while a thread is inside {@link #reading}, where the memory for its reads is already set aside. */
     private static final ThreadLocal<Boolean> RESERVED = ThreadLocal.withInitial(() -> Boolean.FALSE);
     private final AtomicInteger nextJob = new AtomicInteger(1);
@@ -379,8 +398,21 @@ public final class BuildService {
      */
     public <T> T reading(String world, Box box, Supplier<T> work) {
         if (box.volume() <= READ_SLAB || box.volume() > config.maxReadVolume()) return work.get();
+        return holdingRead(world, box, work);
+    }
+
+    /**
+     * {@link #reading} for a region whose limit is not {@code max-read-volume} (a promote or Save as asset export,
+     * limited by {@code promote.max-volume}): anything larger than a slab waits for its turn and for room in the heap.
+     */
+    public <T> T readingLarge(String world, Box box, Supplier<T> work) {
+        if (box.volume() <= READ_SLAB) return work.get();
+        return holdingRead(world, box, work);
+    }
+
+    private <T> T holdingRead(String world, Box box, Supplier<T> work) {
         try {
-            if (!largeReads.tryAcquire(60, TimeUnit.SECONDS)) {
+            if (!largeReads.tryAcquire(largeReadWaitMs, TimeUnit.MILLISECONDS)) {
                 throw new EditException("the server is busy with other large reads; try again in a moment");
             }
         } catch (InterruptedException e) {
@@ -481,7 +513,7 @@ public final class BuildService {
     public RegionSnapshot readStepped(String world, List<Box> boxes, long perTick) {
         checkWorld(world);
         long volume = boxes.stream().mapToLong(Box::volume).sum();
-        if (volume > READ_SLAB) {
+        if (volume > READ_SLAB && !RESERVED.get()) {
             memory.check(readCost(world, boxes), "read " + volume + " blocks", "Use a smaller region, or wait 15 seconds for"
                     + " chunks loaded by earlier calls to be freed; more server memory lifts the limit.");
         }
