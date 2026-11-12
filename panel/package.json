@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "next build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "build": "next build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --alias:next/server=next/server.js --splitting --outdir=dist",
     "start": "NODE_ENV=production node dist/server.js",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.ts test/*.test.mjs"
