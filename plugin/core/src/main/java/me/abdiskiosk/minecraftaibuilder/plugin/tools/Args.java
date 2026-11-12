@@ -31,16 +31,19 @@ public final class Args {
     private final BuildService.Caller caller;
     private final BuildService service;
     private final Vec3 offset;
+    /** Blocks a library paste left out because this server lacks them; one set for a call and all its batch ops. */
+    private final Set<String> skipped;
 
     public Args(JsonObject json, BuildService.Caller caller, BuildService service) {
-        this(json, caller, service, null);
+        this(json, caller, service, null, new java.util.LinkedHashSet<>());
     }
 
-    private Args(JsonObject json, BuildService.Caller caller, BuildService service, Vec3 offset) {
+    private Args(JsonObject json, BuildService.Caller caller, BuildService service, Vec3 offset, Set<String> skipped) {
         this.json = json == null ? new JsonObject() : json;
         this.caller = caller;
         this.service = service;
         this.offset = offset;
+        this.skipped = skipped;
     }
 
     /** Rejects misspelled or unsupported arguments instead of silently ignoring them. */
@@ -55,7 +58,11 @@ public final class Args {
 
     /** Arguments of one batch op; with an {@code origin}, its plain-number coordinates count from there. */
     public Args with(JsonObject other, Vec3 origin) {
-        return new Args(other, caller, service, origin);
+        return new Args(other, caller, service, origin, skipped);
+    }
+
+    public Set<String> skipped() {
+        return skipped;
     }
 
     public JsonObject json() {

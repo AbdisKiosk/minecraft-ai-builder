@@ -734,4 +734,72 @@ class ToolsTest {
         assertTrue(listed.has("plot0"));
         assertEquals(10, listed.get("(more, use @name)").getAsInt());
     }
+
+    /** A library whose one asset, "window", holds these states in a row along x, served over HTTP as a paste fetches it. */
+    private <T> T withAsset(String[] states, java.util.function.Supplier<T> work) throws Exception {
+        byte[] data = StateArrays.encode(states);
+        com.sun.net.httpserver.HttpServer storage = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        storage.createContext("/asset", exchange -> {
+            exchange.sendResponseHeaders(200, data.length);
+            exchange.getResponseBody().write(data);
+            exchange.close();
+        });
+        storage.start();
+        try {
+            JsonObject meta = new JsonObject();
+            meta.addProperty("id", "abcdefgh2345");
+            meta.addProperty("sha256", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data)));
+            meta.addProperty("bytes", data.length);
+            meta.add("size", JsonParser.parseString("[" + states.length + ",1,1]"));
+            meta.addProperty("url", "http://127.0.0.1:" + storage.getAddress().getPort() + "/asset");
+            service.setAssetLibrary(new AssetLibrary(dataDir, (op, args) -> meta));
+            return CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), work);
+        } finally {
+            storage.stop(0);
+        }
+    }
+
+    @Test
+    void libraryPastesLeaveOutStatesThisServerLacksAndSayWhich() throws Exception {
+        // Saved on a newer server: a block this one lacks, and a property value it does not have.
+        String[] states = {"oak_stairs[facing=east]", "copper_bulb[lit=true]", "oak_stairs[facing=up]", "air", "copper_bulb[lit=false]"};
+        withAsset(states, () -> {
+            Args a = args("{\"name\":\"window\",\"origin\":[0,64,0]}");
+            Op.Paste paste = (Op.Paste) single("paste", a);
+            assertEquals(List.of("0,0,0=oak_stairs[facing=east]", "3,0,0=air"), cells(paste), "left-out cells keep what is there");
+            assertEquals(List.of("copper_bulb", "oak_stairs[facing=up]"), a.skipped().stream().sorted().toList(),
+                    "a missing block by name, a bad value by state");
+            // A blueprint Claude wrote is still refused as a whole.
+            String refused = error("build", "{\"ops\":[{\"op\":\"paste\",\"origin\":[0,64,0],"
+                    + "\"blueprint\":{\"palette\":{\"c\":\"copper_bulb\"},\"layers\":[[\"c\"]]}}]}");
+            assertTrue(refused.contains("unknown block 'copper_bulb'"), refused);
+            return null;
+        });
+    }
+
+    @Test
+    void theSkippedListInAResultIsCapped() throws Exception {
+        String[] states = new String[14];
+        states[0] = "oak_stairs[facing=east]";
+        for (int i = 1; i < states.length; i++) states[i] = "new_block_" + (char) ('a' + i);
+        withAsset(states, () -> {
+            // Every paste of a batch adds to the call's list.
+            Args a = args("{\"ops\":[{\"op\":\"paste\",\"name\":\"window\",\"origin\":[0,64,0]},"
+                    + "{\"op\":\"paste\",\"name\":\"window\",\"origin\":[0,70,0]}]}");
+            assertEquals(2, Tools.batchOps(a).size());
+            JsonObject result = new JsonObject();
+            Tools.addSkipped(result, a.skipped());
+            assertEquals(10, result.getAsJsonArray("skipped").size());
+            assertEquals("new_block_b", result.getAsJsonArray("skipped").get(0).getAsString(), "sorted");
+            assertEquals(13, result.get("skipped_total").getAsInt());
+            JsonObject clean = new JsonObject();
+            Tools.addSkipped(clean, java.util.Set.of());
+            assertEquals("{}", clean.toString());
+            return null;
+        });
+        String[] none = {"copper_bulb", "air"};
+        String message = assertThrows(EditException.class, () -> withAsset(none,
+                () -> single("paste", args("{\"name\":\"window\",\"origin\":[0,64,0]}"))), "air alone is not a paste").getMessage();
+        assertEquals("this server has none of the blocks of asset 'window': copper_bulb", message);
+    }
 }

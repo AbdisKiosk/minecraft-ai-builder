@@ -119,4 +119,16 @@ class BlueprintTest {
         assertEquals(cells(bp), cells(z.flipped('z')));
         assertThrows(EditException.class, () -> bp.flipped('y'));
     }
+
+    @Test
+    void withoutLeavesThoseCellsAlone() {
+        Blueprint bp = Blueprint.ofStates(3, 1, 2, new String[]{"stone", "copper_bulb", "air", "copper_bulb", "stone", "dirt"}, false);
+        Blueprint kept = bp.without(s -> s.startsWith("copper"));
+        assertEquals(4, kept.cellCount());
+        assertEquals(Blueprint.SKIP, kept.at(1, 0, 0));
+        assertEquals(Blueprint.SKIP, kept.at(0, 0, 1));
+        assertFalse(kept.palette().containsValue("copper_bulb"));
+        assertEquals(6, bp.cellCount(), "the original is unchanged");
+        assertSame(bp, bp.without(s -> false));
+    }
 }
