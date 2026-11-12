@@ -10,6 +10,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -76,5 +77,22 @@ class DiffImagesTest {
         assertEquals("[\"air\",\"stone\",\"oak_slab[type=bottom]\"]", o.get("palette").toString());
         assertEquals("[[0,4]]", o.get("before").toString());
         assertEquals("[[1,1],[2,1],[1,1],[0,1]]", o.get("after").toString());
+    }
+
+    @Test
+    void modelStatesRestoreDefaultsWithoutChangingCompactLabelsOrExplicitProperties() {
+        JsonArray palette = new JsonArray();
+        for (String state : List.of("air", "oak_stairs", "oak_stairs[facing=east,half=top]")) palette.add(state);
+        Map<String, Integer> calls = new HashMap<>();
+        JsonArray models = DiffImages.modelStates(palette, type -> {
+            calls.merge(type, 1, Integer::sum);
+            return type.equals("oak_stairs")
+                    ? "minecraft:oak_stairs[waterlogged=false,shape=straight,half=bottom,facing=north]" : type;
+        });
+        assertEquals("oak_stairs", palette.get(1).getAsString());
+        assertEquals("air", models.get(0).getAsString());
+        assertEquals("oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]", models.get(1).getAsString());
+        assertEquals("oak_stairs[facing=east,half=top,shape=straight,waterlogged=false]", models.get(2).getAsString());
+        assertEquals(Map.of("air", 1, "oak_stairs", 1), calls);
     }
 }

@@ -23,6 +23,7 @@ The web UI is a Next.js app in `panel/web/`. The build runs `npm ci` and `npm ru
 static files into the jar, so building needs Node 20.9+ with `npm` on the `PATH`; running the jar does not need Node.
 To work on the UI, start a panel (`./gradlew :panel:run`) and then `cd panel/web && npm run dev`: the dev server
 reloads on save and proxies `/api` and `/events` to the panel (`PANEL_URL`, default `http://127.0.0.1:8080`).
+Run `npm run typecheck` there for TypeScript checks. The schematic conversion tests run with `npm test` (Node 22.18+).
 
 ## Set up on the VPS
 
@@ -122,6 +123,24 @@ difference in `plugins/AIBuilder/history/`. For each entry, the panel shows:
 - **Revert**: puts the old blocks back as a new job. Blocks that something else changed after the edit are left
   alone and listed as conflicts, unless you tick "also overwrite later changes". Reverting does not use WorldEdit's
   undo history, so it still works after a restart.
+
+The Pictures card on history entries and drafts also offers **3D (interactive)** on wider screens. It draws real
+Minecraft block models and textures, with Before / After / Changes modes, coloured change overlays, an only-changed
+filter, a cut-height slider and click-to-inspect coordinates. PNG views remain the default. The 3D view needs WebGL 2
+and the server's reported Minecraft version.
+Update the server plugin along with the panel: 3D needs the `/blocks` response's complete model states, including
+default properties. Older plugins still support the PNG views and show an upgrade message for 3D.
+
+On first use of a Minecraft version, the panel downloads the client jar from Mojang, verifies its SHA-1 and caches
+it in `cache/client-jars/` beside `panel.json`. The panel host needs outbound HTTPS for this download. The browser
+also caches the jar (roughly 30 MB, depending on the version); loading and parsing textures can take a moment.
+The renderer rebuilds the scene and re-parses resources for each control change, so large regions can redraw slowly.
+Jars are served only to logged-in users; no Minecraft assets are bundled with AIBuilder. Servers older than 1.13
+use the 1.13.2 client's models for their translated block states.
+
+**Distribution review:** SchematicWebViewer 5.0.1 is MIT, but its bundled SchematicJS 0.10.0 dependency declares
+GPL-3.0. Resolve the resulting distribution/source and third-party notice requirements before shipping this viewer;
+the viewer's MIT label alone does not establish that the whole dependency chain is permissively licensed.
 
 Settings live under `history:` in the plugin's `config.yml`:
 

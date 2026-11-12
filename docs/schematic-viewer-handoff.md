@@ -1,7 +1,62 @@
 # Handoff: 3D view on EngineHub's SchematicWebViewer
 
-Status as of 2026-11-12. Work in progress, committed as one WIP commit on branch `schematic-viewer` (not pushed).
-The panel UI does not compile yet: `components/Pictures.tsx` still imports the old three.js viewer API (step 1 below).
+## Continuation status (2026-11-12)
+
+The implementation is wired and builds. `npm run typecheck`, all eleven `npm test` cases and `./gradlew build`
+pass (234 Java tests), including the authenticated client-jar route test. Browser checks used the production panel
+jar and RealGolf 26.3.build.249, history `hmwci3j2d` and draft `dmwchw0qy`.
+
+Verification results:
+
+- History: textured Before / After / Changes, only-changed, cut height and PNG restoration checked. Three picked
+  changed blocks were compared with `/blocks`, including coordinates, compact before/after labels and kind.
+- Draft: all three modes, only-changed, cut height and PNG restoration pass with the final right-handed view.
+- An asymmetric two-block fixture confirms east is left from a north-facing camera and exact picking still works.
+- Old-plugin, missing-WebGL and client-jar failure messages, rapid control changes and unmount are checked.
+- **Performance follow-up:** large clubhouse redraws take tens of seconds in headless Chrome; one history redraw
+  exceeded a 60-second test deadline. The library re-parses the jar and rebuilds the scene per draw. Check interactive
+  performance with a normal GPU-backed browser before shipping; do not rely on the original one-second estimate.
+  Camera handedness was fixed after the first complete history control run; the final draft and asymmetric-fixture
+  checks cover that change. Screenshots and temporary Playwright scripts are outside the repo.
+
+Changes since the original WIP:
+
+- Pictures owns React controls, debounces redraws and ignores stale completion callbacks. Both detail pages pass
+  the server's `mc`. Missing versions, WebGL and old plugins get explanatory messages; PNGs remain the default.
+- The schematic NBT uses `Int8Array` for block bytes. Browser Buffer constructors can differ between bundles;
+  `Buffer` there made nbt-ts throw `Invalid tag value` despite passing Node checks.
+- **Complete states are essential.** Reads/history omit default properties. `/blocks` now includes `models`,
+  parallel to the compact `palette`, with defaults restored through `WorldEditBridge.defaultState`. WE7 uses the
+  registry; WE6 uses the existing legacy table. Resolution happens once per type, on the server thread. The
+  browser uses `models` in NBT and compact `palette` labels for inspection. Update plugins with the panel; old
+  plugins keep working for PNGs but show a 3D upgrade message.
+- **26.x texture references need adaptation.** `modelResources.ts` scans the client jar once per mounted viewer
+  and builds a small, in-memory resource pack converting texture `{ sprite, ... }` objects to string references.
+  The library searches the first jar before packs, so that compatibility pack is supplied first, with the original
+  jar as fallback. No jar on disk is modified and no Minecraft data is committed. `jszip` is now a direct dependency.
+- Draws are serialized/coalesced. The downloaded jar/override blob URLs are reused until unmount; the library
+  still re-parses them per draw. Failed renders dispose the engine even when the library returns no handles.
+- The library's Babylon `Intermediate` performance preset marks every model instance unpickable. Enable picking
+  on visible/enabled model meshes after rendering, while keeping hidden prototypes and change overlays unpickable.
+  Recover the clicked cell from the instance's translation relative to its hidden prototype, rather than rounding
+  the face hit: thin models and exact cell-edge hits otherwise report a neighbouring air cell.
+- Set the scene to right-handed in `getClientJarUrl`, which runs before model/material construction. This matches
+  Minecraft/PNG north elevations (east on the left), rather than mirroring the build with Babylon's default.
+- Gradle's optional `public/` input is a file tree, because removing the only asset otherwise broke clean builds.
+- `panel/web/tests/` covers conversion, filters, cuts, varints, full model states and texture-reference adaptation.
+  Run `npm test` with Node 22.18+; building the app still needs only Node 20.9+.
+- The local dev plugin was updated and Minecraft restarted gracefully. The previous jar and the temporary
+  Playwright check/screenshots are in the approved temp directory, under `opencode/viewer-check/`. No builds,
+  drafts or history were edited by the checks.
+
+**Before shipping/merging:** licensing review is required, along with the performance follow-up above. SchematicWebViewer 5.0.1 is MIT, but its bundled
+`@enginehub/schematicjs` 0.10.0 dependency declares GPL-3.0 (confirmed in its upstream LICENSE too). Resolve
+distribution/source obligations and third-party notices; do not assume the viewer's MIT label covers the whole
+bundle. No repository licensing has been changed. Open the PR as a draft until this is resolved.
+
+The original handoff below is retained for context; its TODOs and “never run” notes are historical, not current.
+
+---
 
 ## Goal
 

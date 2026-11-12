@@ -1,8 +1,9 @@
 // The 3D view: EngineHub's schematic viewer, with the changes marked on top and a click to inspect a block.
 // Loaded only when "3D" is picked, since it brings Babylon.js.
 import { renderSchematic, type SchematicHandles } from '@enginehub/schematicwebviewer';
-import { type ArcRotateCamera, Color3, Matrix, MeshBuilder, type Scene, StandardMaterial } from '@babylonjs/core';
+import { type ArcRotateCamera, Color3, EngineStore, InstancedMesh, Matrix, MeshBuilder, type Scene, StandardMaterial } from '@babylonjs/core';
 import { cells, type Diff, type Kind, toSchematic, type View } from './schematic';
+import { modelOverrides } from './modelResources';
 
 // The same colours as IsoRenderer and the legend.
 const BACKGROUND = 0x1E2228;
@@ -23,7 +24,9 @@ export interface Viewer {
 
 export function supported(): boolean {
   try {
-    return !!document.createElement('canvas').getContext('webgl2');
+    const gl = document.createElement('canvas').getContext('webgl2');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return !!gl;
   } catch {
     return false;
   }
@@ -38,6 +41,27 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
   let current: { canvas: HTMLCanvasElement; handles: SchematicHandles } | null = null;
   let shown = 0;
   let disposed = false;
+  let loading = Promise.resolve();
+  let jar: Promise<string[]> | null = null;
+  const resourceUrls: string[] = [];
+  const abort = new AbortController();
+
+  // Check HTTP errors ourselves: the library otherwise tries to unzip the panel's JSON error response.
+  // Keep the blob for this viewer's lifetime so redraws need not fetch it again.
+  const resources = () => jar ??= (async () => {
+    const response = await fetch(jarUrl, { signal: abort.signal });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error || `Could not load Minecraft textures (${response.status}).`);
+    }
+    const blob = await response.blob();
+    const overrides = await modelOverrides(await blob.arrayBuffer());
+    if (disposed) throw new Error('Viewer closed.');
+    // The library searches its first jar before resource packs, so put the small compatibility pack first.
+    if (overrides) resourceUrls.push(URL.createObjectURL(overrides));
+    resourceUrls.push(URL.createObjectURL(blob));
+    return resourceUrls;
+  })();
 
   const size = () => ({ width: Math.max(1, holder.clientWidth), height: Math.max(1, holder.clientHeight) });
   const resize = new ResizeObserver(() => {
@@ -84,14 +108,19 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
   let down: [number, number] | null = null;
   const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
   const onUp = (e: PointerEvent) => {
-    if (!current || !down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
+    const start = down;
+    down = null;
+    if (!current || !start || Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 4) return;
     const rect = current.canvas.getBoundingClientRect();
     const s = scene();
     const hit = s.pick(e.clientX - rect.left, e.clientY - rect.top);
-    const normal = hit.hit ? hit.getNormal(true) : null;
-    if (!hit.pickedPoint || !normal) return onPick(null);
-    // Step just inside the face that was hit, then into the cell grid.
-    const p = hit.pickedPoint.subtract(normal.scale(0.01));
+    if (!hit.hit || !hit.pickedMesh || !hit.pickedPoint) return onPick(null);
+    const normal = hit.getNormal(true);
+    // Each model element is an instance of a hidden prototype. Its translation relative to that prototype is
+    // the exact cell centre, even for thin/rotated models or a hit precisely on an edge between two cells.
+    const p = hit.pickedMesh instanceof InstancedMesh
+      ? hit.pickedMesh.position.subtract(hit.pickedMesh.sourceMesh.position)
+      : normal ? hit.pickedPoint.subtract(normal.scale(0.01)) : hit.pickedPoint;
     const x = Math.floor(p.x + width / 2), y = Math.floor(p.y + height / 2), z = Math.floor(p.z + length / 2);
     if (x < 0 || y < 0 || z < 0 || x >= width || y >= height || z >= length) return onPick(null);
     const index = (y * length + z) * width + x;
@@ -103,23 +132,43 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
     });
   };
 
-  return {
-    async show(view) {
-      const mine = ++shown;
-      const schematic = await toSchematic(diff, cells(diff, view));
-      const canvas = document.createElement('canvas');
-      const handles = await renderSchematic(canvas, schematic, {
+  async function draw(view: View, mine: number) {
+    if (disposed || mine !== shown) return;
+    const [url, ...packs] = await resources();
+    const schematic = await toSchematic(diff, cells(diff, view));
+    if (disposed || mine !== shown) return;
+    const canvas = document.createElement('canvas');
+    let handles: SchematicHandles;
+    try {
+      handles = await renderSchematic(canvas, schematic, {
         size: size(),
-        getClientJarUrl: async () => jarUrl,
+        getClientJarUrl: async () => {
+          // This hook runs after Scene/Camera creation but before any model meshes/materials are built. Match
+          // Minecraft's handedness here, so a north-facing camera has east on the left, like the PNG elevation.
+          const s = EngineStore.Instances.find(engine => engine.getRenderingCanvas() === canvas)!.scenes[0];
+          s.useRightHandedSystem = true;
+          s.activeCamera?.getViewMatrix(true);
+          s.activeCamera?.getProjectionMatrix(true);
+          return url;
+        },
+        resourcePacks: packs,
         orbit: false,
         antialias: true,
         backgroundColor: BACKGROUND,
       });
-      if (disposed || mine !== shown) {
-        handles.destroy();
-        return;
-      }
-      const s = handles.getEngine().scenes[0];
+    } catch (ex) {
+      // The library creates its engine before loading models, but returns no handles on failure.
+      EngineStore.Instances.find(engine => engine.getRenderingCanvas() === canvas)?.dispose();
+      throw ex;
+    }
+    if (disposed || mine !== shown) {
+      handles.destroy();
+      return;
+    }
+    const s = handles.getEngine().scenes[0];
+    try {
+      // The library's Intermediate performance preset makes every model/instance unpickable by default.
+      for (const mesh of s.meshes) mesh.isPickable = mesh.isVisible && mesh.isEnabled();
       if (view.mode === 'changes') mark(s, view);
       // Keep the camera where the user left it.
       if (current) {
@@ -128,16 +177,33 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
         now.beta = was.beta;
         now.radius = was.radius;
         now.target.copyFrom(was.target);
-        current.handles.destroy();
       }
-      canvas.addEventListener('pointerdown', onDown);
-      canvas.addEventListener('pointerup', onUp);
-      holder.replaceChildren(canvas);
-      current = { canvas, handles };
-      onPick(null);
+    } catch (ex) {
+      handles.destroy();
+      throw ex;
+    }
+    current?.handles.destroy();
+    const { width: w, height: h } = size();
+    handles.setSize(w, h);
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointerup', onUp);
+    holder.replaceChildren(canvas);
+    current = { canvas, handles };
+    onPick(null);
+  }
+
+  return {
+    show(view) {
+      const mine = ++shown;
+      // Do not parse several client jars/create several WebGL contexts at once when controls change quickly.
+      const next = loading.then(() => draw(view, mine));
+      loading = next.catch(() => {});
+      return next;
     },
     dispose() {
       disposed = true;
+      abort.abort();
+      resourceUrls.forEach(url => URL.revokeObjectURL(url));
       resize.disconnect();
       current?.handles.destroy();
       current = null;

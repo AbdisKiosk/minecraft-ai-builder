@@ -10,7 +10,10 @@ export type Kind = 'ADDED' | 'REMOVED' | 'CHANGED';
 /** What /blocks sends: run-length palette indexes in y, z, x order, which is also a Sponge schematic's order. */
 export interface BlockData {
   box: number[];
-  palette: string[];
+  // Older plugins sent colour/shape objects.
+  palette: (string | { state: string })[];
+  /** Same indexes as palette, with default properties restored for model selection. */
+  models?: string[];
   before: [number, number][];
   after: [number, number][];
   changes: [number, Kind][];
@@ -23,6 +26,7 @@ export interface Diff {
   height: number;
   length: number;
   palette: string[];
+  models: string[];
   air: number;
   before: Uint32Array;
   after: Uint32Array;
@@ -56,14 +60,16 @@ export function decode(data: BlockData): Diff {
   const [x1, y1, z1, x2, y2, z2] = data.box;
   const width = x2 - x1 + 1, height = y2 - y1 + 1, length = z2 - z1 + 1;
   const volume = width * height * length;
-  const palette = [...data.palette];
+  const palette = data.palette.map(state => typeof state === 'string' ? state : state.state);
   let air = palette.indexOf('air');
   if (air < 0) air = palette.push('air') - 1;
+  const models = data.models ? [...data.models] : [...palette];
+  if (models.length < palette.length) models.push('air');
   const kinds = new Map(data.changes);
   let topChange = 0;
   for (const index of kinds.keys()) topChange = Math.max(topChange, Math.floor(index / (width * length)));
   return {
-    origin: [x1, y1, z1], width, height, length, palette, air, kinds, topChange,
+    origin: [x1, y1, z1], width, height, length, palette, models, air, kinds, topChange,
     before: expand(data.before, volume),
     after: expand(data.after, volume),
   };
@@ -84,17 +90,18 @@ export function cells(diff: Diff, view: View): Uint32Array {
 /** A gzipped Sponge schematic (version 2) of {@code cells}, in base64, which is what the viewer takes. */
 export async function toSchematic(diff: Diff, cells: Uint32Array): Promise<string> {
   // Only the states in use, so the viewer loads no models it does not draw.
-  const ids = new Map<number, number>();
+  const ids = new Map<string, number>();
   const blocks = new Uint8Array(cells.length * 5);
   let n = 0;
   for (const cell of cells) {
-    let id = ids.get(cell);
-    if (id === undefined) ids.set(cell, id = ids.size);
+    const state = diff.models[cell];
+    let id = ids.get(state);
+    if (id === undefined) ids.set(state, id = ids.size);
     for (; id > 127; id >>>= 7) blocks[n++] = (id & 127) | 128;
     blocks[n++] = id;
   }
   const palette: Record<string, Int> = {};
-  for (const [cell, id] of ids) palette[diff.palette[cell]] = new Int(id);
+  for (const [state, id] of ids) palette[state] = new Int(id);
   const nbt = encode('Schematic', {
     Version: new Int(2),
     Width: new Short(diff.width),
@@ -102,7 +109,8 @@ export async function toSchematic(diff: Diff, cells: Uint32Array): Promise<strin
     Length: new Short(diff.length),
     PaletteMax: new Int(ids.size),
     Palette: palette,
-    BlockData: Buffer.from(blocks.buffer, 0, n),
+    // Int8Array is recognised across browser Buffer polyfills (whose constructors may differ between bundles).
+    BlockData: new Int8Array(blocks.buffer, 0, n),
   });
   const gzipped = await new Response(new Blob([new Uint8Array(nbt)]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
   return Buffer.from(gzipped).toString('base64');

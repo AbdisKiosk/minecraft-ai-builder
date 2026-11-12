@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, message } from '../lib/api';
 import type { Renders } from '../lib/types';
-import type { BlockData, Viewer } from '../lib/viewer3d';
+import type { BlockData, Diff, Mode } from '../lib/schematic';
+import type { Picked, Viewer } from '../lib/viewer3d';
 import Modal from './Modal';
 
 const SLOTS = ['before', 'after', 'changes'] as const;
@@ -10,7 +11,7 @@ const SLOTS = ['before', 'after', 'changes'] as const;
  * Before/after/changes pictures of a history entry or draft, or the interactive 3D view.
  * `base` is the entry's API path; `none` says why there is nothing to draw, if so.
  */
-export default function Pictures({ base, whose, none }: { base: string; whose: string; none?: string }) {
+export default function Pictures({ base, whose, none, mc }: { base: string; whose: string; none?: string; mc?: string }) {
   const [view, setView] = useState('iso');
   const [corner, setCorner] = useState('se');
   // The 3D view needs room to drag in: on a phone the pictures are the better view.
@@ -37,7 +38,9 @@ export default function Pictures({ base, whose, none }: { base: string; whose: s
         </span>
       </div>
       {none ? <div className="renders"><p className="muted">{none}</p></div>
-        : view === '3d' ? <div className="renders one"><Viewer3d url={`${base}/blocks`} /></div>
+        : view === '3d' ? <div className="renders one">{mc
+          ? <Viewer3d key={`${base}/${mc}`} url={`${base}/blocks`} mc={mc} />
+          : <p className="muted">3D needs the server's Minecraft version.</p>}</div>
         : <Rendered key={`${view}/${corner}`} url={`${base}/render?view=${view}&corner=${corner}`} />}
       <p className="muted" style={{ margin: '10px 0 0' }}>Drawn from the world as it is now, with {whose} old and new blocks put in
         place. Changes hidden inside solid blocks do not show; see the list below.</p>
@@ -76,29 +79,64 @@ function Rendered({ url }: { url: string }) {
   );
 }
 
-/** The 3D view. Its code (with three.js) is only loaded here, and its WebGL context is given back on unmount. */
-function Viewer3d({ url }: { url: string }) {
+/** Loaded only when selected; the viewer owns the stage's canvas and releases it on unmount. */
+function Viewer3d({ url, mc }: { url: string; mc: string }) {
   const holder = useRef<HTMLDivElement>(null);
+  const [viewer, setViewer] = useState<Viewer | null>(null);
+  const [diff, setDiff] = useState<Diff | null>(null);
   const [note, setNote] = useState('Loading blocks…');
+  const [mode, setMode] = useState<Mode>('changes');
+  const [onlyChanged, setOnlyChanged] = useState(false);
+  const [cut, setCut] = useState(0);
+  const [picked, setPicked] = useState<Picked | null>(null);
+  const drawn = useRef(false);
   useEffect(() => {
     let current = true;
-    let viewer: Viewer | null = null;
-    Promise.all([import('../lib/viewer3d'), api<BlockData>(url)]).then(([module, data]) => {
+    let v: Viewer | null = null;
+    Promise.all([import('../lib/viewer3d'), import('../lib/schematic'), api<BlockData>(url)]).then(([module, schematic, data]) => {
       if (!current || !holder.current) return;
       if (!module.supported()) throw new Error('This browser has no WebGL 2, which the 3D view needs.');
-      setNote('');
-      viewer = module.mount(holder.current, data);
+      if (!data.models) throw new Error('3D needs an updated AIBuilder plugin on this server (complete block model states).');
+      const d = schematic.decode(data);
+      setDiff(d);
+      setCut(Math.min(d.height - 1, d.topChange + 1));
+      v = module.createViewer(holder.current, d, `/api/minecraft/${encodeURIComponent(mc)}/client.jar`, setPicked);
+      setViewer(v);
     }).catch(ex => { if (current) setNote(message(ex)); });
     return () => {
       current = false;
-      if (viewer) viewer.dispose();
+      v?.dispose();
     };
-  }, [url]);
+  }, [url, mc]);
+  useEffect(() => {
+    if (!viewer) return;
+    let current = true;
+    setPicked(null);
+    setNote(drawn.current ? 'Drawing…' : 'Loading Minecraft textures… (first use downloads the client jar)');
+    const timer = setTimeout(() => {
+      viewer.show({ mode, onlyChanged, cut }).then(() => {
+        if (current) { drawn.current = true; setNote(''); }
+      }, ex => { if (current) setNote(message(ex)); });
+    }, 250);
+    return () => { current = false; clearTimeout(timer); };
+  }, [viewer, mode, onlyChanged, cut]);
   return (
     <div className="viewer3d">
-      {note && <span className="note">{note}</span>}
-      {/* Filled by viewer3d.mount, not by React. */}
-      <div ref={holder} style={{ display: 'contents' }} />
+      <div className="v3-bar">
+        <div className="seg" role="group" aria-label="3D mode">
+          {SLOTS.map(slot => <button key={slot} className={mode === slot ? 'on' : ''} aria-pressed={mode === slot}
+            onClick={() => setMode(slot)}>{slot[0].toUpperCase() + slot.slice(1)}</button>)}
+        </div>
+        <label><input type="checkbox" checked={onlyChanged} disabled={mode !== 'changes'}
+          onChange={e => setOnlyChanged(e.target.checked)} /> only changed blocks</label>
+        <span className="spacer" />
+        <label>Cut height <input type="range" min={0} max={diff ? diff.height - 1 : 0} value={cut} disabled={!diff}
+          onChange={e => setCut(Number(e.target.value))} /><output>{diff ? diff.origin[1] + cut : '—'}</output></label>
+      </div>
+      <div className="v3-stage" ref={holder} />
+      <div className="v3-info" role="status">{note || (picked
+        ? <><b>{picked.pos.join(' ')}</b>  {picked.before} → {picked.after}  ({picked.kind?.toLowerCase() ?? 'unchanged'})</>
+        : 'Drag to orbit · scroll to zoom · click a block to inspect')}</div>
     </div>
   );
 }

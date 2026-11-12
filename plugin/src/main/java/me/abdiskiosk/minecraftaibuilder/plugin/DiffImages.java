@@ -3,6 +3,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
+import me.abdiskiosk.minecraftaibuilder.common.BlockState;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
@@ -15,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.function.UnaryOperator;
 
 /** Before, after and changes of a diff, as pictures or as blocks, on the world around it as it is now. For the panel. */
 final class DiffImages {
@@ -73,7 +75,24 @@ final class DiffImages {
     /** The same region as {@link #render}, as blocks for the panel's 3D view. */
     static JsonObject blocks(BuildService service, String world, BlockDiff diff, String what, long maxVolume, long perTick) {
         Region r = region(service, world, diff, what, maxVolume, perTick);
-        return encode(r.box(), r.before(), r.after(), diff);
+        JsonObject out = encode(r.box(), r.before(), r.after(), diff);
+        // Reads/history omit default properties; model variants require all of them. Resolve only the palette,
+        // on the server thread, without expanding every cell or changing the compact labels used for inspection.
+        out.add("models", service.sync(() -> modelStates(out.getAsJsonArray("palette"), service.bridge()::defaultState)));
+        return out;
+    }
+
+    static JsonArray modelStates(JsonArray palette, UnaryOperator<String> defaults) {
+        Map<String, BlockState> byType = new LinkedHashMap<>();
+        JsonArray models = new JsonArray();
+        for (var entry : palette) {
+            BlockState state = BlockState.parse(entry.getAsString());
+            BlockState base = byType.computeIfAbsent(state.type(), type -> BlockState.parse(defaults.apply(type)));
+            Map<String, String> properties = new TreeMap<>(base.props());
+            properties.putAll(state.props());
+            models.add(new BlockState(state.type(), properties).toString());
+        }
+        return models;
     }
 
     /**

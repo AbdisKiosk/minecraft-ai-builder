@@ -57,7 +57,8 @@ export default function DraftPage({ server, id, servers }: { server: string; id:
       </div>
         <Pills of={d} /></div>
       <div className="stack">
-        <Pictures base={base} whose="the draft's" none={total > 0 ? undefined : 'The draft changes no blocks.'} />
+        <Pictures base={base} whose="the draft's" mc={servers.get(server)?.info?.mc}
+          none={total > 0 ? undefined : 'The draft changes no blocks.'} />
         <section className="card"><h2>{open ? 'Approve' : 'Decision'}</h2>
           {open ? (
             <>
