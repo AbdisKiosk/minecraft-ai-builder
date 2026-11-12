@@ -1,34 +1,35 @@
 # minecraft-ai-builder
 
-A Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp`) and to scripts over REST
-(`POST /api/<tool>`). Both use the same tools (`plugin/.../tools/Tools.java`). Optionally the plugin connects out to
-a web app, which serves the same endpoints for many servers under `/s/<server>/`: the hosted, multi-user `web/`
-(see `docs/web.md`), which replaces the self-hosted Java panel `panel/` (see `docs/panel.md`).
+The Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp`) and to scripts over REST
+(`POST /api/<tool>`). Both use the same tools (`plugin/core/.../tools/Tools.java`). Optionally the plugin connects out
+to the panel (`panel/`, see `docs/panel.md`), a hosted, multi-user web app that serves the same endpoints for many
+servers under `/s/<server>/`.
 
-## Modules
-- `common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), generators that save Claude from listing blocks (`Roofs`, `Lighting`, `Halves`, `Terrain`), PNG renderer, `WorldEditBridge` contract, edit history diffs (`RegionSnapshot`, `BlockDiff`), drafts (`Draft`, `DryRunStore`, `PreviewHandle`), region transfer (`StateArrays`) and the relay frame names (`RelayProtocol`), which plugin and panel share. Unit tested.
-- `bridge-we7/`: WorldEdit 7.2+ / FAWE (MC 1.13 → 26.x). Compiled against WE 7.2.20 + spigot-api 1.13.2.
+## Layout
+`plugin/` is a self-contained Gradle build (run `./gradlew` there) with four modules:
+- `plugin/common/`: pure Java. Op model, blueprint format (and `StateFlip` for mirrored copies), region summary/encoding, region lint (`RegionLint`, `BlockTraits`), generators that save Claude from listing blocks (`Roofs`, `Lighting`, `Halves`, `Terrain`), PNG renderer, `WorldEditBridge` contract, edit history diffs (`RegionSnapshot`, `BlockDiff`), drafts (`Draft`, `DryRunStore`, `PreviewHandle`), region transfer (`StateArrays`) and the relay frame names (`RelayProtocol`), which the plugin shares with the panel's `hub.ts`. Unit tested.
+- `plugin/bridge-we7/`: WorldEdit 7.2+ / FAWE (MC 1.13 → 26.x). Compiled against WE 7.2.20 + spigot-api 1.13.2.
   `DryWorld` (in both bridges) is a proxy `World` that records writes for drafts; dry-run sessions use a private event bus.
-- `bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
+- `plugin/bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.
-- `plugin/`: HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only). Compiled against spigot-api 1.8.8.
-- `panel/`: standalone web panel (Javalin). Relay hub, `/s/<id>/` proxy, login, SSE live updates. The UI is a Next.js app in `web/` (React, TypeScript), exported to static files that the Gradle build puts in the jar; pages are hash routes because `/s/` belongs to the proxy. Never shaded into the plugin; plugin tests use it only on the test classpath.
-- `web/`: the hosted app (Next.js, TypeScript). One Node process (`server.ts`) serves the landing page, the dashboard, the API routes, the `/s/<id>/` proxy and the plugins' `/relay` WebSocket. Auth0 accounts, servers, memberships, invites and access tokens in MySQL through raw SQL (no ORM; `migrations/*.sql` run on startup), archived history and Minecraft client jars in Cloudflare R2. Server code is in `lib/server/`; `hub.ts` must stay in step with `RelayProtocol`.
+- `plugin/core/`: the plugin itself. HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only; its test runs against `FakePanel`). Compiled against spigot-api 1.8.8.
+
+Beside it:
+- `panel/`: the web panel (Next.js, TypeScript). One Node process (`server.ts`) serves the landing page, the dashboard, the API routes, the `/s/<id>/` proxy and the plugins' `/relay` WebSocket. Auth0 accounts, servers, memberships, invites and access tokens in MySQL through raw SQL (no ORM; `migrations/*.sql` run on startup), archived history and Minecraft client jars in Cloudflare R2. Server code is in `lib/server/`; `hub.ts` must stay in step with `RelayProtocol`. `panel/Dockerfile` builds its image.
 - `sdk/python/aibuilder/`: stdlib-only REST client for build scripts in `builds/`.
 
-Everything targets Java 17 bytecode (`--release 17`). The plugin core must never import WorldEdit classes;
+Everything in `plugin/` targets Java 17 bytecode (`--release 17`). The plugin core must never import WorldEdit classes;
 bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 
 ## Commands
-- `./gradlew build`: tests + shaded jars at `plugin/build/libs/AIBuilder-<version>.jar` and `panel/build/libs/AIBuilderPanel-<version>.jar`
-- `cd panel/web && PANEL_URL=http://127.0.0.1:8080 npm run dev`: the panel UI with hot reload, its data proxied from a running panel. `./gradlew build -PskipWeb` builds without Node (a panel with no UI).
-- `./gradlew :panel:run --args="add-server test"` / `:panel:run`: panel CLI and server (state in `panel/run/panel.json`)
-- `cd web && npm run dev`: the hosted app on :3000 with hot reload (needs `web/.env.local`, see `.env.example`). `npm test`, `npm run typecheck`, `npm run build`; `server.ts` itself does not hot reload.
-- `./gradlew :plugin:runServer` (1.21.11 + WE 7.3.19), `:plugin:runLatest` (26.3 + WE 7.4.6), `:plugin:runLegacy` (1.8.8, add WE 6.1.9 yourself)
+- `cd plugin && ./gradlew build`: tests + the shaded jar at `plugin/core/build/libs/AIBuilder-<version>.jar`
+- `cd plugin && ./gradlew :core:runServer` (1.21.11 + WE 7.3.19), `:core:runLatest` (26.3 + WE 7.4.6), `:core:runLegacy` (1.8.8, add WE 6.1.9 yourself). Run directories are `plugin/core/run/<version>/`.
+- `cd panel && npm run dev`: the panel on :3000 with hot reload (needs `panel/.env.local`, see `.env.example`). `npm test`, `npm run typecheck`, `npm run build`; `server.ts` itself does not hot reload.
+- `docker build -t aibuilder-panel panel`: the panel's image (port 3000, configured with the variables in `.env.example`).
 - `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
 - `python3 tools/mcp_cli.py cost|list|call <tool> '<json>'|report`: the MCP endpoint from a shell, as a client sees it. It finds the local dev server by itself; with `AIBUILDER_LOG=<file>` it logs what every call costs, which is how a change to the tools is measured.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
-- Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code. Through the panel, `AIBUILDER_URL` is `https://<panel>/s/<server>` with a client token from `add-client`. Players use `/aibuilder mark|unmark|marks|note`.
+- Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code. Through the panel, `AIBUILDER_URL` is `https://<panel>/s/<server>` with an access token made in the panel. Players use `/aibuilder mark|unmark|marks|note`.
 
 ## Building in Minecraft
 When the aibuilder MCP server is connected, use the `/build` skill for the workflow and `build-style` for aesthetics.
@@ -44,7 +45,7 @@ WorldEdit's undo history (about 45 MB per million changed blocks, for the last 1
   `limits.min-free-memory-mb` is the heap it never hands out.
 - Anything new that reads or changes many blocks goes through those two paths, and an edit task must stop on any
   `Throwable`: one that keeps failing every tick pins the memory the server is short of.
-- To test: start the dev server with `JAVA_TOOL_OPTIONS=-Xmx1g ./gradlew :plugin:runServer` and sweep checks over
+- To test: start the dev server with `JAVA_TOOL_OPTIONS=-Xmx1g ./gradlew :core:runServer` (in `plugin/`) and sweep checks over
   terrain far from spawn; `grep OutOfMemory` in its log must find nothing.
 
 ## Token cost

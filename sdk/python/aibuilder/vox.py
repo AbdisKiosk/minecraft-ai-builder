@@ -82,7 +82,7 @@ def _move_sides(props, m: dict) -> None:
                 p[0] = m[p[0]]
 
 
-# The Java side has the same rules in common/.../StateFlip.java: the two must stay in sync.
+# The Java side has the same rules in plugin/common/.../StateFlip.java: the two must stay in sync.
 def transform_state(state: str, turns: int = 0, flip: str | None = None) -> str:
     """A block state turned by quarter turns clockwise seen from above, after an optional mirror.
 

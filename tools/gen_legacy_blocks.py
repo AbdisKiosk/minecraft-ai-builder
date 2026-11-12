@@ -10,7 +10,7 @@ Usage (stdlib only):
     python3 -I tools/gen_legacy_blocks.py [--jar PATH_TO_worldedit-core-7.2.20.jar]
 
 Without --jar the jar is looked up in the Gradle cache. Output:
-    bridge-we6/src/main/resources/me/abdiskiosk/minecraftaibuilder/bridge/we6/legacy-blocks.txt
+    plugin/bridge-we6/src/main/resources/me/abdiskiosk/minecraftaibuilder/bridge/we6/legacy-blocks.txt
 
 Output line kinds (see LegacyBlockTable):
     <id>:<data> <type> [prop=value,...]     bidirectional
@@ -30,7 +30,7 @@ import sys
 import zipfile
 
 ENTRY = "com/sk89q/worldedit/world/registry/legacy.json"
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "bridge-we6", "src", "main", "resources",
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "plugin", "bridge-we6", "src", "main", "resources",
                    "me", "abdiskiosk", "minecraftaibuilder", "bridge", "we6", "legacy-blocks.txt")
 
 # What a property means when the client leaves it out. These are the 1.13+ defaults, so a bare
@@ -130,7 +130,7 @@ def find_jar():
     pattern = os.path.expanduser("~/.gradle/caches/modules-2/files-2.1/com.sk89q.worldedit/worldedit-core/7.2.20/*/worldedit-core-7.2.20.jar")
     found = glob.glob(pattern)
     if not found:
-        sys.exit("worldedit-core-7.2.20.jar not found in the Gradle cache; run ./gradlew build once or pass --jar")
+        sys.exit("worldedit-core-7.2.20.jar not found in the Gradle cache; run ./gradlew build in plugin/ once or pass --jar")
     return found[0]
 
 

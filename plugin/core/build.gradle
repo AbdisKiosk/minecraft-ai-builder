@@ -1,0 +1,62 @@
+import xyz.jpenilla.runpaper.task.RunServer
+
+plugins {
+    id 'com.gradleup.shadow'
+    id 'xyz.jpenilla.run-paper'
+}
+
+dependencies {
+    implementation project(':common')
+    implementation project(':bridge-we6')
+    implementation project(':bridge-we7')
+    implementation 'com.google.code.gson:gson:2.11.0'
+    compileOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
+    testImplementation 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
+    // RelayClientTest's stand-in for the panel; test classpath only, never shaded into the plugin.
+    testImplementation 'org.java-websocket:Java-WebSocket:1.6.0'
+}
+
+processResources {
+    def props = [version: project.version]
+    inputs.properties(props)
+    filesMatching('plugin.yml') { expand(props) }
+}
+
+shadowJar {
+    archiveBaseName = 'AIBuilder'
+    archiveClassifier = ''
+    relocate 'com.google.gson', 'me.abdiskiosk.minecraftaibuilder.libs.gson'
+    exclude 'META-INF/maven/**', 'META-INF/proguard/**', 'META-INF/versions/**/module-info.class', 'module-info.class', 'com/google/errorprone/**'
+}
+
+tasks.named('build') { dependsOn shadowJar }
+tasks.named('jar') { enabled = false }
+
+// Dev servers: ./gradlew :core:runServer (1.21.11), :core:runLatest (26.3), :core:runLegacy (1.8.8).
+// Each run directory needs eula=true accepted by you on first start.
+def launcher = { int v -> javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(v) } }
+
+tasks.named('runServer', RunServer) {
+    minecraftVersion('1.21.11')
+    javaLauncher = launcher(21)
+    runDirectory = layout.projectDirectory.dir('run/1.21.11')
+    downloadPlugins { modrinth('worldedit', '2YDdVDmG') } // 7.3.19 bukkit
+}
+
+tasks.register('runLatest', RunServer) {
+    group = 'run paper'
+    minecraftVersion('26.3')
+    javaLauncher = launcher(25)
+    pluginJars.from(tasks.shadowJar.archiveFile)
+    runDirectory = layout.projectDirectory.dir('run/26.3')
+    downloadPlugins { modrinth('worldedit', 'YFnqiUlL') } // 7.4.6 bukkit
+}
+
+tasks.register('runLegacy', RunServer) {
+    group = 'run paper'
+    // WorldEdit 6.1.x is not on Modrinth; drop worldedit-bukkit-6.1.9.jar into run/1.8.8/plugins yourself.
+    minecraftVersion('1.8.8')
+    javaLauncher = launcher(17)
+    pluginJars.from(tasks.shadowJar.archiveFile)
+    runDirectory = layout.projectDirectory.dir('run/1.8.8')
+}

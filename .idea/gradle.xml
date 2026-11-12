@@ -4,14 +4,14 @@
   <component name="GradleSettings">
     <option name="linkedExternalProjectsSettings">
       <GradleProjectSettings>
-        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$/plugin" />
         <option name="modules">
           <set>
-            <option value="$PROJECT_DIR$" />
-            <option value="$PROJECT_DIR$/bridge-we6" />
-            <option value="$PROJECT_DIR$/bridge-we7" />
-            <option value="$PROJECT_DIR$/common" />
             <option value="$PROJECT_DIR$/plugin" />
+            <option value="$PROJECT_DIR$/plugin/bridge-we6" />
+            <option value="$PROJECT_DIR$/plugin/bridge-we7" />
+            <option value="$PROJECT_DIR$/plugin/common" />
+            <option value="$PROJECT_DIR$/plugin/core" />
           </set>
         </option>
         <option name="myGradleHome" value="" />

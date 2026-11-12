@@ -1,0 +1,3 @@
+rootProject.name = 'aibuilder-plugin'
+
+include 'common', 'bridge-we6', 'bridge-we7', 'core'

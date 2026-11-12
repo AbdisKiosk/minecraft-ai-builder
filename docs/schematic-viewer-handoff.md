@@ -1,5 +1,8 @@
 # Handoff: 3D view on EngineHub's SchematicWebViewer
 
+> Historical. This was written for the self-hosted Java panel, which is gone: the viewer now lives in the panel's
+> `panel/lib/` and `panel/components/Pictures.tsx`, and the paths, commands and `panel.json` below no longer exist.
+
 ## Continuation status (2026-11-12)
 
 The implementation is wired and builds. `npm run typecheck`, all eleven `npm test` cases and `./gradlew build`

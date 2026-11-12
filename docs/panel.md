@@ -1,81 +1,57 @@
-# Web panel
+# Panel
 
-The panel lets Claude Code build on several Minecraft servers at once without opening a port on any of them. Each
-server's AIBuilder plugin connects **out** to the panel over a WebSocket. The panel then serves that server's MCP and
-REST endpoints under `/s/<server>/`, shows live job progress, and keeps a git-like history of every edit with
-before/after pictures and revert.
+`panel/` is the web panel: a hosted, multi-user Next.js app. People sign up, add their Minecraft servers, invite others
+and make access tokens for Claude Code. Each server's AIBuilder plugin connects **out** to the panel over a WebSocket,
+so no port is opened on the Minecraft server. The panel then serves that server's MCP and REST endpoints under
+`/s/<server>/`, shows live job progress, and keeps a git-like history of every edit with before/after pictures and
+revert.
 
 ```
-Claude Code / SDK ──HTTPS──▶ Caddy (TLS) ──▶ panel 127.0.0.1:8080   /s/<id>/mcp, /s/<id>/api/<tool>, web UI
-                                                   ▲
-Paper server(s) ──wss, outbound, reconnecting──────┘   /relay
+Claude Code / SDK ──HTTPS──▶ panel  /s/<server>/mcp, /s/<server>/api/<tool>   (access token aibc_…)
+Browser           ──HTTPS──▶ panel  pages, /api/…, /api/events               (Auth0 session)
+Paper server      ──wss────▶ panel  /relay                                   (server token aibs_…)
+                              │
+                              ├── MySQL: users, servers, memberships, invites, access tokens, history index
+                              └── R2: archived history, Minecraft client jars
 ```
 
-## Build
+Next.js alone cannot hold WebSockets, so `server.ts` runs Next.js inside a plain Node HTTP server and takes `/relay`
+and `/s/` itself. Next attaches its own upgrade listener for hot reload; `server.ts` must not hand upgrades to it too.
+
+## Run it locally
 
 ```bash
-./gradlew build
+cd panel
+cp .env.example .env.local   # then fill it in
+npm install
+npm run dev                  # http://localhost:3000
 ```
 
-This produces `panel/build/libs/AIBuilderPanel-<version>.jar` next to the plugin jar. The panel needs Java 17+ to run.
+The Auth0 application is a Regular Web Application with `http://localhost:3000/auth/callback` as a callback URL and
+`http://localhost:3000` as a logout URL. Database migrations in `migrations/` run when the app starts; add a new file
+for every change and never edit one that has run. All times are UTC: each connection sets its time zone, whatever the
+MySQL server's own is.
 
-The web UI is a Next.js app in `panel/web/`. The build runs `npm ci` and `npm run build` there and packs the exported
-static files into the jar, so building needs Node 20.9+ with `npm` on the `PATH`; running the jar does not need Node.
-To work on the UI, start a panel (`./gradlew :panel:run`) and then `cd panel/web && npm run dev`: the dev server
-reloads on save and proxies `/api` and `/events` to the panel (`PANEL_URL`, default `http://127.0.0.1:8080`).
-Run `npm run typecheck` there for TypeScript checks. The schematic conversion tests run with `npm test` (Node 22.18+).
+`npm run typecheck` checks the TypeScript and `npm test` runs the unit tests (Node 22.18+).
 
-## Set up on the VPS
+## Deploy
 
-Copy the jar to `/opt/aibuilder-panel/` and run the commands below there. They read and write `panel.json` in the
-current directory (pass `--config <file>` to use another file). A running panel picks up changes within a few seconds.
+`panel/Dockerfile` builds the image; the build context is the `panel` directory (in Coolify, set `panel` as the base
+directory):
 
 ```bash
-java -jar AIBuilderPanel.jar set-password            # web UI login
-java -jar AIBuilderPanel.jar add-server survival "Survival SMP"
-java -jar AIBuilderPanel.jar add-server creative
-java -jar AIBuilderPanel.jar add-client laptop       # token for Claude Code and scripts
-java -jar AIBuilderPanel.jar list
+docker build -t aibuilder-panel panel
+docker run --env-file panel.env -p 3000:3000 aibuilder-panel
 ```
 
-`add-server` and `add-client` print each token once. Only its SHA-256 hash is stored. Running `add-server` again for
-the same id replaces that server's token.
-
-### Run it as a service
-
-`/etc/systemd/system/aibuilder-panel.service`:
-
-```ini
-[Unit]
-Description=AIBuilder panel
-After=network.target
-
-[Service]
-User=aibuilder
-WorkingDirectory=/opt/aibuilder-panel
-ExecStart=/usr/bin/java -jar AIBuilderPanel.jar
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-```
-
-### TLS with Caddy
-
-The panel listens on `127.0.0.1:8080` (`bind`/`port` in `panel.json`). Put Caddy in front of it, which gets HTTPS
-certificates by itself and passes WebSockets through:
-
-```
-panel.example.com {
-    reverse_proxy 127.0.0.1:8080
-}
-```
-
-Do not expose the panel without TLS. Tokens and the login cookie travel in every request.
+Set the variables from `.env.example`, with `APP_BASE_URL` the public `https://` address; the plugins then use the
+matching `wss://` address. The container listens on port 3000 and answers `GET /api/health`. Put TLS in front of it:
+tokens and the session cookie travel in every request.
 
 ## Connect a Minecraft server
 
-In `plugins/AIBuilder/config.yml`, paste what `add-server` printed, then restart the server:
+Add a server on the dashboard. The panel shows its `relay` settings once; put them in the server's
+`plugins/AIBuilder/config.yml` and restart it:
 
 ```yaml
 http:
@@ -86,31 +62,50 @@ relay:
 ```
 
 Run `/aibuilder` in the console to see the relay status. If the panel is unreachable, the plugin keeps retrying,
-backing off up to one minute. Edits that are running keep going while it is disconnected.
+backing off up to one minute. Edits that are running keep going while it is disconnected. The server's owner can make
+a new relay token on the server page; the old one stops working.
+
+For a dev server (`./gradlew :core:runServer` in `plugin/`), the file is
+`plugin/core/run/<version>/plugins/AIBuilder/config.yml`, with `url: "ws://127.0.0.1:3000"`.
 
 ## Connect Claude Code
 
-For one server, the repo's `mcp.json` works as it is:
+Make an access token under **Access tokens**. For one server, the repo's `mcp.json` works as it is:
 
 ```bash
-export AIBUILDER_URL=https://panel.example.com/s/survival AIBUILDER_TOKEN=aibc_...
+export AIBUILDER_URL=https://panel.example.com/s/<server> AIBUILDER_TOKEN=aibc_...
 ```
 
-For several servers in one session, add one entry per server (all use the same client token):
+For several servers in one session, add one entry per server (all use the same access token):
 
 ```json
 {
   "mcpServers": {
-    "survival": { "type": "http", "url": "https://panel.example.com/s/survival/mcp",
+    "survival": { "type": "http", "url": "https://panel.example.com/s/<server id>/mcp",
                   "headers": { "Authorization": "Bearer ${AIBUILDER_TOKEN}" } },
-    "creative": { "type": "http", "url": "https://panel.example.com/s/creative/mcp",
+    "creative": { "type": "http", "url": "https://panel.example.com/s/<other server id>/mcp",
                   "headers": { "Authorization": "Bearer ${AIBUILDER_TOKEN}" } }
   }
 }
 ```
 
-The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<id>`, so build scripts can
+The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>`, so build scripts can
 run against several servers in parallel.
+
+## Roles
+
+| Role | Can |
+| --- | --- |
+| owner | everything, including deleting the server and making a new relay token |
+| admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
+| builder | build through Claude Code and scripts with an access token, promote regions |
+| viewer | see jobs, history and drafts |
+
+Invite links are single use and last seven days. Owners invite admins, builders and viewers; admins invite builders
+and viewers. A member can be changed or removed only by someone ranked above them, and anyone but the owner can leave.
+
+An access token (`aibc_`) builds on every server where its user is builder or above, so treat it like an SSH key. A
+server token (`aibs_`) only lets a server connect as itself.
 
 ## History
 
@@ -118,7 +113,7 @@ Every edit job reads the blocks it will touch before it starts and again when it
 difference in `plugins/AIBuilder/history/`. For each entry, the panel shows:
 
 - a diffstat: blocks added, removed and changed, by block type
-- before, after and changes pictures (isometric, top-down or one face), drawn from the world as it is now
+- before, after and changes pictures (isometric, top-down or one face)
 - the changed blocks with their coordinates
 - **Revert**: puts the old blocks back as a new job. Blocks that something else changed after the edit are left
   alone and listed as conflicts, unless you tick "also overwrite later changes". Reverting does not use WorldEdit's
@@ -127,16 +122,8 @@ difference in `plugins/AIBuilder/history/`. For each entry, the panel shows:
 The Pictures card on history entries and drafts also offers **3D (interactive)** on wider screens. It draws real
 Minecraft block models and textures, with Before / After / Changes modes, coloured change overlays, an only-changed
 filter, a cut-height slider and click-to-inspect coordinates. PNG views remain the default. The 3D view needs WebGL 2
-and the server's reported Minecraft version.
-Update the server plugin along with the panel: 3D needs the `/blocks` response's complete model states, including
-default properties. Older plugins still support the PNG views and show an upgrade message for 3D.
-
-On first use of a Minecraft version, the panel downloads the client jar from Mojang, verifies its SHA-1 and caches
-it in `cache/client-jars/` beside `panel.json`. The panel host needs outbound HTTPS for this download. The browser
-also caches the jar (roughly 30 MB, depending on the version); loading and parsing textures can take a moment.
-The renderer rebuilds the scene and re-parses resources for each control change, so large regions can redraw slowly.
-Jars are served only to logged-in users; no Minecraft assets are bundled with AIBuilder. Servers older than 1.13
-use the 1.13.2 client's models for their translated block states.
+and the server's reported Minecraft version. The renderer rebuilds the scene and re-parses resources for each control
+change, so large regions can redraw slowly.
 
 **Distribution review:** SchematicWebViewer 5.0.1 is MIT, but its bundled SchematicJS 0.10.0 dependency declares
 GPL-3.0. Resolve the resulting distribution/source and third-party notice requirements before shipping this viewer;
@@ -157,6 +144,33 @@ Limits:
 - Only block states are recorded. Sign text, chest contents, item frames and armor stands (`decorate`) are not.
 - Calls to the `undo` tool are not recorded (with review on, undo only changes the draft).
 - Two edits running at the same time over the same blocks each see the other's changes.
+
+### History in R2
+
+When R2 is configured, the panel answers a plugin's `hello` with `{"t":"welcome","archive":true}`, and the plugin then
+archives every history entry (see `RelayProtocol` for the frames):
+
+1. When a job is recorded, the plugin writes, beside the diff, the 3D view's blocks and the default pictures (isometric,
+   from the south-east), made from the job's own snapshot, so this costs no extra world read.
+2. It asks for upload URLs, PUTs the files straight to R2 (it never holds R2 keys), then sends the entry's detail.
+   The panel checks the files are there, stores the detail in MySQL and drops the oldest entries over 5,000 or 2 GB per
+   server. The plugin then deletes its copies of the blocks and pictures, and keeps the diff for revert.
+3. Entries recorded before the server was connected, or while it was disconnected, are uploaded on the next connection,
+   with their diff only.
+
+The dashboard then lists history and shows each entry, its default pictures and its 3D view from the archive, also
+while the server is offline. Other picture views still come from the live server. Reverting needs the server online;
+if the server no longer keeps the entry, the panel sends the archived entry and diff with the request.
+
+Deleting a server deletes its rows and everything under `servers/<id>/` in R2.
+
+### Minecraft client jars
+
+The 3D view takes block models and textures from the Minecraft client jar for the server's version. The panel
+downloads each version from Mojang once, checks it against Mojang's SHA-1 and keeps it in R2 under
+`minecraft/client/`; it serves it only to signed-in users, and no Minecraft assets are bundled with AIBuilder. The
+browser also caches the jar (roughly 30 MB, depending on the version). Servers before 1.13 use the 1.13.2 client's
+models for their translated block states.
 
 ## Drafts: approve edits before they are placed
 
@@ -183,7 +197,8 @@ With review on:
   made are left alone and listed, unless you tick "also overwrite blocks changed since". **Reject** drops the draft.
 - From the server console or in game (permission `aibuilder.approve`): `/aibuilder draft` lists open drafts,
   `/aibuilder draft approve [world] [force]` and `/aibuilder draft reject [world]` decide one.
-- Drafts are saved in `plugins/AIBuilder/drafts/` and survive restarts.
+- Drafts are saved in `plugins/AIBuilder/drafts/` and survive restarts. They stay on the server and are not archived:
+  an open draft is working state the plugin's dry runs read from.
 
 | Setting | What it does |
 | --- | --- |
@@ -206,11 +221,3 @@ live one. Nothing is placed on the target until its draft is approved, whether o
   or are left out when **leave out blocks the target server does not have** is ticked.
 - Only block states are copied: sign text, chest contents and entities are not.
 - `promote.max-volume` (default 2,000,000 blocks) limits the region on both servers.
-
-## Security
-
-- Server tokens (`aibs_`) only let a server register itself. Client tokens (`aibc_`) can build on every server, so
-  treat them like SSH keys. Revoke one with `remove-client <label>`.
-- The web UI uses a password (PBKDF2), an `HttpOnly`, `SameSite=Strict` session cookie, an origin check on writes,
-  and a limit of 10 failed logins per minute per address.
-- Sessions are kept in memory, so restarting the panel logs everyone out.

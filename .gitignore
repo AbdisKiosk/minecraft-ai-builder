@@ -43,15 +43,14 @@ bin/
 ### Mac OS ###
 .DS_Store
 ### AIBuilder ###
-plugin/run/
-panel/run/
+plugin/core/run/
 __pycache__/
 *.pyc
 builds/*.png
 
-### Hosted panel (web/) ###
-web/node_modules/
-web/.next/
-web/dist/
-web/.env*
-!web/.env.example
+### Panel (panel/) ###
+panel/node_modules/
+panel/.next/
+panel/dist/
+panel/.env*
+!panel/.env.example

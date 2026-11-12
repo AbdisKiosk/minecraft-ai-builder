@@ -6,7 +6,7 @@
     python3 tools/mcp_cli.py cost                      # sizes of instructions and tools/list
     python3 tools/mcp_cli.py report [log.jsonl]        # per-tool totals of a logged session
 
-The server is AIBUILDER_URL / AIBUILDER_TOKEN, or the local dev server (plugin/run/*/plugins/AIBuilder/config.yml).
+The server is AIBUILDER_URL / AIBUILDER_TOKEN, or the local dev server (plugin/core/run/*/plugins/AIBuilder/config.yml).
 With AIBUILDER_LOG=<file.jsonl> every call appends {tool, arg_chars, result_chars, image_px, tokens, args, result}.
 Images are written to AIBUILDER_IMAGES (default: the system temp directory) and their path is printed.
 
@@ -32,7 +32,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 def _dev_config() -> tuple[str, str] | None:
     """URL and token of the newest local dev server's config, if there is one."""
-    configs = sorted(ROOT.glob("plugin/run/*/plugins/AIBuilder/config.yml"), key=lambda p: p.stat().st_mtime)
+    configs = sorted(ROOT.glob("plugin/core/run/*/plugins/AIBuilder/config.yml"), key=lambda p: p.stat().st_mtime)
     if not configs:
         return None
     text = configs[-1].read_text()
@@ -49,7 +49,7 @@ def _server() -> tuple[str, str]:
         return url.rstrip("/"), token
     dev = _dev_config()
     if not dev:
-        sys.exit("set AIBUILDER_URL and AIBUILDER_TOKEN, or start a dev server (./gradlew :plugin:runServer)")
+        sys.exit("set AIBUILDER_URL and AIBUILDER_TOKEN, or start a dev server (cd plugin && ./gradlew :core:runServer)")
     return dev
 
 

@@ -1,62 +1,41 @@
-import xyz.jpenilla.runpaper.task.RunServer
-
 plugins {
-    id 'com.gradleup.shadow'
-    id 'xyz.jpenilla.run-paper'
+    id 'java'
+    id 'com.gradleup.shadow' version '9.6.1' apply false
+    id 'xyz.jpenilla.run-paper' version '3.0.2' apply false
 }
 
-dependencies {
-    implementation project(':common')
-    implementation project(':bridge-we6')
-    implementation project(':bridge-we7')
-    implementation 'com.google.code.gson:gson:2.11.0'
-    compileOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
-    testImplementation 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
-    // RelayClientTest runs the real panel; test classpath only, never shaded into the plugin.
-    testImplementation project(':panel')
+allprojects {
+    group = 'me.abdiskiosk'
+    version = '0.1.0-SNAPSHOT'
 }
 
-processResources {
-    def props = [version: project.version]
-    inputs.properties(props)
-    filesMatching('plugin.yml') { expand(props) }
-}
+subprojects {
+    apply plugin: 'java'
 
-shadowJar {
-    archiveBaseName = 'AIBuilder'
-    archiveClassifier = ''
-    relocate 'com.google.gson', 'me.abdiskiosk.minecraftaibuilder.libs.gson'
-    exclude 'META-INF/maven/**', 'META-INF/proguard/**', 'META-INF/versions/**/module-info.class', 'module-info.class', 'com/google/errorprone/**'
-}
+    repositories {
+        mavenCentral()
+        maven { url = 'https://hub.spigotmc.org/nexus/content/repositories/snapshots/' }
+        maven { url = 'https://oss.sonatype.org/content/repositories/snapshots/' }
+        maven { url = 'https://repo.papermc.io/repository/maven-public/' }
+        maven { url = 'https://maven.enginehub.org/repo/' }
+    }
 
-tasks.named('build') { dependsOn shadowJar }
-tasks.named('jar') { enabled = false }
+    java {
+        toolchain { languageVersion = JavaLanguageVersion.of(21) }
+    }
 
-// Dev servers: ./gradlew :plugin:runServer (1.21.11), :plugin:runLatest (26.3), :plugin:runLegacy (1.8.8).
-// Each run directory needs eula=true accepted by you on first start.
-def launcher = { int v -> javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(v) } }
+    tasks.withType(JavaCompile).configureEach {
+        options.release = 17
+        options.encoding = 'UTF-8'
+    }
 
-tasks.named('runServer', RunServer) {
-    minecraftVersion('1.21.11')
-    javaLauncher = launcher(21)
-    runDirectory = layout.projectDirectory.dir('run/1.21.11')
-    downloadPlugins { modrinth('worldedit', '2YDdVDmG') } // 7.3.19 bukkit
-}
+    dependencies {
+        testImplementation platform('org.junit:junit-bom:6.0.0')
+        testImplementation 'org.junit.jupiter:junit-jupiter'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
 
-tasks.register('runLatest', RunServer) {
-    group = 'run paper'
-    minecraftVersion('26.3')
-    javaLauncher = launcher(25)
-    pluginJars.from(tasks.shadowJar.archiveFile)
-    runDirectory = layout.projectDirectory.dir('run/26.3')
-    downloadPlugins { modrinth('worldedit', 'YFnqiUlL') } // 7.4.6 bukkit
-}
-
-tasks.register('runLegacy', RunServer) {
-    group = 'run paper'
-    // WorldEdit 6.1.x is not on Modrinth; drop worldedit-bukkit-6.1.9.jar into run/1.8.8/plugins yourself.
-    minecraftVersion('1.8.8')
-    javaLauncher = launcher(17)
-    pluginJars.from(tasks.shadowJar.archiveFile)
-    runDirectory = layout.projectDirectory.dir('run/1.8.8')
+    test {
+        useJUnitPlatform()
+    }
 }
