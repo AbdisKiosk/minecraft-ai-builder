@@ -205,6 +205,8 @@ function library(f: ReturnType<typeof fakes>) {
         usage: async owner => ({ count: rows.filter(r => r.owner === owner).length, bytes: 0 }),
         async insert(row, check) { check(await this.usage(row.owner)); rows.push(row); },
         async update() {}, async remove() {}, async touch() {},
+        // An in-game save only checks and saves into the player's own library; nothing is shared here.
+        shares: async () => [], async share() {}, async unshare() {}, sharedWith: async () => [],
       },
       files: {
         async write(owner, id, name, bytes) { blobs.set(`${owner}/${id}/${name}`, bytes); },
