@@ -16,7 +16,6 @@ import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 import me.abdiskiosk.minecraftaibuilder.plugin.Drafts;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
-import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 
 import java.net.URI;

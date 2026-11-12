@@ -10,7 +10,6 @@ import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
-import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
@@ -50,7 +49,7 @@ class RelayClientTest {
         Path dir = Files.createTempDirectory("relay");
         WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
                 new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> m.getName().equals("name") ? "fake" : null);
-        PluginConfig config = new PluginConfig(false, "127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 0, 30,
+        PluginConfig config = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
                 List.of(), "", null, List.of(), true, "", "", null, null);
         service = new BuildService(null, bridge, config, dir);
         History.Settings settings = new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000);

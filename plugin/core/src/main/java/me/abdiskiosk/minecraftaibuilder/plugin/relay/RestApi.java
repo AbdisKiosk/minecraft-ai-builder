@@ -1,4 +1,4 @@
-package me.abdiskiosk.minecraftaibuilder.plugin.http;
+package me.abdiskiosk.minecraftaibuilder.plugin.relay;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -9,7 +9,7 @@ import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolResult;
 
 import java.util.Base64;
 
-/** {@code /api/<tool>} as status + JSON, shared by the local HTTP server and the panel relay. */
+/** The panel's {@code /api/<tool>} requests answered as status + JSON. */
 public final class RestApi {
 
     public record Response(int status, JsonElement body) {
@@ -21,14 +21,14 @@ public final class RestApi {
         this.tools = tools;
     }
 
-    /** {@code GET /api/tools}. */
+    /** The panel's {@code GET /api/tools}. */
     public Response list() {
         JsonArray list = new JsonArray();
         for (Tool tool : tools.all()) list.add(tool.name());
         return new Response(200, list);
     }
 
-    /** {@code POST /api/<name>}. */
+    /** The panel's {@code POST /api/<name>}. */
     public Response call(String name, JsonObject args) {
         if (!tools.has(name)) return error(404, "unknown tool '" + name.replace("\"", "") + "'");
         ToolResult result = tools.call(name, args);

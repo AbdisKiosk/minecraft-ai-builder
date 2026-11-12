@@ -5,11 +5,10 @@ import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
-import me.abdiskiosk.minecraftaibuilder.plugin.http.HttpApi;
-import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.ToolStats;
 import me.abdiskiosk.minecraftaibuilder.plugin.relay.RelayClient;
+import me.abdiskiosk.minecraftaibuilder.plugin.relay.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
 import org.bukkit.Location;
@@ -17,25 +16,26 @@ import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.command.Command;
 import org.bukkit.command.CommandSender;
-import org.bukkit.command.ConsoleCommandSender;
 import org.bukkit.entity.Player;
 import org.bukkit.plugin.java.JavaPlugin;
 
-import java.io.IOException;
-import java.security.SecureRandom;
 import java.util.Arrays;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Level;
 
+/**
+ * The plugin listens on no port. Claude Code and scripts reach it only through the panel, which it connects out to
+ * ({@link RelayClient}); nothing here may open a server socket.
+ */
 public final class AIBuilderPlugin extends JavaPlugin {
 
     private static final Set<String> MARKER_COMMANDS = Set.of("mark", "unmark", "marks", "note");
+    private static final String NOT_CONNECTED = "Not connected to a panel, so Claude Code cannot reach this server: add it on the "
+            + "panel and put the relay.url and relay.token it shows in plugins/AIBuilder/config.yml.";
 
-    private HttpApi http;
     private RelayClient relay;
     private Drafts drafts;
     private WorldEditBridge bridge;
@@ -47,12 +47,9 @@ public final class AIBuilderPlugin extends JavaPlugin {
     public void onEnable() {
         System.setProperty("java.awt.headless", "true");
         saveDefaultConfig();
-        if (getConfig().getString("http.token", "").isEmpty()) {
-            byte[] bytes = new byte[24];
-            new SecureRandom().nextBytes(bytes);
-            getConfig().set("http.token", HexFormat.of().formatHex(bytes));
-            saveConfig();
-            getLogger().info("Generated an access token in config.yml (http.token).");
+        if (getConfig().isConfigurationSection("http")) {
+            getLogger().warning("config.yml still has an http: section. It is no longer used and can be deleted: "
+                    + "the plugin opens no port, and Claude Code connects through the panel (relay:).");
         }
         config = PluginConfig.load(getConfig());
 
@@ -76,39 +73,24 @@ public final class AIBuilderPlugin extends JavaPlugin {
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, getDescription().getVersion());
-        if (config.httpEnabled()) {
-            http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
-            try {
-                http.start();
-            } catch (IOException e) {
-                getLogger().log(Level.SEVERE, "Could not listen on " + config.bind() + ":" + config.port(), e);
-                getServer().getPluginManager().disablePlugin(this);
-                return;
-            }
-            getLogger().info("Using " + bridge.name() + ". MCP: " + url() + "/mcp  REST: " + url() + "/api/<tool>");
-        } else {
-            getLogger().info("Using " + bridge.name() + ". Local HTTP is off (http.enabled: false).");
+        getLogger().info("Using " + bridge.name() + ".");
+        if (config.relayUrl().isEmpty() || config.relayToken().isEmpty()) {
+            getLogger().warning(NOT_CONNECTED);
+            return;
         }
-        if (!config.relayUrl().isEmpty()) {
-            if (config.relayToken().isEmpty()) {
-                getLogger().warning("relay.url is set but relay.token is empty; not connecting to the panel.");
-            } else {
-                try {
-                    relay = new RelayClient(config.relayUrl(), config.relayToken(), mcp, new RestApi(registry), history, drafts,
-                            service, this::relayHello, getLogger());
-                    relay.start();
-                    getLogger().info("Connecting to the panel at " + relay.uri());
-                } catch (IllegalArgumentException e) {
-                    getLogger().warning("relay.url: " + e.getMessage());
-                }
-            }
+        try {
+            relay = new RelayClient(config.relayUrl(), config.relayToken(), mcp, new RestApi(registry), history, drafts,
+                    service, this::relayHello, getLogger());
+            relay.start();
+            getLogger().info("Connecting to the panel at " + relay.uri());
+        } catch (IllegalArgumentException e) {
+            getLogger().warning("relay.url: " + e.getMessage());
         }
     }
 
     @Override
     public void onDisable() {
         if (relay != null) relay.stop();
-        if (http != null) http.stop();
         if (drafts != null) drafts.close();
     }
 
@@ -122,10 +104,6 @@ public final class AIBuilderPlugin extends JavaPlugin {
         service.worlds().forEach(worlds::add);
         o.add("worlds", worlds);
         return o;
-    }
-
-    private String url() {
-        return "http://" + config.bind() + ":" + config.port();
     }
 
     private WorldEditBridge loadBridge() throws ReflectiveOperationException {
@@ -174,16 +152,11 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return true;
         }
         sender.sendMessage("AIBuilder " + getDescription().getVersion() + " using " + bridge.name());
-        if (relay != null) sender.sendMessage("Panel relay: " + relay.status());
-        if (http == null) {
-            sender.sendMessage("Local HTTP is off (http.enabled: false); connect through the panel.");
-            return true;
-        }
-        sender.sendMessage("MCP endpoint: " + url() + "/mcp");
-        if (sender instanceof ConsoleCommandSender) {
-            sender.sendMessage("export AIBUILDER_URL=" + url() + " AIBUILDER_TOKEN=" + config.token());
+        if (relay == null) {
+            sender.sendMessage(NOT_CONNECTED);
         } else {
-            sender.sendMessage("The token is in plugins/AIBuilder/config.yml (or run /aibuilder from the console).");
+            sender.sendMessage("Panel relay: " + relay.status());
+            sender.sendMessage("Claude Code and scripts connect through the panel, with an access token made there.");
         }
         return true;
     }
@@ -308,7 +281,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     private void stats(CommandSender sender) {
         List<ToolStats.Row> rows = mcp.stats().rows();
         if (rows.isEmpty()) {
-            sender.sendMessage("No MCP calls yet. (REST calls from scripts are not counted.)");
+            sender.sendMessage("No MCP calls yet. (Calls from scripts are not counted.)");
             return;
         }
         sender.sendMessage(String.format("%-16s %6s %9s %9s %10s %8s", "tool", "calls", "arg ch", "result ch", "image px", "~tokens"));

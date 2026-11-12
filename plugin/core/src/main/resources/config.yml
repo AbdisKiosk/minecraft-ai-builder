@@ -1,11 +1,10 @@
-# AIBuilder: MCP + REST bridge for Claude Code.
-http:
-  # Set to false when Claude Code reaches this server only through the web panel (relay below).
-  enabled: true
-  # Keep this on 127.0.0.1 unless you put the server behind something that adds TLS.
-  bind: 127.0.0.1
-  port: 8765
-  # Generated on first start. Claude Code reads it from the AIBUILDER_TOKEN environment variable.
+# AIBuilder: lets Claude Code build with WorldEdit, through the web panel.
+# The plugin opens no port. It connects out to the panel, and Claude Code and scripts use the panel's address.
+relay:
+  # The panel to connect out to, e.g. wss://panel.example.com (see docs/panel.md). Claude Code and scripts then
+  # use https://panel.example.com/s/<server> with an access token made in the panel.
+  url: ""
+  # Shown once when you add this server on the panel's dashboard.
   token: ""
 
 limits:
@@ -35,13 +34,6 @@ safety:
 players:
   # Whether the tell tool may teleport the acting player to a build.
   allow-teleport: true
-
-relay:
-  # Panel to connect out to, e.g. wss://panel.example.com (see docs/panel.md). The server then needs no open
-  # port: Claude Code and scripts use https://panel.example.com/s/<server>. Empty = off.
-  url: ""
-  # Shown once when you add this server on the panel's dashboard.
-  token: ""
 
 history:
   # Record a block diff of every edit, for the panel's history (before/after/changes pictures and revert).

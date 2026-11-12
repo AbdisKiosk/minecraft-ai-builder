@@ -64,8 +64,7 @@ export function RelaySetup({ relay }: { relay: RelayConfig }) {
       <p>Put this in the server&apos;s <code>plugins/AIBuilder/config.yml</code> and restart it:</p>
       <pre>{yaml}</pre>
       <div className="toolbar"><CopyButton text={yaml} /></div>
-      <p className="muted">The token is shown only now. If you lose it, make a new one from the server&apos;s page.
-        Optionally set <code>http.enabled: false</code> so the server opens no port at all.</p>
+      <p className="muted">The token is shown only now. If you lose it, make a new one from the server&apos;s page.</p>
     </>
   );
 }

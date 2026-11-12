@@ -2,7 +2,7 @@
   "mcpServers": {
     "aibuilder": {
       "type": "http",
-      "url": "${AIBUILDER_URL:-http://127.0.0.1:8765}/mcp",
+      "url": "${AIBUILDER_URL}/mcp",
       "headers": {
         "Authorization": "Bearer ${AIBUILDER_TOKEN}"
       }

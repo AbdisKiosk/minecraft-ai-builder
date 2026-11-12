@@ -1,9 +1,9 @@
 # Panel
 
 `panel/` is the web panel: a hosted, multi-user Next.js app. People sign up, add their Minecraft servers, invite others
-and make access tokens for Claude Code. Each server's AIBuilder plugin connects **out** to the panel over a WebSocket,
-so no port is opened on the Minecraft server. The panel then serves that server's MCP and REST endpoints under
-`/s/<server>/`, shows live job progress, and keeps a git-like history of every edit with before/after pictures and
+and make access tokens for Claude Code. Each server's AIBuilder plugin connects **out** to the panel over a WebSocket
+and never opens a port on the Minecraft server: the panel is the only way to reach it. The panel serves that server's
+MCP and REST endpoints under `/s/<server>/`, shows live job progress, and keeps a git-like history of every edit with before/after pictures and
 revert.
 
 ```
@@ -62,19 +62,19 @@ Then add a server on the dashboard. The panel shows its `relay` settings once; p
 `plugins/AIBuilder/config.yml` and restart it:
 
 ```yaml
-http:
-  enabled: false        # optional: no local port at all
 relay:
   url: "wss://panel.example.com"
   token: "aibs_..."
 ```
 
-Run `/aibuilder` in the console to see the relay status. If the panel is unreachable, the plugin keeps retrying,
+Until both are set the plugin has no connection and Claude Code cannot reach the server. Run `/aibuilder` in the
+console to see the relay status. If the panel is unreachable, the plugin keeps retrying,
 backing off up to one minute. Edits that are running keep going while it is disconnected. The server's owner can make
 a new relay token on the server page; the old one stops working.
 
-For a dev server (`./gradlew :core:runServer` in `plugin/`), the file is
-`plugin/core/run/<version>/plugins/AIBuilder/config.yml`, with `url: "ws://127.0.0.1:3000"`.
+For a dev server (`./gradlew :core:runServer` in `plugin/`), run the panel locally too (`npm run dev`) and add the
+server there; the file is `plugin/core/run/<version>/plugins/AIBuilder/config.yml`, with `url: "ws://127.0.0.1:3000"`.
+Claude Code, `tools/mcp_cli.py` and the SDK then use `AIBUILDER_URL=http://127.0.0.1:3000/s/<server>`.
 
 ## Connect Claude Code
 

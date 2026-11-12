@@ -5,7 +5,7 @@ Claude writes a short script, the script expands it into thousands of blocks.
 
     from aibuilder import Builder, box, SELECTION
 
-    b = Builder.connect()                  # AIBUILDER_URL / AIBUILDER_TOKEN from the environment
+    b = Builder.connect()                  # AIBUILDER_URL (https://<panel>/s/<server>) and AIBUILDER_TOKEN
     b.walls(SELECTION, "80%stone_bricks,20%andesite")
     b.block(10, 64, 10, "lantern")
     b.flush()                              # everything queued so far = one undo step
@@ -62,10 +62,12 @@ def box(a: Vec, b: Vec) -> dict:
 class Builder:
     def __init__(self, url: str | None = None, token: str | None = None,
                  player: str | None = None, world: str | None = None, timeout: float = 120):
-        self.url = (url or os.environ.get("AIBUILDER_URL") or "http://127.0.0.1:8765").rstrip("/")
+        self.url = (url or os.environ.get("AIBUILDER_URL") or "").rstrip("/")
         self.token = token or os.environ.get("AIBUILDER_TOKEN")
+        if not self.url:
+            raise AIBuilderError("set AIBUILDER_URL to the server's address on the panel, https://<panel>/s/<server>")
         if not self.token:
-            raise AIBuilderError("set AIBUILDER_TOKEN (http.token in plugins/AIBuilder/config.yml)")
+            raise AIBuilderError("set AIBUILDER_TOKEN to an access token made in the panel")
         self.player = player
         self.world = world
         self.timeout = timeout

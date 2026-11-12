@@ -3,7 +3,7 @@
 It builds in the air at --origin (default 0,150,0), reads everything back, then clears the area again.
 Run it on a throwaway dev server, never on a world you care about:
 
-    AIBUILDER_URL=http://127.0.0.1:8765 AIBUILDER_TOKEN=... python3 builds/selftest.py --yes [--origin X Y Z]
+    AIBUILDER_URL=http://127.0.0.1:3000/s/<server> AIBUILDER_TOKEN=aibc_... python3 builds/selftest.py --yes [--origin X Y Z]
 
 Works on 1.8 (WorldEdit 6) and 1.13+ (WorldEdit 7); cases that only apply to one are skipped on the other.
 """

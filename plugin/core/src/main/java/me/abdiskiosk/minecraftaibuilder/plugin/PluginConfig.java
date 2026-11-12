@@ -9,10 +9,6 @@ import java.nio.file.Path;
 import java.util.List;
 
 public record PluginConfig(
-        boolean httpEnabled,
-        String bind,
-        int port,
-        String token,
         int blocksPerTick,
         long maxVolumePerOp,
         long maxReadVolume,
@@ -33,10 +29,6 @@ public record PluginConfig(
         String zoneWorld = zone == null ? "" : zone.getString("world", "");
         Box zoneBox = zoneWorld.isEmpty() ? null : Box.of(vec(zone.getIntegerList("min")), vec(zone.getIntegerList("max")));
         return new PluginConfig(
-                config.getBoolean("http.enabled", true),
-                config.getString("http.bind", "127.0.0.1"),
-                config.getInt("http.port", 8765),
-                config.getString("http.token", ""),
                 Math.max(100, config.getInt("limits.blocks-per-tick", 4000)),
                 config.getLong("limits.max-volume-per-op", 2_000_000L),
                 config.getLong("limits.max-read-volume", 2_000_000L),

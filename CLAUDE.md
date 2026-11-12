@@ -1,9 +1,10 @@
 # minecraft-ai-builder
 
-The Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP (`POST /mcp`) and to scripts over REST
-(`POST /api/<tool>`). Both use the same tools (`plugin/core/.../tools/Tools.java`). Optionally the plugin connects out
-to the panel (`panel/`, see `docs/panel.md`), a hosted, multi-user web app that serves the same endpoints for many
-servers under `/s/<server>/`.
+The Paper plugin (`plugin/`) exposes WorldEdit to Claude Code over MCP and to scripts over REST. Both use the same tools
+(`plugin/core/.../tools/Tools.java`). The plugin hosts no server and must never open a port
+(`NoOpenPortTest`): it connects out to the panel (`panel/`, see `docs/panel.md`), a hosted, multi-user web app that
+serves every server's endpoints under `/s/<server>/` (`POST /s/<server>/mcp`, `POST /s/<server>/api/<tool>`) and passes
+the requests down that connection.
 
 ## Layout
 `plugin/` is a self-contained Gradle build (run `./gradlew` there) with four modules:
@@ -12,7 +13,7 @@ servers under `/s/<server>/`.
   `DryWorld` (in both bridges) is a proxy `World` that records writes for drafts; dry-run sessions use a private event bus.
 - `plugin/bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.
-- `plugin/core/`: the plugin itself. HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only; its test runs against `FakePanel`). Compiled against spigot-api 1.8.8.
+- `plugin/core/`: the plugin itself. MCP endpoint (JSON-RPC handling only, no listener), tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel and the plugin's only transport, JDK only; its test runs against `FakePanel`). Compiled against spigot-api 1.8.8.
 
 Beside it:
 - `panel/`: the web panel (Next.js, TypeScript). One Node process (`server.ts`) serves the landing page, the dashboard, the API routes, the `/s/<id>/` proxy and the plugins' `/relay` WebSocket. Auth0 accounts, servers, memberships, invites and access tokens in MySQL through raw SQL (no ORM; `migrations/*.sql` run on startup), archived history and Minecraft client jars in Cloudflare R2. Server code is in `lib/server/`; `hub.ts` must stay in step with `RelayProtocol`. `panel/Dockerfile` builds its image, from the repository root.
@@ -23,13 +24,13 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 
 ## Commands
 - `cd plugin && ./gradlew build`: tests + the shaded jar at `plugin/core/build/libs/AIBuilder-<version>.jar`
-- `cd plugin && ./gradlew :core:runServer` (1.21.11 + WE 7.3.19), `:core:runLatest` (26.3 + WE 7.4.6), `:core:runLegacy` (1.8.8, add WE 6.1.9 yourself). Run directories are `plugin/core/run/<version>/`.
+- `cd plugin && ./gradlew :core:runServer` (1.21.11 + WE 7.3.19), `:core:runLatest` (26.3 + WE 7.4.6), `:core:runLegacy` (1.8.8, add WE 6.1.9 yourself). Run directories are `plugin/core/run/<version>/`. A dev server is reachable only through a panel: run `npm run dev` too and set `relay.url: "ws://127.0.0.1:3000"` and the server's `relay.token` in its `plugins/AIBuilder/config.yml`.
 - `cd panel && npm run dev`: the panel on :3000 with hot reload (needs `panel/.env.local`, see `.env.example`). `npm test`, `npm run typecheck`, `npm run build`; `server.ts` itself does not hot reload.
 - `docker build -f panel/Dockerfile -t aibuilder-panel .`: the panel's image (port 3000, configured with the variables in `panel/.env.example`). It builds the plugin jar too, which the panel serves at `/download/AIBuilder.jar` (`lib/server/plugin-jar.ts`); in dev that is the jar in `plugin/core/build/libs/`.
 - `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
-- `python3 tools/mcp_cli.py cost|list|call <tool> '<json>'|report`: the MCP endpoint from a shell, as a client sees it. It finds the local dev server by itself; with `AIBUILDER_LOG=<file>` it logs what every call costs, which is how a change to the tools is measured.
+- `python3 tools/mcp_cli.py cost|list|call <tool> '<json>'|report`: the MCP endpoint from a shell, as a client sees it. It needs `AIBUILDER_URL` and `AIBUILDER_TOKEN`; with `AIBUILDER_LOG=<file>` it logs what every call costs, which is how a change to the tools is measured.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
-- Connect: run `/aibuilder` in the server console and export the printed `AIBUILDER_URL` and `AIBUILDER_TOKEN` before starting Claude Code. Through the panel, `AIBUILDER_URL` is `https://<panel>/s/<server>` with an access token made in the panel. Players use `/aibuilder mark|unmark|marks|note`.
+- Connect: add the server on the panel, put the `relay.url` and `relay.token` it shows in the server's `plugins/AIBuilder/config.yml`, then export `AIBUILDER_URL=https://<panel>/s/<server>` and `AIBUILDER_TOKEN` (an access token made in the panel) before starting Claude Code. `/aibuilder` in the server console shows the relay status. Players use `/aibuilder mark|unmark|marks|note`.
 
 ## Building in Minecraft
 When the aibuilder MCP server is connected, use the `/build` skill for the workflow and `build-style` for aesthetics.

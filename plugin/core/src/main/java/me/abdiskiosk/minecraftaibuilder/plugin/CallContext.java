@@ -14,7 +14,7 @@ public final class CallContext {
     private CallContext() {
     }
 
-    /** @param source e.g. "mcp", "rest", "panel mcp" */
+    /** @param source e.g. "panel mcp", "panel rest", "panel" */
     public static <T> T withSource(String source, Supplier<T> body) {
         String old = SOURCE.get();
         SOURCE.set(source);

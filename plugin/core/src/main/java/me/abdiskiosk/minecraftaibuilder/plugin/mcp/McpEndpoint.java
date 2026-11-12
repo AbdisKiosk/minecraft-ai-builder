@@ -13,7 +13,8 @@ import java.util.Base64;
 import java.util.List;
 
 /**
- * Minimal stateless MCP server over Streamable HTTP: JSON-RPC requests in, single JSON responses out.
+ * Minimal stateless MCP server: JSON-RPC requests in, single JSON responses out. It listens on nothing itself;
+ * the panel serves it as Streamable HTTP and passes the messages over the relay.
  * Supports initialize, ping, tools/list and tools/call; notifications are acknowledged and ignored.
  */
 public final class McpEndpoint {
