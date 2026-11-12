@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
+import me.abdiskiosk.minecraftaibuilder.plugin.map.WorldMap;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.ToolStats;
 import me.abdiskiosk.minecraftaibuilder.plugin.relay.RelayClient;
@@ -39,6 +40,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
 
     private RelayClient relay;
     private Drafts drafts;
+    private WorldMap map;
     private WorldEditBridge bridge;
     private PluginConfig config;
     private McpEndpoint mcp;
@@ -87,9 +89,13 @@ public final class AIBuilderPlugin extends JavaPlugin {
             getLogger().warning(NOT_CONNECTED);
             return;
         }
+        if (config.map().enabled()) {
+            map = new WorldMap(service, config.map(), getLogger());
+            service.addListener(map);
+        }
         try {
             relay = new RelayClient(config.relayUrl(), config.relayToken(), mcp, new RestApi(registry), history, drafts,
-                    service, this::relayHello, getLogger());
+                    map, service, this::relayHello, getLogger());
             relay.start();
             getLogger().info("Connecting to the panel at " + relay.uri());
         } catch (IllegalArgumentException e) {
@@ -100,6 +106,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         if (relay != null) relay.stop();
+        if (map != null) map.close();
         if (drafts != null) drafts.close();
     }
 

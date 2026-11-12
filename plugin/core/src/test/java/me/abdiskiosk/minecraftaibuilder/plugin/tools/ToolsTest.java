@@ -93,7 +93,7 @@ class ToolsTest {
     }
 
     private final PluginConfig config = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
-            List.of(), "", null, List.of(), true, "", "", null, null);
+            List.of(), "", null, List.of(), true, "", "", null, null, null);
     private final Path dataDir = tempDir();
     private final BuildService service = new BuildService(null, new FakeBridge(), config, dataDir);
 
@@ -187,7 +187,8 @@ class ToolsTest {
         Box expected = Box.of(new Vec3(1, 64, 2), new Vec3(3, 70, 9));
         assertEquals(expected, ((Op.Fill) single("fill", args("{\"region\":[3,70,9,1,64,2],\"pattern\":\"stone\"}"))).box());
         assertEquals(expected, ((Op.Fill) single("fill", args("{\"region\":{\"min\":[1,64,2],\"max\":[3,70,9]},\"pattern\":\"stone\"}"))).box());
-        assertEquals("\"region\" must be \"selection\" or [x1,y1,z1,x2,y2,z2]", error("fill", "{\"region\":[1,2,3],\"pattern\":\"stone\"}"));
+        assertEquals("\"region\" must be \"selection\", \"@area\" or [x1,y1,z1,x2,y2,z2]", error("fill", "{\"region\":[1,2,3],\"pattern\":\"stone\"}"));
+        assertTrue(error("fill", "{\"region\":\"@plot\",\"pattern\":\"stone\"}").startsWith("unknown area \"@plot\""));
     }
 
     @Test
@@ -447,7 +448,7 @@ class ToolsTest {
         assertTrue(error("tell", "{\"message\":\"hi\",\"teleport\":[0,64,0]}").startsWith("teleport needs a player. 2 players are online"));
 
         PluginConfig noTeleport = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
-                List.of(), "", null, List.of(), false, "", "", null, null);
+                List.of(), "", null, List.of(), false, "", "", null, null, null);
         ToolRegistry other = new ToolRegistry(service, Logger.getAnonymousLogger());
         Tools.registerAll(other, new BuildService(null, new FakeBridge(), noTeleport, null));
         Tool tell = other.all().stream().filter(x -> x.name().equals("tell")).findFirst().orElseThrow();

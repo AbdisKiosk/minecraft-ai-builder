@@ -17,7 +17,8 @@ import java.util.TreeSet;
 
 /**
  * Typed access to tool arguments. Coordinates are {@code [x,y,z]}; each part may be a number or
- * {@code "~n"}, relative to the caller's feet; {@code "@name"} is a marker. A region is {@code "selection"}, {@code [x1,y1,z1,x2,y2,z2]} or
+ * {@code "~n"}, relative to the caller's feet; {@code "@name"} is a marker. A region is {@code "selection"}, {@code "@name"} (an
+ * area marked on the panel's map), {@code [x1,y1,z1,x2,y2,z2]} or
  * {@code {"min":[..],"max":[..]}}. Inside a batch with an origin, plain numbers are offsets from that origin.
  */
 public final class Args {
@@ -187,6 +188,7 @@ public final class Args {
             }
             return sel.bounds();
         }
+        if (e.isJsonPrimitive() && e.getAsString().startsWith("@")) return area(e.getAsString().substring(1));
         if (e.isJsonArray() && e.getAsJsonArray().size() == 6) {
             JsonArray six = e.getAsJsonArray(), min = new JsonArray(), max = new JsonArray();
             for (int i = 0; i < 3; i++) {
@@ -200,6 +202,17 @@ public final class Args {
             if (!o.has("min") || !o.has("max")) throw new EditException("\"" + name + "\" needs min and max");
             return Box.of(vec(o.get("min"), name + ".min"), vec(o.get("max"), name + ".max"));
         }
-        throw new EditException("\"" + name + "\" must be \"selection\" or [x1,y1,z1,x2,y2,z2]");
+        throw new EditException("\"" + name + "\" must be \"selection\", \"@area\" or [x1,y1,z1,x2,y2,z2]");
+    }
+
+    /** An area is absolute, like a marker. */
+    private Box area(String name) {
+        Markers markers = service.markers();
+        return markers.area(caller.world(), name).map(Markers.Area::box).orElseThrow(() -> {
+            Set<String> known = markers.areas(caller.world()).keySet();
+            return new EditException("unknown area \"@" + name + "\" in world '" + caller.world() + "'; "
+                    + (known.isEmpty() ? "none marked yet" : "areas: " + String.join(", ", known))
+                    + ". Areas are marked on the panel's map.");
+        });
     }
 }

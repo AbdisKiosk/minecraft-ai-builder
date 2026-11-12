@@ -192,6 +192,30 @@ downloads each version from Mojang once, checks it against Mojang's SHA-1 and ke
 browser also caches the jar (roughly 30 MB, depending on the version). Servers before 1.13 use the 1.13.2 client's
 models for their translated block states.
 
+## Map
+
+**Map** on a server's page shows a top-down map of each of its worlds: drag to move, scroll or pinch to zoom, from
+one pixel per 64 blocks up to 24 pixels per block. Spawn, online players and `/aibuilder mark` markers are on it.
+
+The plugin draws it from the world's region files on disk (`region/r.<x>.<z>.mca`, every format from 1.8 to 26.x), on
+its own low-priority threads, so viewing the map never loads a chunk into the server and never touches the main thread
+for unedited chunks. One region (512x512 blocks) takes about 50 ms. A zoom-0 tile is one region; each zoom level
+halves four tiles into one, up to 64x64 regions per tile. The nether is drawn below its bedrock roof.
+
+Tiles are versioned by their region file's time stamp. The plugin caches them in `plugins/AIBuilder/map/` and draws a
+tile again only when its region changes; the panel keeps them in memory (`MAP_CACHE_MB`, default 256) and the browser
+caches each version for good, so a tile crosses the relay once per change. Region files lag behind the world until the
+server saves, so chunks an edit job changed are drawn from a snapshot of the loaded chunk until it unloads: Claude's
+builds show at once, players' changes after the next autosave. While a server is offline the panel shows the last map
+it saw.
+
+**Mark area** (builders) lets you drag a rectangle onto the map, name it and say what should go there. Claude sees areas
+in `get_context` with their notes and can use `"@name"` wherever a region goes. The height runs from the lowest ground
+in the area to 32 blocks above the highest, unless you give one. Areas live in the plugin's `areas.json` and share
+their names with markers.
+
+Settings under `map:` in the plugin's `config.yml`: `enabled` (default true) and `threads` (default 2).
+
 ## Drafts: approve edits before they are placed
 
 Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone

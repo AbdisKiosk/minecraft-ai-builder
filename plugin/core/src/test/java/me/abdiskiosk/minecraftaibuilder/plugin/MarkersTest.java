@@ -1,5 +1,6 @@
 package me.abdiskiosk.minecraftaibuilder.plugin;
 
+import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import org.junit.jupiter.api.Test;
@@ -89,5 +90,24 @@ class MarkersTest {
         assertEquals(Map.of("Bob", List.of("hi")), m.takeAllNotes());
         assertEquals(Map.of(), m.takeAllNotes());
         assertThrows(EditException.class, () -> m.addNote("Ann", "  "));
+    }
+
+    @Test
+    void areasShareNamesWithMarkersAndSurviveARestart() {
+        Markers m = new Markers(dir);
+        Box plot = Box.of(new Vec3(10, 60, 10), new Vec3(0, 90, 20));
+        assertFalse(m.setArea("world", "Plot", plot, " a market\nhere "));
+        assertEquals(Optional.of(new Markers.Area(plot, "a market here")), m.area("world", "plot"));
+        m.set("world", "door", new Vec3(1, 2, 3));
+        assertThrows(EditException.class, () -> m.setArea("world", "door", plot, ""));
+        assertThrows(EditException.class, () -> m.set("world", "plot", new Vec3(0, 0, 0)));
+        m.setArea("nether", "door", plot, ""); // another world has its own names
+        assertTrue(m.setArea("world", "plot", plot, ""));
+        Markers second = new Markers(dir);
+        assertEquals(Map.of("plot", new Markers.Area(plot, "")), second.areas("world"));
+        assertEquals("{\"box\":[0,60,10,10,90,20]}", Markers.json(second.area("world", "plot").orElseThrow()).toString());
+        assertTrue(second.removeArea("world", "plot"));
+        assertFalse(second.removeArea("world", "plot"));
+        assertEquals(Map.of(), new Markers(dir).areas("world"));
     }
 }

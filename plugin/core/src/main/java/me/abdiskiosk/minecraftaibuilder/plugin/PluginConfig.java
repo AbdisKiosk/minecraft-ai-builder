@@ -2,6 +2,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
+import me.abdiskiosk.minecraftaibuilder.plugin.map.WorldMap;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 
@@ -22,7 +23,8 @@ public record PluginConfig(
         String relayUrl,
         String relayToken,
         History.Settings history,
-        Drafts.Settings drafts) {
+        Drafts.Settings drafts,
+        WorldMap.Settings map) {
 
     public static PluginConfig load(FileConfiguration config) {
         ConfigurationSection zone = config.getConfigurationSection("safety.build-zone");
@@ -52,7 +54,10 @@ public record PluginConfig(
                         config.getBoolean("review.enabled", false),
                         Math.max(1, config.getLong("review.max-volume", 1_000_000L)),
                         Math.max(0, config.getInt("review.keep", 50)),
-                        Math.max(1, config.getLong("promote.max-volume", 2_000_000L))));
+                        Math.max(1, config.getLong("promote.max-volume", 2_000_000L))),
+                new WorldMap.Settings(
+                        config.getBoolean("map.enabled", true),
+                        Math.max(1, Math.min(8, config.getInt("map.threads", 2)))));
     }
 
     private static Vec3 vec(List<Integer> list) {

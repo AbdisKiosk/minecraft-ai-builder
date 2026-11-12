@@ -6,6 +6,7 @@ import { usePanel } from '../lib/usePanel';
 import Dashboard from './Dashboard';
 import DiffPage from './DiffPage';
 import DraftPage from './DraftPage';
+import MapPage from './MapPage';
 import ServerPage from './ServerPage';
 import SetupPage from './SetupPage';
 import TokensPage from './TokensPage';
@@ -45,6 +46,9 @@ export default function Panel({ me }: { me: Me }) {
       } else if (route.page === 'server') {
         crumbs.push([name]);
         page = <ServerPage key={route.server} server={server} servers={servers} />;
+      } else if (route.page === 'map') {
+        crumbs.push([name, serverHref(route.server)], ['Map']);
+        page = <MapPage key={route.server} server={server} world={route.world} />;
       } else if (route.page === 'diff') {
         crumbs.push([name, serverHref(route.server)], [route.id]);
         page = <DiffPage key={`${route.server}/${route.id}`} server={server} id={route.id} servers={servers} />;

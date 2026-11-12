@@ -23,6 +23,7 @@ import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
 import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -84,7 +85,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, player notes, server version.",
+                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, player notes, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -284,6 +285,12 @@ public final class Tools {
             JsonObject m = new JsonObject();
             markers.forEach((name, v) -> m.add(name, vec(v)));
             out.add("markers", m);
+        }
+        Map<String, Markers.Area> areas = service.markers().areas(caller.world());
+        if (!areas.isEmpty()) {
+            JsonObject m = new JsonObject();
+            areas.forEach((name, area) -> m.add(name, Markers.json(area)));
+            out.add("areas", m);
         }
         JsonArray notes = new JsonArray();
         if (caller.isPlayer()) {

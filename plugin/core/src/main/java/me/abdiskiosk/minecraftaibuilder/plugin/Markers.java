@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 
@@ -23,9 +24,10 @@ import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 /**
- * Named positions players set with {@code /aibuilder mark}, kept per world in {@code markers.json}, and notes players
- * leave for Claude with {@code /aibuilder note} (in memory only). Commands run on the server thread and tools on HTTP
- * threads, so every method is synchronized.
+ * Named positions players set with {@code /aibuilder mark}, kept per world in {@code markers.json}; named areas marked
+ * on the panel's map, in {@code areas.json}; and notes players leave for Claude with {@code /aibuilder note} (in memory
+ * only). Markers and areas of a world share one set of names, so "@name" means one thing. Commands run on the server
+ * thread and tools on relay threads, so every method is synchronized.
  */
 public final class Markers {
 
@@ -34,14 +36,22 @@ public final class Markers {
     public static final int MAX_NOTE_LENGTH = 300;
     private static final Pattern NAME = Pattern.compile("[a-z0-9_-]{1,24}");
 
+    /** A box marked on the map, with what the person who marked it wants there. */
+    public record Area(Box box, String note) {
+    }
+
     private final Path file;
+    private final Path areasFile;
     private final Map<String, Map<String, Vec3>> markers = new TreeMap<>();
+    private final Map<String, Map<String, Area>> areas = new TreeMap<>();
     private final Map<String, Deque<String>> notes = new LinkedHashMap<>();
 
-    /** @param dir where {@code markers.json} lives; null keeps markers in memory only */
+    /** @param dir where {@code markers.json} and {@code areas.json} live; null keeps them in memory only */
     public Markers(Path dir) {
         this.file = dir == null ? null : dir.resolve("markers.json");
+        this.areasFile = dir == null ? null : dir.resolve("areas.json");
         load();
+        loadAreas();
     }
 
     /** The marker name a player typed, lower-cased; throws unless it is 1-24 of a-z, 0-9, _ and -. */
@@ -54,6 +64,9 @@ public final class Markers {
     /** Sets or moves a marker; returns true when it already existed. */
     public synchronized boolean set(String world, String rawName, Vec3 pos) {
         String name = name(rawName);
+        if (areas.getOrDefault(world, Map.of()).containsKey(name)) {
+            throw new EditException("\"" + name + "\" is an area on the map in world '" + world + "'; pick another name");
+        }
         Map<String, Vec3> inWorld = markers.computeIfAbsent(world, w -> new TreeMap<>());
         if (!inWorld.containsKey(name) && inWorld.size() >= MAX_PER_WORLD) {
             throw new EditException("world '" + world + "' already has " + MAX_PER_WORLD + " markers; remove one with /aibuilder unmark <name>");
@@ -85,6 +98,42 @@ public final class Markers {
     /** Worlds that have markers, sorted. */
     public synchronized List<String> worlds() {
         return new ArrayList<>(markers.keySet());
+    }
+
+    /** Sets or replaces an area; returns true when it already existed. */
+    public synchronized boolean setArea(String world, String rawName, Box box, String rawNote) {
+        String name = name(rawName);
+        if (markers.getOrDefault(world, Map.of()).containsKey(name)) {
+            throw new EditException("\"" + name + "\" is already a marker in world '" + world + "'; pick another name");
+        }
+        String note = rawNote == null ? "" : rawNote.replaceAll("\\p{Cntrl}", " ").trim();
+        if (note.length() > MAX_NOTE_LENGTH) note = note.substring(0, MAX_NOTE_LENGTH);
+        Map<String, Area> inWorld = areas.computeIfAbsent(world, w -> new TreeMap<>());
+        if (!inWorld.containsKey(name) && inWorld.size() >= MAX_PER_WORLD) {
+            throw new EditException("world '" + world + "' already has " + MAX_PER_WORLD + " areas; remove one first");
+        }
+        boolean replaced = inWorld.put(name, new Area(box, note)) != null;
+        saveAreas();
+        return replaced;
+    }
+
+    public synchronized boolean removeArea(String world, String rawName) {
+        Map<String, Area> inWorld = areas.get(world);
+        if (inWorld == null || inWorld.remove(name(rawName)) == null) return false;
+        if (inWorld.isEmpty()) areas.remove(world);
+        saveAreas();
+        return true;
+    }
+
+    public synchronized Optional<Area> area(String world, String name) {
+        Map<String, Area> inWorld = areas.get(world);
+        return inWorld == null ? Optional.empty() : Optional.ofNullable(inWorld.get(name.toLowerCase(Locale.ROOT)));
+    }
+
+    /** The areas of one world, sorted by name. */
+    public synchronized Map<String, Area> areas(String world) {
+        Map<String, Area> inWorld = areas.get(world);
+        return inWorld == null ? Map.of() : new TreeMap<>(inWorld);
     }
 
     /** Queues a note; text past {@value #MAX_NOTE_LENGTH} characters is cut and an eleventh note drops the oldest. */
@@ -134,6 +183,51 @@ public final class Markers {
         }
     }
 
+    private void loadAreas() {
+        if (areasFile == null || !Files.isRegularFile(areasFile)) return;
+        try {
+            JsonObject root = JsonParser.parseString(Files.readString(areasFile)).getAsJsonObject();
+            for (Map.Entry<String, JsonElement> world : root.entrySet()) {
+                if (!world.getValue().isJsonObject()) continue;
+                Map<String, Area> inWorld = new TreeMap<>();
+                for (Map.Entry<String, JsonElement> a : world.getValue().getAsJsonObject().entrySet()) {
+                    if (!NAME.matcher(a.getKey()).matches() || inWorld.size() >= MAX_PER_WORLD || !a.getValue().isJsonObject()) continue;
+                    JsonObject o = a.getValue().getAsJsonObject();
+                    JsonArray b = o.has("box") && o.get("box").isJsonArray() ? o.getAsJsonArray("box") : null;
+                    if (b == null || b.size() != 6) continue;
+                    Box box = Box.of(new Vec3(b.get(0).getAsInt(), b.get(1).getAsInt(), b.get(2).getAsInt()),
+                            new Vec3(b.get(3).getAsInt(), b.get(4).getAsInt(), b.get(5).getAsInt()));
+                    inWorld.put(a.getKey(), new Area(box, o.has("note") ? o.get("note").getAsString() : ""));
+                }
+                if (!inWorld.isEmpty()) areas.put(world.getKey(), inWorld);
+            }
+        } catch (IOException | RuntimeException e) {
+            areas.clear();
+        }
+    }
+
+    /** An area as JSON: {"box":[x1,y1,z1,x2,y2,z2]} and its note when it has one. */
+    public static JsonObject json(Area area) {
+        JsonObject o = new JsonObject();
+        JsonArray b = new JsonArray();
+        Box box = area.box();
+        for (int v : new int[]{box.min().x(), box.min().y(), box.min().z(), box.max().x(), box.max().y(), box.max().z()}) b.add(v);
+        o.add("box", b);
+        if (!area.note().isEmpty()) o.addProperty("note", area.note());
+        return o;
+    }
+
+    private void saveAreas() {
+        if (areasFile == null) return;
+        JsonObject root = new JsonObject();
+        areas.forEach((world, inWorld) -> {
+            JsonObject o = new JsonObject();
+            inWorld.forEach((name, a) -> o.add(name, json(a)));
+            root.add(world, o);
+        });
+        write(areasFile, root, "areas");
+    }
+
     private void save() {
         if (file == null) return;
         JsonObject root = new JsonObject();
@@ -148,13 +242,18 @@ public final class Markers {
             });
             root.add(world, o);
         });
+        write(file, root, "markers");
+    }
+
+    private static void write(Path target, JsonObject root, String what) {
         try {
-            Files.createDirectories(file.getParent());
-            Path tmp = file.resolveSibling("markers.json.tmp");
+            Files.createDirectories(target.getParent());
+            Path tmp = target.resolveSibling(target.getFileName() + ".tmp");
             Files.writeString(tmp, root.toString());
-            Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            throw new EditException("markers changed until the next restart; markers.json could not be written: " + e.getClass().getSimpleName());
+            throw new EditException(what + " changed until the next restart; " + target.getFileName() + " could not be written: "
+                    + e.getClass().getSimpleName());
         }
     }
 }

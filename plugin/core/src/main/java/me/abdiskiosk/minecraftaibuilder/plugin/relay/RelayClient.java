@@ -16,6 +16,7 @@ import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 import me.abdiskiosk.minecraftaibuilder.plugin.Drafts;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
+import me.abdiskiosk.minecraftaibuilder.plugin.map.WorldMap;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 
 import java.net.URI;
@@ -56,6 +57,7 @@ public final class RelayClient implements BuildService.JobListener {
     private final RestApi api;
     private final History history;
     private final Drafts drafts;
+    private final WorldMap map;
     private final BuildService service;
     private final Supplier<JsonObject> hello;
     private final Logger logger;
@@ -84,15 +86,17 @@ public final class RelayClient implements BuildService.JobListener {
     /**
      * @param history null when the history is turned off
      * @param drafts  null when drafts are not available
+     * @param map     null when the map is turned off
      */
     public RelayClient(String url, String token, McpEndpoint mcp, RestApi api, History history, Drafts drafts,
-                       BuildService service, Supplier<JsonObject> hello, Logger logger) {
+                       WorldMap map, BuildService service, Supplier<JsonObject> hello, Logger logger) {
         this.uri = relayUri(url);
         this.token = token;
         this.mcp = mcp;
         this.api = api;
         this.history = history;
         this.drafts = drafts;
+        this.map = map;
         this.service = service;
         this.hello = hello;
         this.logger = logger;
@@ -209,6 +213,7 @@ public final class RelayClient implements BuildService.JobListener {
         o.addProperty("protocol", RelayProtocol.VERSION);
         o.addProperty("history", history != null);
         o.addProperty("review", drafts != null && drafts.reviewOn());
+        o.addProperty("map", map != null);
         send(o);
         for (BuildService.JobInfo job : service.running()) onJob(RelayProtocol.JOB_START, job);
         if (drafts != null) drafts.openSummaries().forEach(this::onDraft);
@@ -261,6 +266,10 @@ public final class RelayClient implements BuildService.JobListener {
             return;
         }
         if (id == null) return;
+        if (type.equals(RelayProtocol.MAP)) {
+            workers.submit(() -> map(frame, id));
+            return;
+        }
         workers.submit(() -> {
             RestApi.Response r;
             try {
@@ -285,12 +294,44 @@ public final class RelayClient implements BuildService.JobListener {
                 logger.log(Level.WARNING, "Relay request failed", e);
                 r = RestApi.error(500, "internal error; see the server log");
             }
-            JsonObject reply = new JsonObject();
-            reply.addProperty("t", RelayProtocol.REPLY);
-            reply.add("id", id);
-            reply.addProperty("status", r.status());
-            reply.add("body", r.body() == null ? JsonNull.INSTANCE : r.body());
-            send(reply);
+            reply(id, r);
+        });
+    }
+
+    private void reply(JsonElement id, RestApi.Response r) {
+        JsonObject reply = new JsonObject();
+        reply.addProperty("t", RelayProtocol.REPLY);
+        reply.add("id", id);
+        reply.addProperty("status", r.status());
+        reply.add("body", r.body() == null ? JsonNull.INSTANCE : r.body());
+        send(reply);
+    }
+
+    /** Map requests answer when their tiles are drawn, without holding a worker while they wait. */
+    private void map(JsonObject frame, JsonElement id) {
+        if (map == null) {
+            reply(id, RestApi.error(404, "the map is turned off on this server (map.enabled in the plugin's config.yml)"));
+            return;
+        }
+        JsonObject args = frame.has("args") && frame.get("args").isJsonObject() ? frame.getAsJsonObject("args") : new JsonObject();
+        String op = frame.has("op") ? frame.get("op").getAsString() : "";
+        CompletableFuture<JsonElement> work;
+        try {
+            work = map.handle(op, args);
+        } catch (RuntimeException e) {
+            work = CompletableFuture.failedFuture(e);
+        }
+        work.whenComplete((body, error) -> {
+            Throwable e = error;
+            while (e instanceof java.util.concurrent.CompletionException && e.getCause() != null) e = e.getCause();
+            if (e == null) {
+                reply(id, new RestApi.Response(200, body));
+            } else if (e instanceof EditException) {
+                reply(id, RestApi.error(400, e.getMessage()));
+            } else {
+                logger.log(Level.WARNING, "Relay map request failed", e);
+                reply(id, RestApi.error(500, "internal error; see the server log"));
+            }
         });
     }
 

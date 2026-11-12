@@ -24,7 +24,7 @@ public final class McpEndpoint {
     static final String INSTRUCTIONS = """
             Builds in a live Minecraft server through WorldEdit.
             - Start with get_context (player position/facing, selection, server version).
-            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet; "@name" is a marker the player set with /aibuilder mark <name> (get_context lists them). A region is "selection" (the player's WorldEdit selection; prefer it when there is one) or [x1,y1,z1,x2,y2,z2].
+            - Coordinates: +y up, +x east, +z south. "~n" is relative to the player's feet; "@name" is a marker the player set with /aibuilder mark <name> (get_context lists them). A region is "selection" (the player's WorldEdit selection; prefer it when there is one), "@name" (an area in get_context) or [x1,y1,z1,x2,y2,z2].
             - Every tool also takes "player" (who acts; default: the only online player, needed for ~ and selections when several are online) and "world".
             - Patterns are WorldEdit syntax with modern block names and states: 80%stone_bricks,20%andesite or oak_stairs[facing=east,half=top]. A stair's facing is the side it rises towards.
             - Blocks differ by server version. Unknown blocks and bad property values are rejected before anything is built; block_info gives valid names and properties.

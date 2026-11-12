@@ -50,7 +50,7 @@ class RelayClientTest {
         WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
                 new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> m.getName().equals("name") ? "fake" : null);
         PluginConfig config = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
-                List.of(), "", null, List.of(), true, "", "", null, null);
+                List.of(), "", null, List.of(), true, "", "", null, null, null);
         service = new BuildService(null, bridge, config, dir);
         History.Settings settings = new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000);
         history = new History(null, service, settings);
@@ -63,7 +63,7 @@ class RelayClientTest {
     }
 
     private RelayClient client(String token) {
-        return new RelayClient(url, token, mcp, api, history, null, service, () -> {
+        return new RelayClient(url, token, mcp, api, history, null, null, service, () -> {
             JsonObject o = new JsonObject();
             o.addProperty("mc", "1.21.11");
             return o;

@@ -61,3 +61,10 @@ review:
 promote:
   # Largest region the panel may copy out of or into this server (a promote always becomes a draft first).
   max-volume: 2000000
+
+map:
+  # The panel's map of each world. It is drawn from the region files on disk on its own low-priority threads, so it
+  # never loads chunks into the server; tiles are cached in plugins/AIBuilder/map/ (delete it to start over).
+  enabled: true
+  # Threads that draw tiles. A 512x512-block region takes about 50 ms.
+  threads: 2
