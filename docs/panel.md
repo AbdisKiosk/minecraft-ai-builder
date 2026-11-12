@@ -243,6 +243,25 @@ on a server. Lessons apply as soon as they are saved; there is no approval step.
 Lessons and pending feedback live in the plugin's `lessons.json`, beside `areas.json`. A plugin from before lessons
 answers the Lessons page with "too old"; update it with the jar from the panel.
 
+## Assets
+
+**Assets** (top bar) is a user's own library of saved pieces: a window, a pillar, a tree. Assets belong to the account,
+not to a server, so they can be placed on every server where the user is a builder.
+
+- **Save as asset** on a server's map (builders): click two corners, then give a name (a-z, 0-9, `_`, `-`, as for
+  saved blueprints), a description, tags and the height. The height starts from the area the box lies in, if any. The
+  panel reads the blocks through the same `draft export` frame as promote, so `promote.max-volume` limits it, and it
+  saves the world as it is, not an open draft. A region that is only air is refused.
+- The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
+  the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
+  and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+- Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Nobody can see, change or place another user's
+  asset; saving and placing need the builder role on the server, as promote does.
+- Storage: one MySQL row per asset (`assets`), and in R2 under `users/<user>/assets/<id>/` the export frame's data
+  (`region.bin`, which the import frame takes back) and the 3D view's blocks (`blocks.json.gz`). The export leaves out
+  properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
+  view; a wrong guess changes only how the preview draws a block, never what is placed.
+
 ## Drafts: approve edits before they are placed
 
 Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone

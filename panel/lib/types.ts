@@ -107,3 +107,25 @@ export interface Lesson {
   time: number;
   seen: boolean;
 }
+
+/** One of the user's assets (lib/server/assets.ts). */
+export interface Asset {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  /** Width (x), height (y) and length (z). */
+  size: [number, number, number];
+  /** Blocks that are not air. */
+  blocks: number;
+  /** The Minecraft version it was saved on. */
+  mc: string | null;
+  bytes: number;
+  created: number;
+  updated: number;
+}
+
+export interface AssetList {
+  assets: Asset[];
+  quota: { count: number; bytes: number; maxCount: number; maxBytes: number };
+}

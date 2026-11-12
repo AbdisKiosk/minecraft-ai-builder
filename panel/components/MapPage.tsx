@@ -5,6 +5,7 @@ import { MAX_SCALE, minScale, TileLayer, type MapIndex, type View } from '../lib
 import { go, mapHref } from '../lib/routes';
 import { can, type Server } from '../lib/types';
 import Modal from './Modal';
+import SaveAssetDialog from './SaveAssetDialog';
 
 /** An inclusive block rectangle on the map. */
 interface Rect { x1: number; z1: number; x2: number; z2: number }
@@ -20,6 +21,15 @@ const norm = (a: { x: number; z: number }, b: { x: number; z: number }): Rect =>
   ({ x1: Math.min(a.x, b.x), z1: Math.min(a.z, b.z), x2: Math.max(a.x, b.x), z2: Math.max(a.z, b.z) });
 const areaRect = (a: Area): Rect => ({ x1: a.box[0], z1: a.box[2], x2: a.box[3], z2: a.box[5] });
 
+/** The height of the smallest area the box lies in, if any: the map itself has no heights to offer. */
+function heightOf(index: MapIndex, r: Rect): [number, number] | null {
+  const inside = Object.values(index.areas)
+    .map(a => ({ a, o: areaRect(a) }))
+    .filter(({ o }) => o.x1 <= r.x1 && o.z1 <= r.z1 && o.x2 >= r.x2 && o.z2 >= r.z2)
+    .sort((p, q) => (p.o.x2 - p.o.x1) * (p.o.z2 - p.o.z1) - (q.o.x2 - q.o.x1) * (q.o.z2 - q.o.z1));
+  return inside.length ? [inside[0].a.box[1], inside[0].a.box[4]] : null;
+}
+
 function areaColor(name: string): string {
   let h = 0;
   for (let i = 0; i < name.length; i++) h = (h * 31 + name.charCodeAt(i)) >>> 0;
@@ -33,7 +43,10 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
   const [error, setError] = useState('');
   const [selected, setSelected] = useState<string | null>(null);
   const [drawMode, setDrawMode] = useState(false);
+  // What the box being marked is for: a new area, or an asset saved from it.
+  const [drawFor, setDrawFor] = useState<'area' | 'asset'>('area');
   const [newArea, setNewArea] = useState<Rect | null>(null);
+  const [newAsset, setNewAsset] = useState<Rect | null>(null);
   const [fly, setFly] = useState<{ x: number; z: number; scale?: number; n: number } | null>(null);
   const world = routeWorld || index?.world || '';
   const request = useRef(0);
@@ -67,7 +80,15 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
   }, [drawMode]);
 
   const flyTo = useCallback((x: number, z: number, scale?: number) => setFly(f => ({ x, z, scale, n: (f?.n || 0) + 1 })), []);
-  const onDrawn = useCallback((r: Rect) => { setDrawMode(false); setNewArea(r); }, []);
+  const onDrawn = useCallback((r: Rect) => {
+    setDrawMode(false);
+    if (drawFor === 'asset') setNewAsset(r);
+    else setNewArea(r);
+  }, [drawFor]);
+  const startDrawing = (what: 'area' | 'asset') => {
+    setDrawFor(what);
+    setDrawMode(!(drawMode && drawFor === what));
+  };
 
   const removeArea = async (name: string) => {
     if (!confirm(`Remove the area "${name}"? Claude can no longer use @${name}.`)) return;
@@ -93,8 +114,14 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
             </select>
           )}
           {builder && ready && (
-            <button className={drawMode ? '' : 'ghost'} onClick={() => setDrawMode(!drawMode)} aria-pressed={drawMode}>
-              {drawMode ? 'Cancel marking (Esc)' : 'Mark area'}</button>
+            <button className={drawMode && drawFor === 'area' ? '' : 'ghost'} onClick={() => startDrawing('area')}
+              aria-pressed={drawMode && drawFor === 'area'}>
+              {drawMode && drawFor === 'area' ? 'Cancel marking (Esc)' : 'Mark area'}</button>
+          )}
+          {builder && ready && (
+            <button className={drawMode && drawFor === 'asset' ? '' : 'ghost'} onClick={() => startDrawing('asset')}
+              aria-pressed={drawMode && drawFor === 'asset'}>
+              {drawMode && drawFor === 'asset' ? 'Cancel saving (Esc)' : 'Save as asset'}</button>
           )}
         </div>
       </div>
@@ -116,6 +143,9 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
       {newArea && index && (
         <NewAreaDialog serverId={id} world={index.world} rect={newArea} taken={[...Object.keys(index.areas), ...Object.keys(index.markers)]}
           onClose={() => setNewArea(null)} onSaved={name => { setNewArea(null); setSelected(name); load(); }} />
+      )}
+      {newAsset && index && (
+        <SaveAssetDialog serverId={id} world={index.world} rect={newAsset} y={heightOf(index, newAsset)} onClose={() => setNewAsset(null)} />
       )}
     </>
   );

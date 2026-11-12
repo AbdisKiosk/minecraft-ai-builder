@@ -4,7 +4,7 @@ A builder saves their own windows, pillars, trees and other pieces once, and Cla
 its own. The library lives on the panel and belongs to the account, so the assets follow the builder to every server.
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
-Status: plan only. Nothing here is built.
+Status: phase 1 is built (panel only, see "Assets" in `panel.md`). Phases 2 and 3 are plans.
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one

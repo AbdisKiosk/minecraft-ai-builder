@@ -58,3 +58,6 @@ export function downloadPlugin(serverId: string): Promise<void> {
 
 /** The download started for this server since the page loaded, if any. */
 export const pluginDownload = (serverId: string) => downloads.get(serverId);
+
+export const assetsApi = '/api/assets';
+export const assetApi = (id: string) => `${assetsApi}/${encodeURIComponent(id)}`;
