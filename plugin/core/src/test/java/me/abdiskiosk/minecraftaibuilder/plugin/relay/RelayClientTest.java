@@ -228,7 +228,7 @@ class RelayClientTest {
             var identity = CallContext.identity();
             out.addProperty("user", identity == null ? 0 : identity.user());
             out.addProperty("library", service.personalLibrary() != null);
-            if (args.has("name")) out.addProperty("blocks", service.personalLibrary().load(args.str("name"), 10).cellCount());
+            if (args.has("name")) out.addProperty("blocks", service.personalLibrary().load(args.str("name"), 10).blueprint().cellCount());
             return ToolResult.of(out);
         }).unlisted());
     }
@@ -307,7 +307,7 @@ class RelayClientTest {
                 JsonObject out = new JsonObject();
                 var identity = CallContext.identity();
                 out.addProperty("user", identity == null ? 0 : identity.user());
-                if (identity != null) out.addProperty("blocks", service.assetLibrary().load("window", 10).cellCount());
+                if (identity != null) out.addProperty("blocks", service.assetLibrary().load("window", 10).blueprint().cellCount());
                 return ToolResult.of(out);
             }).unlisted());
             JsonObject rest = panel.request(frame("{\"t\":\"api\",\"tool\":\"asset_probe\",\"user\":7,\"assetKey\":\"" + "a".repeat(64)

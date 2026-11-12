@@ -3,8 +3,10 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpServer;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -63,7 +65,7 @@ class AssetLibraryTest {
 
     @Test void cacheIsScopedByOwnerAndNeverBypassesAuthorization() throws Exception {
         AssetLibrary library = library();
-        var blueprint = as(1, () -> library.load("window", 100));
+        var blueprint = as(1, () -> library.load("window", 100)).blueprint();
         assertEquals(4, blueprint.cellCount(), "saved air is preserved");
         assertTrue(blueprint.palette().containsValue("oak_stairs[facing=east]"));
         as(1, () -> library.load("window", 100));
@@ -76,6 +78,32 @@ class AssetLibraryTest {
         allowed.set(false);
         assertThrows(EditException.class, () -> as(1, () -> library.load("window", 100)));
         assertNull(CallContext.identity());
+    }
+
+    @Test void anchorAndFacingComeWithTheBlocksAndAreCheckedAgainstTheSize() throws Exception {
+        library();
+        AssetLibrary.Asset legacy = as(1, () -> new AssetLibrary(dir, (op, args) -> uncheckedMetadata()).load("window", 100));
+        assertEquals(new Anchor(null, null), legacy.anchor(), "an older panel, or an asset without one");
+        JsonObject meta = metadata();
+        JsonArray cell = new JsonArray(); cell.add(1); cell.add(1); cell.add(0); meta.add("anchor", cell);
+        meta.addProperty("facing", "south");
+        AssetLibrary.Asset anchored = as(1, () -> new AssetLibrary(dir, (op, args) -> meta).load("window", 100));
+        assertEquals(new Anchor(new Vec3(1, 1, 0), "south"), anchored.anchor());
+        // The asset is 2x2x1: z=1 lies outside it, as does a facing the plugin does not know.
+        for (String[] bad : new String[][]{{"anchor", "[1,1,1]"}, {"anchor", "[0,0]"}, {"anchor", "[-1,0,0]"}, {"facing", "\"sideways\""}}) {
+            JsonObject m = metadata();
+            m.add(bad[0], com.google.gson.JsonParser.parseString(bad[1]));
+            EditException e = assertThrows(EditException.class, () -> as(1, () -> new AssetLibrary(dir, (op, args) -> m).load("window", 100)));
+            assertEquals("the panel sent invalid asset metadata", e.getMessage(), bad[1]);
+        }
+    }
+
+    private JsonObject uncheckedMetadata() {
+        try {
+            return metadata();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test void corruptCacheIsReplacedButOversizedDimensionsDoNotDownload() throws Exception {

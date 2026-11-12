@@ -52,5 +52,28 @@ class SaveBlueprint(unittest.TestCase):
         self.assertEqual(body, {"name": "door", "region": self.region, "description": "oak door, 2 high"})
 
 
+class Paste(unittest.TestCase):
+    def queued(self, **kwargs):
+        b = Builder(url="https://panel.example/s/abc", token="aibc_test")
+        b.paste(**kwargs)
+        return b._ops[-1]
+
+    def test_origin_and_rotation(self):
+        self.assertEqual(self.queued(name="window", origin=[1, 2, 3], rotation=90),
+                         {"op": "paste", "name": "window", "origin": [1, 2, 3], "rotation": 90})
+
+    def test_at_and_facing(self):
+        self.assertEqual(self.queued(name="window", at=[1, 2, 3], facing="east"),
+                         {"op": "paste", "name": "window", "at": [1, 2, 3], "facing": "east"})
+        self.assertEqual(self.queued(name="window", at="@door"), {"op": "paste", "name": "window", "at": "@door", "rotation": 0})
+
+    def test_needs_one_place_and_one_turn(self):
+        from aibuilder import AIBuilderError
+        for kwargs in ({"name": "w"}, {"name": "w", "origin": [0, 0, 0], "at": [0, 0, 0]},
+                       {"name": "w", "at": [0, 0, 0], "facing": "east", "rotation": 90}):
+            with self.assertRaises(AIBuilderError):
+                self.queued(**kwargs)
+
+
 if __name__ == "__main__":
     unittest.main()

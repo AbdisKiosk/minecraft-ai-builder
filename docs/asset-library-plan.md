@@ -5,7 +5,8 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan, except the `.schem` upload, which is built (see "Upload a .schem" in `panel.md`).
+Phase 3 is a plan, except the `.schem` upload and anchors, which are built (see "Upload a .schem" and "Anchor and
+facing" in `panel.md`).
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -51,7 +52,10 @@ Built with these deviations:
 
 ## Phase 3: making assets fit
 - **Anchor and facing:** store which block is the attachment point and which way the asset faces, so Claude can rotate
-  a window onto any wall instead of guessing from the min corner.
+  a window onto any wall instead of guessing from the min corner. Built: nullable `anchor_x/y/z` and six-way `facing`
+  (migration `007_asset_anchor.sql`, both NULL for older and uploaded assets), set on Save as asset and Edit, and
+  `paste` `at` + `facing` (`common/Anchor.java`). Gap: only the four horizontal facings turn; an `up`/`down` asset
+  pastes only facing its own way, since `Blueprint` has no vertical flip. The 3D view draws no anchor marker yet.
 - **Version mismatch:** an asset saved on 1.21 and pasted on 1.8 goes through the existing unknown-block handling. The
   result reports what was skipped.
 - **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. This needs a link between a Minecraft
