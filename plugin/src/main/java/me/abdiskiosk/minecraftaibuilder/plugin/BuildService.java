@@ -36,6 +36,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -55,6 +56,11 @@ public final class BuildService {
     private final PluginConfig config;
     private final Path dataDir;
     private final Markers markers;
+    private final MemoryGuard memory;
+    /** Large reads run one at a time, so the arrays of several checks never sit in the heap together. */
+    private final Semaphore largeReads = new Semaphore(1, true);
+    /** Set while a thread is inside {@link #reading}, where the memory for its reads is already set aside. */
+    private static final ThreadLocal<Boolean> RESERVED = ThreadLocal.withInitial(() -> Boolean.FALSE);
     private final AtomicInteger nextJob = new AtomicInteger(1);
     private final Map<String, Job> jobs = new LinkedHashMap<>() {
         @Override
@@ -70,6 +76,7 @@ public final class BuildService {
         this.config = config;
         this.dataDir = dataDir;
         this.markers = new Markers(dataDir);
+        this.memory = new MemoryGuard(config == null ? 0 : config.minFreeMemoryMb() * 1_048_576L);
     }
 
     public WorldEditBridge bridge() {
@@ -136,6 +143,8 @@ public final class BuildService {
         /** The draft a preview job's changes went into. */
         volatile String draft;
         volatile String label;
+        /** Heap set aside for the edit while it runs. */
+        volatile MemoryGuard.Reservation memory;
 
         Job(String id, List<String> warnings, Caller caller, Box bounds, long total) {
             this.id = id;
@@ -220,6 +229,10 @@ public final class BuildService {
      */
     private record Plan(List<Op> ops, List<Op> pieces, int[] owner, List<Op.Light> lights) {
         RuntimeException explain(Throwable failure, int piece) {
+            if (failure instanceof OutOfMemoryError) {
+                return new EditException("the server ran out of memory during this edit and it was stopped; what was"
+                        + " placed can be undone. Use smaller edits, or give the server more memory.");
+            }
             RuntimeException e = failure instanceof RuntimeException re ? re : new EditException(String.valueOf(failure), failure);
             if (ops.size() < 2 || piece < 0) return e;
             Op op = ops.get(owner[piece]);
@@ -308,10 +321,84 @@ public final class BuildService {
             throw new EditException("region is " + box.volume() + " blocks; max read is " + config.maxReadVolume()
                     + ". Use a smaller region.");
         }
+        if (box.volume() > READ_SLAB && !RESERVED.get() && !Bukkit.isPrimaryThread()) {
+            memory.check(readCost(world, List.of(box)), "read " + box.volume() + " blocks", readAdvice(box));
+        }
+        return readNow(world, box);
+    }
+
+    /** {@link #read} for a caller that has its memory set aside already. */
+    private String[] readNow(String world, Box box) {
         String[] states = readWorld(world, box);
         // With review on, the caller sees the world as the open draft would leave it.
         if (reviewOn()) drafts.overlay(world, box, states);
         return states;
+    }
+
+    /**
+     * Runs work that reads {@code box} and builds something from it (a check, a render, a summary). A large region
+     * waits for its turn and for room in the heap; a small one runs at once.
+     */
+    public <T> T reading(String world, Box box, Supplier<T> work) {
+        if (box.volume() <= READ_SLAB || box.volume() > config.maxReadVolume()) return work.get();
+        try {
+            if (!largeReads.tryAcquire(60, TimeUnit.SECONDS)) {
+                throw new EditException("the server is busy with other large reads; try again in a moment");
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EditException("interrupted");
+        }
+        try (MemoryGuard.Reservation ignored = memory.reserve(readCost(world, List.of(box)), "read " + box.volume() + " blocks", readAdvice(box))) {
+            RESERVED.set(Boolean.TRUE);
+            return work.get();
+        } finally {
+            RESERVED.set(Boolean.FALSE);
+            largeReads.release();
+        }
+    }
+
+    /** Says how large a region of the same height fits, so the caller gets it right on the next call. */
+    private String readAdvice(Box box) {
+        long perChunk = MemoryGuard.BYTES_PER_CHUNK + 256L * box.sizeY() * MemoryGuard.BYTES_PER_READ_BLOCK;
+        long side = (long) Math.sqrt((double) (memory.room() / perChunk)) * 16;
+        return (side >= 16 ? "A region of about " + side + "x" + side + " blocks at this height fits; " : "Nothing of this height fits; ")
+                + "chunks loaded by earlier calls are freed after about 15 seconds, and more server memory lifts the limit.";
+    }
+
+    private long readCost(String world, List<Box> boxes) {
+        List<Long> volumes = boxes.stream().map(Box::volume).toList();
+        return volumes.stream().mapToLong(Long::longValue).sum() * MemoryGuard.BYTES_PER_READ_BLOCK
+                + unloadedChunks(world, boxes, volumes) * MemoryGuard.BYTES_PER_CHUNK;
+    }
+
+    /**
+     * Chunks the boxes would make the server load. A box with more chunks than blocks to touch in it (a long line,
+     * a few scattered blocks) counts one chunk per block instead.
+     *
+     * @param touched for each box, the most blocks the work touches inside it
+     */
+    private long unloadedChunks(String worldName, List<Box> boxes, List<Long> touched) {
+        return sync(() -> {
+            World world = Bukkit.getWorld(worldName);
+            if (world == null) return 0L;
+            java.util.Set<Long> chunks = new java.util.HashSet<>();
+            long sparse = 0;
+            for (int i = 0; i < boxes.size(); i++) {
+                Box box = boxes.get(i);
+                int x1 = box.min().x() >> 4, x2 = box.max().x() >> 4, z1 = box.min().z() >> 4, z2 = box.max().z() >> 4;
+                if ((long) (x2 - x1 + 1) * (z2 - z1 + 1) > touched.get(i)) {
+                    sparse += touched.get(i);
+                    continue;
+                }
+                for (int x = x1; x <= x2; x++) {
+                    for (int z = z1; z <= z2; z++) {
+                        if (!world.isChunkLoaded(x, z)) chunks.add(((long) x << 32) | (z & 0xFFFFFFFFL));
+                    }
+                }
+            }
+            return chunks.size() + sparse;
+        });
     }
 
     /** The world as it is, in slabs off the main thread so a large read never holds a tick for long. */
@@ -355,6 +442,11 @@ public final class BuildService {
      */
     public RegionSnapshot readStepped(String world, List<Box> boxes, long perTick) {
         checkWorld(world);
+        long volume = boxes.stream().mapToLong(Box::volume).sum();
+        if (volume > READ_SLAB) {
+            memory.check(readCost(world, boxes), "read " + volume + " blocks", "Use a smaller region, or wait 15 seconds for"
+                    + " chunks loaded by earlier calls to be freed; more server memory lifts the limit.");
+        }
         RegionSnapshot s = new RegionSnapshot(boxes);
         if (bridge.async()) {
             s.readAll(bridge, world, perTick);
@@ -369,9 +461,11 @@ public final class BuildService {
                         cancel();
                         done.complete(s);
                     }
-                } catch (RuntimeException ex) {
+                } catch (Throwable ex) {
+                    // An Error too: a task that fails again every tick would never let go of what it holds.
                     cancel();
-                    done.completeExceptionally(ex);
+                    done.completeExceptionally(ex instanceof OutOfMemoryError
+                            ? new EditException("the server ran out of memory reading the region; use a smaller one") : ex);
                 }
             }
         }.runTaskTimer(plugin, 0L, 1L);
@@ -441,7 +535,18 @@ public final class BuildService {
         List<Box> boxes = rec == null ? null : rec.boxes(caller, ops);
         RegionSnapshot before = boxes == null ? null : new RegionSnapshot(boxes);
 
+        // What the edit holds while it runs: its blocks in WorldEdit's history (or the draft), the chunks it has
+        // to load, and the before and after snapshots when it is tracked.
+        long blocks = ops.stream().mapToLong(Op::volume).sum();
+        long need = blocks * MemoryGuard.BYTES_PER_EDIT_BLOCK
+                + unloadedChunks(caller.world(), ops.stream().map(Op::bounds).toList(), ops.stream().map(Op::volume).toList()) * MemoryGuard.BYTES_PER_CHUNK
+                + (boxes == null ? 0 : boxes.stream().mapToLong(Box::volume).sum() * MemoryGuard.BYTES_PER_READ_BLOCK);
+        MemoryGuard.Reservation held = memory.reserve(need, "edit up to " + blocks + " blocks", "Split the edit into smaller calls,"
+                + " or wait 15 seconds for chunks to unload. Large edits also stay in WorldEdit's undo history (15 per player);"
+                + " //clearhistory frees them, and more server memory lifts the limit.");
+
         Job job = new Job("j" + nextJob.getAndIncrement(), warnings, caller, bounds, total);
+        job.memory = held;
         job.revertOf = options.revertOf();
         job.draftOf = options.draftOf();
         job.label = options.label();
@@ -604,7 +709,7 @@ public final class BuildService {
      * open draft and this job's own dry-run writes laid over it.
      */
     private String[] lightRead(String world, Box box, EditHandle handle) {
-        if (!(handle instanceof PreviewHandle preview)) return read(world, box);
+        if (!(handle instanceof PreviewHandle preview)) return readNow(world, box);
         String[] states = readWorld(world, box);
         drafts.overlay(world, box, states);
         return preview.changes().overlay(box, states, true);
@@ -632,6 +737,7 @@ public final class BuildService {
     }
 
     private void finish(Job job, RuntimeException error) {
+        if (job.memory != null) job.memory.close();
         long ms = System.currentTimeMillis() - job.started;
         if (error == null) {
             job.future.complete(new JobResult(job.id, "done", job.changed, ms, null, job.warnings, job.draft));
@@ -670,8 +776,29 @@ public final class BuildService {
             this.open = open;
         }
 
+        private boolean completed;
+
         @Override
         public void run() {
+            try {
+                tick();
+            } catch (Throwable t) {
+                // Out of memory outside build(), such as reading the result: stop here. A task that fails again
+                // every tick would hold on to its handle and snapshots, the memory the server is short of.
+                cancel();
+                if (completed) return;
+                completed = true;
+                if (!closed && handle != null) {
+                    try {
+                        handle.close();
+                    } catch (Throwable ignored) {
+                    }
+                }
+                complete(job, failure != null ? failure : plan.explain(t, -1), before, null, handle);
+            }
+        }
+
+        private void tick() {
             if (!closed) build();
             if (!closed) return;
             // Read the result for the history, also after a failure: whatever was placed is in the world.
@@ -684,6 +811,7 @@ public final class BuildService {
                 }
             }
             cancel();
+            completed = true;
             complete(job, failure, before, after, handle);
         }
 
@@ -725,12 +853,12 @@ public final class BuildService {
                     handle.close();
                     closeDone(null);
                 }
-            } catch (RuntimeException e) {
-                // Keep what was placed so it can still be undone as one step.
+            } catch (Throwable e) {
+                // An Error too, above all OutOfMemoryError. Keep what was placed so it can still be undone as one step.
                 if (handle != null) {
                     try {
                         handle.close();
-                    } catch (RuntimeException ignored) {
+                    } catch (Throwable ignored) {
                     }
                 }
                 closeDone(plan.explain(e, at));

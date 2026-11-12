@@ -15,6 +15,9 @@ limits:
   max-volume-per-op: 2000000
   # Largest region a read, check, render or light may cover. Reads are spread over ticks, 100000 blocks at a time.
   max-read-volume: 2000000
+  # Heap that stays free for the server itself. A read or edit that would leave less is refused with a message
+  # instead of risking an out-of-memory crash; every 16x16 chunk it has to load counts as 1.5 MB.
+  min-free-memory-mb: 256
   # How long a tool call waits for its job before returning "running".
   job-wait-seconds: 30
 
