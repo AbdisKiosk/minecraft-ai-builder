@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto';
-import { AssetError, checkName, checkQuota, fileKey, MAX_REGION_BYTES, saveAssetData, type Deps } from './assets.ts';
+import { AssetError, checkName, checkQuota, fileKey, MAX_REGION_BYTES, saveAssetData, type AssetRow, type Deps } from './assets.ts';
 import type { Json } from './hub.ts';
 
 /** One instance per socket. User ids supplied by a plugin are never authorization. */
@@ -26,6 +26,9 @@ export class AssetGrants {
   revoke(key: string) { this.grants.delete(key); }
   clear() { this.grants.clear(); }
 }
+
+/** An asset's anchor and facing for the plugin, each left out when not set; older plugins ignore both. */
+const placement = (r: AssetRow) => ({ ...(r.anchor ? { anchor: r.anchor } : {}), ...(r.facing ? { facing: r.facing } : {}) });
 
 /** Rules separated from MySQL, R2 and sockets so ownership and quota failures are tested without services. */
 export async function assetRequest(deps: Deps, user: number, server: string, mc: string | null, frame: Json,
@@ -55,7 +58,7 @@ export async function assetRequest(deps: Deps, user: number, server: string, mc:
     const url = await sign(fileKey(user, row.id, 'region'));
     // Only orders the list Claude sees: a failed touch must not fail the paste.
     await deps.store.touch(user, row.id).catch(() => {});
-    return { id: row.id, size: row.size, bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex'), url };
+    return { id: row.id, size: row.size, bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex'), url, ...placement(row) };
   }
   if (frame.op === 'check') {
     checkQuota(await deps.store.usage(user), 1, 0);

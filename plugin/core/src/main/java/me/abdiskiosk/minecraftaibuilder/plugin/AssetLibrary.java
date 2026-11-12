@@ -3,9 +3,11 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 
 import java.io.IOException;
 import java.net.URI;
@@ -72,13 +74,17 @@ public final class AssetLibrary {
         return request.apply("save", args);
     }
 
+    /** A library asset's blocks, with the anchor and facing its owner set (each null when not set). */
+    public record Asset(Blueprint blueprint, Anchor anchor) {}
+
     /** Serializes cache writes and eviction, not editing. No world chunks are read here. */
-    public synchronized Blueprint load(String name, long maxVolume) {
+    public synchronized Asset load(String name, long maxVolume) {
         CallContext.Identity caller = CallContext.identity();
         if (caller == null) throw new EditException("personal assets need an authenticated panel caller");
         JsonObject meta = request.apply("get", named(name));
-        String id, sha, url;
+        String id, sha, url, facing = null;
         int sx, sy, sz, length;
+        Vec3 anchor = null;
         try {
             id = meta.get("id").getAsString();
             sha = meta.get("sha256").getAsString();
@@ -87,6 +93,18 @@ public final class AssetLibrary {
             if (size.size() != 3) throw new IllegalStateException("size");
             sx = size.get(0).getAsInt(); sy = size.get(1).getAsInt(); sz = size.get(2).getAsInt();
             length = meta.get("bytes").getAsInt();
+            // Both optional: an older panel, or an asset whose owner set none.
+            if (meta.has("anchor")) {
+                JsonArray a = meta.getAsJsonArray("anchor");
+                if (a.size() != 3) throw new IllegalStateException("anchor");
+                anchor = new Vec3(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
+                if (anchor.x() < 0 || anchor.y() < 0 || anchor.z() < 0 || anchor.x() >= sx || anchor.y() >= sy || anchor.z() >= sz)
+                    throw new IllegalStateException("anchor");
+            }
+            if (meta.has("facing")) {
+                facing = meta.get("facing").getAsString();
+                if (!Anchor.FACINGS.contains(facing)) throw new IllegalStateException("facing");
+            }
         } catch (RuntimeException e) { // missing fields, wrong types, numbers out of range
             throw new EditException("the panel sent invalid asset metadata");
         }
@@ -131,7 +149,8 @@ public final class AssetLibrary {
             }
             String[] states = StateArrays.decode(data, volume);
             if (states.length != volume) throw new EditException("asset data does not match its dimensions");
-            return Blueprint.ofStates(sx, sy, sz, states, false); // saved air places air, like local blueprints
+            // Saved air places air, like local blueprints.
+            return new Asset(Blueprint.ofStates(sx, sy, sz, states, false), new Anchor(anchor, facing));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EditException("asset download interrupted");

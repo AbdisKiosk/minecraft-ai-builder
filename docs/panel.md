@@ -294,6 +294,25 @@ not to a server, so they can be placed on every server where the user is a build
   view; a wrong guess changes only how the preview draws a block, never what is placed. Migration
   `006_asset_usage.sql` adds `last_used_at`, which orders the list Claude sees.
 
+### Anchor and facing
+
+An asset can say where it attaches and which way it faces, so Claude can put a window on any wall with `paste` `at` +
+`facing` instead of working out its lowest corner.
+
+- **Anchor**: one cell of the asset, zero-based from its lowest corner (`0 0 0` to size − 1), e.g. the window's bottom
+  middle block in the wall. **Facing**: `north`, `south`, `east`, `west`, `up` or `down`, the way the asset faces away
+  from the wall or floor it attaches to.
+- Both are optional and independent; each is null when not set. Every asset saved before anchors existed and every
+  uploaded `.schem` has neither: nothing is invented for them (migration `007_asset_anchor.sql` adds nullable
+  `anchor_x`, `anchor_y`, `anchor_z` and `facing`), so they keep placing by their lowest corner.
+- **Save as asset** starts the anchor at `0 0 0` and the facing at none; clear the anchor to save without one. The
+  map does not know which way the player looks, so the facing is never guessed. **Edit** sets, changes or clears both
+  on any asset, uploads included (`PATCH /api/assets/<id>` with `anchor: [x,y,z] | null`, `facing: string | null`). The
+  card shows them; clicking a block in the 3D view shows its position, to pick an anchor. The **Place…** dialog still
+  takes the lowest corner.
+- The relay's asset `get` answer carries `anchor` and `facing` when set; older plugins ignore them. The relay `save`
+  accepts them too, though the plugin does not send them. The `get_context` listing leaves them out (its size cap).
+
 ### Upload a .schem
 
 `POST /api/assets/upload` takes a multipart form with `file`, `name`, `description` and `tags` (comma-separated) and
@@ -327,6 +346,12 @@ that account's library on every server where it is a builder.
   its name, a bad property value by the whole state; at most 10, sorted, with `skipped_total` when there are more).
   An asset with nothing but such states and air is refused. Blueprints Claude writes, saved blueprints and files are
   still refused as a whole on an unknown state. As in the panel, nothing is remapped.
+- `paste` takes `origin` (the lowest corner after `rotation`) or `at`, the world position of the asset's anchor. With
+  `at`, `facing` (instead of `rotation`) turns the asset from its stored facing: quarter turns clockwise seen from
+  above, as WorldEdit's `//rotate`, and the anchor cell turns with it. Only `north`, `east`, `south` and `west` turn:
+  an asset that faces `up` or `down` takes only its own facing (there is no vertical flip), and a horizontal one
+  cannot be made to face up or down. `facing` on a blueprint without a stored facing is refused with a pointer to
+  `origin` + `rotation`; `at` on one without an anchor places its lowest corner there, like `origin`.
 - `save_blueprint` (with an optional `description`) saves to the caller's library only, never on the server. A save
   that fails, for example on quota or a taken name, is not saved on the server instead.
 - Ownership: for each tool call the panel gives the plugin a random grant that ends with the call (at most 6 minutes).

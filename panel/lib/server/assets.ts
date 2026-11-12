@@ -19,6 +19,9 @@ export const MAX_DESCRIPTION = 1000;
 export const MAX_REGION_BYTES = 5 * 1024 * 1024;
 export const MAX_REGION_VOLUME = 2_000_000;
 export const MAX_TAGS = 10;
+/** The direction an asset faces away from what it attaches to. Claude's paste turns only between the four horizontal ones. */
+export const FACINGS = ['north', 'south', 'east', 'west', 'up', 'down'] as const;
+export type Facing = typeof FACINGS[number];
 const TAG = /^[a-z0-9][a-z0-9 _-]{0,31}$/;
 const ID = /^[a-z0-9]{12}$/;
 const WORLD = /^[^\0/\\]{1,64}$/;
@@ -52,11 +55,17 @@ export interface Asset {
   bytes: number;
   created: number;
   updated: number;
+  /**
+   * The attachment cell, zero-based from the lowest corner, and the direction the asset faces away from what it attaches
+   * to. Each is null when not set (every asset from before anchors, and uploads), which keeps lowest-corner placement.
+   */
+  anchor: [number, number, number] | null;
+  facing: Facing | null;
 }
 
 export interface AssetRow extends Asset { owner: number }
 export interface Usage { count: number; bytes: number }
-export type Changes = Partial<Pick<Asset, 'name' | 'description' | 'tags'>>;
+export type Changes = Partial<Pick<Asset, 'name' | 'description' | 'tags' | 'anchor' | 'facing'>>;
 
 /** The asset rows (MySQL). Only the service decides who may see what; the store also scopes writes to the owner. */
 export interface AssetStore {
@@ -117,6 +126,23 @@ export function checkTags(v: unknown): string[] {
   const bad = tags.find(t => !TAG.test(t));
   if (bad !== undefined) throw new AssetError(400, `tag '${bad}' must be 1-32 of a-z, 0-9, space, _ and -, starting with a letter or digit`);
   return tags;
+}
+
+/** An anchor inside an asset of `size`, or null for none (null, undefined or ""). */
+export function checkAnchor(v: unknown, size: [number, number, number]): [number, number, number] | null {
+  if (v === undefined || v === null || v === '') return null;
+  const a = ints(v, 3);
+  if (!a || a.some((n, i) => n < 0 || n >= size[i])) {
+    throw new AssetError(400, `anchor must be [x,y,z] inside the asset, from 0 0 0 to ${size.map(n => n - 1).join(' ')}`);
+  }
+  return a as [number, number, number];
+}
+
+/** A facing, or null for none (null, undefined or ""). */
+export function checkFacing(v: unknown): Facing | null {
+  if (v === undefined || v === null || v === '') return null;
+  if (typeof v !== 'string' || !(FACINGS as readonly string[]).includes(v)) throw new AssetError(400, `facing must be one of ${FACINGS.join(', ')}`);
+  return v as Facing;
 }
 
 /** Throws unless the owner can add `count` assets of `bytes` bytes in all. */
@@ -259,7 +285,7 @@ export async function assetBlocks(deps: Deps, userId: number, id: unknown): Prom
   return JSON.parse(gunzipSync(gz).toString('utf8'));
 }
 
-/** Saves a region of a server's world: {server, world, box [x1,y1,z1,x2,y2,z2], name, description?, tags?}. */
+/** Saves a region of a server's world: {server, world, box [x1,y1,z1,x2,y2,z2], name, description?, tags?, anchor?, facing?}. */
 export async function createAsset(deps: Deps, userId: number, b: Json): Promise<Asset> {
   const server = checkServer(b.server);
   const world = checkWorld(b.world);
@@ -271,6 +297,7 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
   await deps.requireRole(server, PROMOTE_ROLE);
   // Refuse early what will be refused anyway, before the server reads the region.
   const size: [number, number, number] = [Math.abs(box[3] - box[0]) + 1, Math.abs(box[4] - box[1]) + 1, Math.abs(box[5] - box[2]) + 1];
+  const anchor = checkAnchor(b.anchor, size), facing = checkFacing(b.facing);
   checkVolume(size[0] * size[1] * size[2]);
   checkQuota(await deps.store.usage(userId), 1, 0);
   if (await deps.store.byName(userId, name)) throw new AssetError(409, `you already have an asset named '${name}'`);
@@ -280,7 +307,7 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
   if (exported.status !== 200) throw new AssetError(exported.status, typeof body?.error === 'string' ? body.error : 'the server could not read the region');
   if (typeof body?.data !== 'string') throw new AssetError(502, 'the server sent no region data');
   const region = new Uint8Array(Buffer.from(body.data, 'base64'));
-  return saveAssetData(deps, userId, { name, description, tags, size }, region, await deps.mcVersion(server));
+  return saveAssetData(deps, userId, { name, description, tags, size, anchor, facing }, region, await deps.mcVersion(server));
 }
 
 /** Shared by panel exports and authenticated relay saves; bytes and dimensions are never trusted. */
@@ -289,6 +316,7 @@ export async function saveAssetData(deps: Deps, userId: number, b: Json, region:
   const dimensions = ints(b.size, 3);
   if (!dimensions || dimensions.some(n => n < 1)) throw new AssetError(400, 'give the asset dimensions as three positive whole numbers');
   const size = dimensions as [number, number, number];
+  const anchor = checkAnchor(b.anchor, size), facing = checkFacing(b.facing);
   const volume = size[0] * size[1] * size[2];
   checkVolume(volume);
   if (!region.byteLength) throw new AssetError(400, 'the region data is empty');
@@ -308,7 +336,7 @@ export async function saveAssetData(deps: Deps, userId: number, b: Json, region:
 
   const now = Date.now();
   const row: AssetRow = {
-    id: newId(), owner: userId, name, description, tags, size, blocks, mc, bytes, created: now, updated: now,
+    id: newId(), owner: userId, name, description, tags, size, blocks, mc, bytes, created: now, updated: now, anchor, facing,
   };
   // Files first, so a row never points at missing files; they go again if the row is refused.
   try {
@@ -322,14 +350,16 @@ export async function saveAssetData(deps: Deps, userId: number, b: Json, region:
   return view(row);
 }
 
-/** Renames, describes or tags an asset: {name?, description?, tags?}. */
+/** Renames, describes, tags or anchors an asset: {name?, description?, tags?, anchor?, facing?}; null clears an anchor or facing. */
 export async function updateAsset(deps: Deps, userId: number, id: unknown, b: Json): Promise<Asset> {
   const row = await owned(deps, userId, id);
   const changes: Changes = {};
   if (b.name !== undefined) changes.name = checkName(b.name);
   if (b.description !== undefined) changes.description = checkDescription(b.description);
   if (b.tags !== undefined) changes.tags = checkTags(b.tags);
-  if (!Object.keys(changes).length) throw new AssetError(400, 'give name, description or tags');
+  if (b.anchor !== undefined) changes.anchor = checkAnchor(b.anchor, row.size);
+  if (b.facing !== undefined) changes.facing = checkFacing(b.facing);
+  if (!Object.keys(changes).length) throw new AssetError(400, 'give name, description, tags, anchor or facing');
   if (changes.name && changes.name !== row.name && await deps.store.byName(userId, changes.name)) {
     throw new AssetError(409, `you already have an asset named '${changes.name}'`);
   }

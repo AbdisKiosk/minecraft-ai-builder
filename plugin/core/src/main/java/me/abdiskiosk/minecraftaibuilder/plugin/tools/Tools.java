@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
 import me.abdiskiosk.minecraftaibuilder.common.BlockInfo;
 import me.abdiskiosk.minecraftaibuilder.common.BlockState;
@@ -74,7 +75,7 @@ public final class Tools {
             roof: region=[x1,y,z1,x2,y,z2] (wall footprint, y=eaves), stairs, style=gable|hip, along=x|z, overhang=1, gable=end-wall pattern, ridge
             tree: at, type=oak|birch|spruce|jungle|acacia|dark_oak|cherry|large_oak
             cylinder: base, radius, height, pattern, hollow, radius_z. sphere: center, radius, pattern, hollow, radius_y, radius_z. pyramid: base, size, pattern, hollow. line: from, to, pattern, thickness
-            paste: origin (min corner), rotation, and blueprint={palette:{"S":"stone_bricks","_":"air"},layers:[[row per z] per y]} (rows run along +x; "4S" repeats; '.' keeps the block; row "^" or "3^" repeats the row before, layer ["^"] the layer below), or name=saved, or path=absolute .json/.schem
+            paste: origin (min corner)+rotation or at (anchor)+facing, and blueprint={palette:{"S":"stone_bricks","_":"air"},layers:[[row per z] per y]} (rows run along +x; "4S" repeats; '.' keeps the block; row "^"/"3^" repeats the last row, layer ["^"] the one below), name=saved or path=absolute .json/.schem
             clone: region, to, rotation, flip=x|z, repeat, step=[dx,dy,dz], air
             foundation: region, pattern (ground up to region top). overlay: region, pattern, depth=1|raise. smooth: region, iterations. These see the ground as before the call
             light: region, block=torch; lights dark floors, runs last""";
@@ -94,7 +95,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position/facing/looked-at block), WorldEdit selection, markers, areas, regions, notes, lessons, assets, server version.",
+                "Call first: players (position/facing/looked-at block), selection, markers, areas, regions, notes, lessons, assets, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -782,10 +783,15 @@ public final class Tools {
                 yield blocks(a);
             }
             case "paste", "place_blueprint" -> {
-                a.only("place_blueprint", "blueprint", "path", "name", "origin", "rotation");
+                a.only("place_blueprint", "blueprint", "path", "name", "origin", "rotation", "at", "facing");
                 int rotation = a.integer("rotation", 0);
                 if (rotation % 90 != 0) throw new EditException("rotation must be a multiple of 90");
-                yield new Op.Paste(blueprint(a), a.vec("origin"), rotation);
+                if (a.has("origin") == a.has("at")) throw new EditException("give exactly one of \"origin\" or \"at\"");
+                if (a.has("facing") && a.has("rotation")) throw new EditException("give \"facing\" or \"rotation\", not both");
+                if (a.has("facing") && !a.has("at")) throw new EditException("\"facing\" needs \"at\" (where the anchor goes)");
+                AssetLibrary.Asset source = blueprint(a);
+                if (a.has("origin")) yield new Op.Paste(source.blueprint(), a.vec("origin"), rotation);
+                yield source.anchor().paste(source.blueprint(), a.vec("at"), a.str("facing", null), rotation);
             }
             case "smooth" -> {
                 a.only("smooth", "region", "iterations");
@@ -947,7 +953,8 @@ public final class Tools {
         return origin.add(b.get(first).getAsInt(), b.get(first + 1).getAsInt(), b.get(first + 2).getAsInt());
     }
 
-    private static Blueprint blueprint(Args a) {
+    /** The blueprint a paste names; only library assets carry an anchor. */
+    private static AssetLibrary.Asset blueprint(Args a) {
         int given = (a.has("blueprint") ? 1 : 0) + (a.has("path") ? 1 : 0) + (a.has("name") ? 1 : 0);
         if (given != 1) throw new EditException("give exactly one of \"blueprint\", \"path\" or \"name\"");
         JsonObject json;
@@ -972,7 +979,7 @@ public final class Tools {
                 json = readBlueprintFile(path);
             } else {
                 Schematic s = a.service().bridge().readSchematic(path, a.service().config().maxVolumePerOp());
-                return Blueprint.ofStates(s.sizeX(), s.sizeY(), s.sizeZ(), s.states(), true);
+                return new AssetLibrary.Asset(Blueprint.ofStates(s.sizeX(), s.sizeY(), s.sizeZ(), s.states(), true), Anchor.NONE);
             }
         }
         if (!json.has("palette") || !json.has("layers")) throw new EditException("blueprint needs palette and layers");
@@ -987,7 +994,7 @@ public final class Tools {
             for (JsonElement row : layer.getAsJsonArray()) rows.add(row.getAsString());
             layers.add(rows);
         }
-        return Blueprint.of(palette, layers);
+        return new AssetLibrary.Asset(Blueprint.of(palette, layers), Anchor.NONE);
     }
 
     /**

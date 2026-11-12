@@ -7,7 +7,7 @@ import { can, type Asset, type AssetList } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import Modal from './Modal';
 import { Viewer3d } from './Pictures';
-import { parseTags } from './SaveAssetDialog';
+import { AnchorFields, parseAnchor, parseTags } from './SaveAssetDialog';
 import { Badge } from './shared';
 import UploadAssetDialog from './UploadAssetDialog';
 
@@ -70,7 +70,9 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
               <section className="card" key={a.id}>
                 <div className="server-head"><h2 className="mono">{a.name}</h2>
                   <Badge>{a.mc ? 'Minecraft ' + a.mc : 'version unknown'}</Badge></div>
-                <div className="meta">{a.size.join(' × ')} · {num(a.blocks)} blocks · {mb(a.bytes)} · saved {ago(a.created)}</div>
+                <div className="meta">{a.size.join(' × ')} · {num(a.blocks)} blocks · {mb(a.bytes)} · saved {ago(a.created)}
+                  {(a.anchor || a.facing) && <> · anchor {a.anchor ? <span className="mono">{a.anchor.join(' ')}</span> : 'lowest corner'}
+                    {a.facing && <>, faces {a.facing}</>}</>}</div>
                 {a.description ? <p style={{ margin: '0 0 10px', overflowWrap: 'anywhere' }}>{a.description}</p>
                   : <p className="muted" style={{ margin: '0 0 10px' }}>No description.</p>}
                 {a.tags.length > 0 && <div className="pills" style={{ marginBottom: 12 }}>{a.tags.map(t => <Badge key={t}>{t}</Badge>)}</div>}
@@ -104,11 +106,14 @@ function EditAssetDialog({ asset, onClose, onSaved }: { asset: Asset; onClose: (
     const f = new FormData(ev.currentTarget);
     const name = String(f.get('name') || '').trim().toLowerCase();
     if (!NAME.test(name)) return setError('Names are 1-40 of a-z, 0-9, _ and -.');
+    const anchor = parseAnchor(String(f.get('anchor') || ''));
+    if (anchor === undefined) return setError('The anchor needs 3 whole numbers of 0 or more, or nothing.');
     setBusy(true);
     setError('');
     try {
       await api(assetApi(asset.id), { method: 'PATCH', body: JSON.stringify({
-        name, description: String(f.get('description') || ''), tags: parseTags(String(f.get('tags') || '')) }) });
+        name, description: String(f.get('description') || ''), tags: parseTags(String(f.get('tags') || '')),
+        anchor, facing: String(f.get('facing') || '') || null }) });
       onSaved();
     } catch (ex) {
       setError(message(ex));
@@ -123,6 +128,8 @@ function EditAssetDialog({ asset, onClose, onSaved }: { asset: Asset; onClose: (
         <label>Name <input type="text" name="name" defaultValue={asset.name} maxLength={40} pattern="[a-zA-Z0-9_\-]{1,40}" required data-autofocus /></label>
         <label>Description <textarea name="description" maxLength={1000} rows={3} defaultValue={asset.description} /></label>
         <label>Tags <input type="text" name="tags" defaultValue={asset.tags.join(', ')} placeholder="window, oak" /></label>
+        <AnchorFields anchor={asset.anchor?.join(' ') ?? ''} facing={asset.facing ?? ''} />
+        <p className="muted" style={{ margin: 0 }}>Within {asset.size.map(n => n - 1).join(' ')} for this asset.</p>
         {error && <p className="error">{error}</p>}
         <div className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
           <button type="button" className="ghost" onClick={onClose}>Cancel</button>

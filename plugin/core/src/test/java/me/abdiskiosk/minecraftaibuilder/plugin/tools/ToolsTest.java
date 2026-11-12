@@ -387,6 +387,69 @@ class ToolsTest {
     }
 
     @Test
+    void pasteAtPutsTheAnchorThereAndFacingTurnsTheAsset() throws Exception {
+        // A 3x1x2 library asset (x, y, z) whose anchor is cell 2,0,0, facing north. Its bytes are already in the cache,
+        // so the library resolves it through "get" without a download.
+        String[] states = {"stone", "stone", "oak_planks", "stone", "stone", "stone"};
+        byte[] data = StateArrays.encode(states);
+        String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));
+        Files.createDirectories(dataDir.resolve("asset-cache/7"));
+        Files.write(dataDir.resolve("asset-cache/7/abcdefgh2345-" + sha + ".bin"), data);
+        String[] stored = {"[2,0,0]", "\"north\""};
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, args) -> JsonParser.parseString("{\"id\":\"abcdefgh2345\",\"sha256\":\"" + sha
+                + "\",\"bytes\":" + data.length + ",\"size\":[3,1,2],\"url\":\"http://127.0.0.1:1/unused\""
+                + (stored[0] == null ? "" : ",\"anchor\":" + stored[0]) + (stored[1] == null ? "" : ",\"facing\":" + stored[1]) + "}").getAsJsonObject()));
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            Op.Paste north = (Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10]}"));
+            assertEquals(new Vec3(8, 64, 10), north.origin());
+            assertEquals(0, north.rotation());
+            Op.Paste east = (Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"facing\":\"east\"}"));
+            assertEquals(90, east.rotation());
+            assertEquals(new Vec3(9, 64, 8), east.origin()); // the anchor turns to 1,0,2
+            Op.Paste batched = (Op.Paste) Tools.batchOps(args("{\"origin\":[100,0,0],\"ops\":[{\"op\":\"paste\",\"name\":\"window\","
+                    + "\"at\":[10,64,10],\"facing\":\"west\"}]}")).get(0);
+            assertEquals(new Vec3(110, 64, 10), batched.origin(), "at is an offset from the batch origin, like origin");
+            assertEquals(270, batched.rotation());
+            assertEquals("give \"facing\" or \"rotation\", not both",
+                    assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"east\",\"rotation\":90}"))).getMessage());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"up\"}")))
+                    .getMessage().startsWith("this asset faces north; paste turns only between north, south, east and west"));
+
+            // Saved before anchors: at is the minimum corner, and facing has nothing to turn from.
+            stored[0] = null; stored[1] = null;
+            assertEquals(new Vec3(10, 64, 10),
+                    ((Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"rotation\":90}"))).origin());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"east\"}")))
+                    .getMessage().startsWith("this blueprint has no stored facing; use origin and rotation"));
+
+            // A floor piece faces up: it turns with rotation, never with a horizontal facing.
+            stored[0] = "[1,0,1]"; stored[1] = "\"up\"";
+            assertEquals(new Vec3(9, 64, 9), ((Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"facing\":\"up\"}"))).origin());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"south\"}")))
+                    .getMessage().startsWith("this asset faces up;"));
+            return null;
+        });
+    }
+
+    @Test
+    void pasteTakesOriginOrAtAndFacingOnlyWithAnAnchoredAsset() {
+        world.put(new Vec3(0, 64, 0), "stone");
+        call("save_blueprint", "{\"name\":\"hut-1\",\"region\":[0,64,0,1,64,0]}");
+        assertEquals("give exactly one of \"origin\" or \"at\"",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"origin\":[0,0,0],\"at\":[0,0,0]}"))).getMessage());
+        assertEquals("give exactly one of \"origin\" or \"at\"",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\"}"))).getMessage());
+        assertEquals("\"facing\" needs \"at\" (where the anchor goes)",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"origin\":[0,0,0],\"facing\":\"east\"}"))).getMessage());
+        // A server blueprint has no anchor: at places its minimum corner, and facing has nothing to turn from.
+        Op.Paste at = (Op.Paste) single("paste", args("{\"name\":\"hut-1\",\"at\":[5,70,5],\"rotation\":180}"));
+        assertEquals(new Vec3(5, 70, 5), at.origin());
+        assertEquals(180, at.rotation());
+        assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"at\":[5,70,5],\"facing\":\"east\"}")))
+                .getMessage().startsWith("this blueprint has no stored facing"));
+    }
+
+    @Test
     void authenticatedSavesUseTheLibraryAndLocalNamesStillWin() throws IOException {
         java.util.List<String> operations = new java.util.ArrayList<>();
         service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> {
