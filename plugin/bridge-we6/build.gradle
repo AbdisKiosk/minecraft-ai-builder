@@ -4,8 +4,14 @@ dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
     compileOnly('com.sk89q.worldedit:worldedit-bukkit:6.1') { transitive = false }
     compileOnly('com.sk89q.worldedit:worldedit-core:6.1') { transitive = false }
+    // WorldGuardGuard only loads when WorldGuard is installed; 6.1 is the first with the region query API it uses.
+    compileOnly('com.sk89q:worldguard:6.1') { transitive = false }
 }
 
 dependencies {
     testRuntimeOnly 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT' // LegacyNames references Bukkit's Material
+    // WorldGuardGuardTest runs the region check against WorldGuard 6's own region manager and flag rules.
+    testImplementation('com.sk89q:worldguard:6.1') { transitive = false }
+    testImplementation('com.sk89q.worldedit:worldedit-core:6.1') { transitive = false }
+    testImplementation 'org.spigotmc:spigot-api:1.8.8-R0.1-SNAPSHOT'
 }

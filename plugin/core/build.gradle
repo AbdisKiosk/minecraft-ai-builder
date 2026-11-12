@@ -40,7 +40,10 @@ tasks.named('runServer', RunServer) {
     minecraftVersion('1.21.11')
     javaLauncher = launcher(21)
     runDirectory = layout.projectDirectory.dir('run/1.21.11')
-    downloadPlugins { modrinth('worldedit', '2YDdVDmG') } // 7.3.19 bukkit
+    downloadPlugins {
+        modrinth('worldedit', '2YDdVDmG') // 7.3.19 bukkit
+        modrinth('worldguard', 'pI4UHLJL') // 7.0.17, for the regions in get_context
+    }
 }
 
 tasks.register('runLatest', RunServer) {

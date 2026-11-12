@@ -5,4 +5,15 @@ dependencies {
     compileOnly 'org.spigotmc:spigot-api:1.13.2-R0.1-SNAPSHOT' // bridge only loads on 1.13+
     compileOnly('com.sk89q.worldedit:worldedit-bukkit:7.2.20') { transitive = false }
     compileOnly 'com.sk89q.worldedit:worldedit-core:7.2.20'
+    // WorldGuardGuard only loads when WorldGuard is installed; 7.0.0 is the oldest WorldGuard for WorldEdit 7.
+    compileOnly('com.sk89q.worldguard:worldguard-bukkit:7.0.0') { transitive = false }
+    compileOnly('com.sk89q.worldguard:worldguard-core:7.0.0') { transitive = false }
+}
+
+dependencies {
+    // WorldGuardGuardTest runs the region check against WorldGuard's own region manager and flag rules.
+    testImplementation('com.sk89q.worldguard:worldguard-core:7.0.0') { transitive = false }
+    testImplementation 'com.sk89q.worldedit:worldedit-core:7.2.20'
+    testRuntimeOnly 'org.khelekore:prtree:1.5.0' // WorldGuard's region index
+    testRuntimeOnly('com.sk89q:squirrelid:0.2.0') { transitive = false } // its flag registry needs it loaded
 }

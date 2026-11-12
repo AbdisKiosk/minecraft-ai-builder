@@ -3,6 +3,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
+import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.map.WorldMap;
@@ -73,6 +74,24 @@ public final class AIBuilderPlugin extends JavaPlugin {
         }
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
+        if (getServer().getPluginManager().isPluginEnabled("WorldGuard") && getConfig().getBoolean("worldguard.enabled", true)) {
+            boolean protect = getConfig().getBoolean("worldguard.protect", false);
+            try {
+                RegionGuard guard = loadGuard();
+                service.setGuard(guard, protect);
+                getLogger().info("Claude sees the regions of " + guard.name()
+                        + (protect ? " and keeps out of those the acting player may not build in." : "."));
+            } catch (ReflectiveOperationException | LinkageError e) {
+                if (protect) {
+                    // Claude could build in protected regions, so stop rather than run unguarded.
+                    getLogger().log(Level.SEVERE, "Could not hook into WorldGuard, so AIBuilder stays off while "
+                            + "worldguard.protect is true.", e);
+                    getServer().getPluginManager().disablePlugin(this);
+                    return;
+                }
+                getLogger().log(Level.WARNING, "Could not hook into WorldGuard; Claude will not see its regions.", e);
+            }
+        }
         History history = config.history().enabled() ? new History(this, service, config.history()) : null;
         if (history != null) service.setRecorder(history);
         drafts = new Drafts(service, config.drafts(), config.history(), getLogger());
@@ -131,6 +150,14 @@ public final class AIBuilderPlugin extends JavaPlugin {
         return (WorldEditBridge) Class.forName(impl, true, getClassLoader()).getConstructor(boolean.class).newInstance(fawe);
     }
 
+    /** The WorldGuard hook in the bridge for the same WorldEdit major version (WorldGuard 7 needs WorldEdit 7). */
+    private RegionGuard loadGuard() throws ReflectiveOperationException {
+        String impl = classExists("com.sk89q.worldedit.math.BlockVector3")
+                ? "me.abdiskiosk.minecraftaibuilder.bridge.we7.WorldGuardGuard"
+                : "me.abdiskiosk.minecraftaibuilder.bridge.we6.WorldGuardGuard";
+        return (RegionGuard) Class.forName(impl, true, getClassLoader()).getConstructor().newInstance();
+    }
+
     private boolean classExists(String name) {
         try {
             Class.forName(name, false, getClassLoader());
@@ -168,6 +195,8 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return true;
         }
         sender.sendMessage("AIBuilder " + getDescription().getVersion() + " using " + bridge.name());
+        RegionGuard guard = service.guard();
+        if (guard != null) sender.sendMessage("Regions: " + guard.name() + (service.protects() ? ", protected" : ""));
         if (relay == null) {
             sender.sendMessage(NOT_CONNECTED);
         } else {

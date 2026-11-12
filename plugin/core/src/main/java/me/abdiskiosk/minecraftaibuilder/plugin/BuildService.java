@@ -11,6 +11,7 @@ import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Lighting;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.PreviewHandle;
+import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
 import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
@@ -57,6 +58,8 @@ public final class BuildService {
     private final Path dataDir;
     private final Markers markers;
     private final MemoryGuard memory;
+    private volatile RegionGuard guard;
+    private volatile boolean protect;
     /** Large reads run one at a time, so the arrays of several checks never sit in the heap together. */
     private final Semaphore largeReads = new Semaphore(1, true);
     /** Set while a thread is inside {@link #reading}, where the memory for its reads is already set aside. */
@@ -85,6 +88,26 @@ public final class BuildService {
 
     public PluginConfig config() {
         return config;
+    }
+
+    /**
+     * WorldGuard, when it is installed: its regions are listed in get_context and work as "@name".
+     *
+     * @param protect also refuse edits where it would stop the acting player from building (worldguard.protect)
+     */
+    public void setGuard(RegionGuard guard, boolean protect) {
+        this.guard = guard;
+        this.protect = protect;
+    }
+
+    /** @return WorldGuard's regions, or null */
+    public RegionGuard guard() {
+        return guard;
+    }
+
+    /** True when edits keep out of WorldGuard regions the acting player may not build in. */
+    public boolean protects() {
+        return guard != null && protect;
     }
 
     public Path dataDir() {
@@ -501,6 +524,14 @@ public final class BuildService {
      */
     public record Options(Mode mode, String revertOf, String draftOf, String label) {
         public static final Options AUTO = new Options(Mode.AUTO, null, null, null);
+
+        /**
+         * Revert, approve and promote: done by the server's managers on the panel, so region protection does not
+         * apply. An approved draft was checked when Claude made it.
+         */
+        boolean fromPanel() {
+            return revertOf != null || draftOf != null || label != null;
+        }
     }
 
     /** Validates and starts an edit job; every op in the list becomes one undo step together. */
@@ -513,7 +544,7 @@ public final class BuildService {
         boolean preview = options.mode() == Mode.DRAFT || (options.mode() == Mode.AUTO && reviewOn());
         Drafts draftStore = drafts;
         if (preview && draftStore == null) throw new EditException("drafts are off on this server");
-        List<String> warnings = validate(caller, ops);
+        List<String> warnings = validate(caller, ops, !options.fromPanel());
         List<Op> pieces = new ArrayList<>();
         List<Integer> owners = new ArrayList<>();
         List<Op.Light> lights = new ArrayList<>();
@@ -881,7 +912,7 @@ public final class BuildService {
     }
 
     /** @return warnings for the result; throws for anything that must not run */
-    private List<String> validate(Caller caller, List<Op> ops) {
+    private List<String> validate(Caller caller, List<Op> ops, boolean guarded) {
         String world = caller.world();
         checkWorld(world);
         List<String> warnings = new ArrayList<>();
@@ -907,6 +938,7 @@ public final class BuildService {
             }
             Box bounds = op.bounds();
             checkZone(world, bounds);
+            if (guarded) checkGuard(caller, bounds);
             String what = outsideHeight(caller, bounds, op.kind());
             if (what != null) {
                 // A sphere or pyramid near the limit is clipped by design; anything else is a mistake worth stopping.
@@ -921,10 +953,11 @@ public final class BuildService {
         return warnings;
     }
 
-    /** Throws unless {@code bounds} may be changed: allowed world, build zone and the world's y limits. */
+    /** Throws unless {@code bounds} may be changed: allowed world, build zone, WorldGuard protection and y limits. */
     public void checkEditable(Caller caller, Box bounds, String what) {
         checkWorld(caller.world());
         checkZone(caller.world(), bounds);
+        checkGuard(caller, bounds);
         String problem = outsideHeight(caller, bounds, what);
         if (problem != null) throw new EditException(problem);
     }
@@ -936,6 +969,18 @@ public final class BuildService {
                         + config.zoneWorld() + " " + config.zone());
             }
         }
+    }
+
+    /** Throws when WorldGuard would stop the caller from building somewhere in {@code bounds}. */
+    private void checkGuard(Caller caller, Box bounds) {
+        RegionGuard g = guard;
+        if (g == null || !protect) return;
+        List<String> denied = g.denied(caller.id(), caller.world(), bounds);
+        if (denied.isEmpty()) return;
+        String regions = (denied.size() == 1 ? "region " : "regions ") + String.join(", ", denied);
+        throw new EditException("edit " + bounds + " reaches into WorldGuard " + regions + ", where "
+                + (caller.isPlayer() ? caller.name() + " may not build" : "only members may build; pass \"player\" to act as one")
+                + ". Keep the edit out of it.");
     }
 
     private static String outsideHeight(Caller caller, Box bounds, String what) {
