@@ -41,6 +41,19 @@ package me.abdiskiosk.minecraftaibuilder.common;
  * blueprints even with a user, and the panel sends none then. A call with a user but no assetKey (the panel had too
  * many calls open) runs, but its asset operations fail.
  *
+ * Players link their Minecraft account to a panel account and save assets in game with additive frames (no protocol
+ * bump), offered when the welcome says {@code "links":true}. They are authorized by the player's link and the linked
+ * account's builder role on this socket's server, never by a grant or a user id the plugin sends; the code is a
+ * one-time credential the player made on the panel.
+ * <pre>
+ * plugin → panel  {"t":"link","id":6,"code":"ABCD-EFGH","player":{"uuid":"...","name":"Alex"}}
+ *                 {"t":"unlink","id":7,"player":{"uuid":"...","name":"Alex"}}
+ *                 {"t":"player_asset","id":8,"op":"check|save","player":{"uuid":"...","name":"Alex"},"args":{...}}
+ * panel → plugin  {"t":"answer","id":6,"status":200,"body":{"linked":true,"already":false}}
+ * </pre>
+ * player_asset takes the args of the asset frame's check and save. An older panel sends no "links" and the plugin then
+ * sends none of these frames.
+ *
  * Without a welcome that says {@code "archive":true}, the plugin keeps its entries and asks for nothing.
  *
  * The panel knows which server a socket belongs to from the bearer token it connected with.
@@ -66,6 +79,9 @@ public final class RelayProtocol {
     public static final String UPLOADED = "uploaded";
     public static final String ANSWER = "answer";
     public static final String ASSET = "asset";
+    public static final String LINK = "link";
+    public static final String UNLINK = "unlink";
+    public static final String PLAYER_ASSET = "player_asset";
 
     public static final String JOB_START = "job.start";
     public static final String JOB_PROGRESS = "job.progress";

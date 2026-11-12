@@ -5,8 +5,8 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan, except the `.schem` upload, version-mismatch reporting, anchors and sharing with a server, which
-are built (see "Upload a .schem", "Assets", "Anchor and facing" and "Share an asset with a server" in `panel.md`).
+Phase 3 is built (see "Upload a .schem", "Assets", "Anchor and facing", "Share an asset with a server" and "Save
+assets in game" in `panel.md`); what is left open is listed in `asset-library-phase3-return-handoff.md`.
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -61,8 +61,11 @@ Built with these deviations:
   goes to an older server and lists the states the import left out; `paste name=` of a library asset leaves out the
   states the server lacks and names them in `skipped`. Nothing is remapped, so a state that exists on both versions
   with a changed meaning is not detected.
-- **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. This needs a link between a Minecraft
-  player and a panel account, which does not exist yet.
+- **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. Built, with the account link it needed
+  (see "Save assets in game" in `panel.md`): a global link from a player UUID to one panel account, made with a
+  one-time code from the panel and `/aibuilder link <code>`, and checked against the builder role on the saving server
+  every time. The save shares `save_blueprint`'s code path (`AssetLibrary.saveRegion`) and the panel's asset rules;
+  the in-game frames (`link`, `unlink`, `player_asset`) are authorized by the link, not by a tool call's grant.
 - **`.schem` upload** on the Library page. Built: Sponge versions 2 and 3, parsed on the panel
   (`lib/server/schem.ts`) and saved through the same path as every other asset; only the blocks are kept.
 - **Sharing an asset with a server** so all its members can use it. Built for members with the builder role or above

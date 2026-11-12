@@ -158,3 +158,47 @@ test('with every grant of a socket in use, an ordinary call still runs, with the
     storage(false);
   }
 });
+
+/** Sends a frame and waits for the panel's answer to its id. */
+async function answerTo(socket: FakeSocket, frame: Record<string, unknown>) {
+  socket.frame(frame);
+  for (let i = 0; i < 50; i++) {
+    const answer = socket.sent.find(f => f.t === 'answer' && f.id === frame.id);
+    if (answer) return answer;
+    await new Promise(r => setTimeout(r, 5));
+  }
+  return null;
+}
+
+test('the welcome offers account links; link frames are checked before any lookup and limited per server', async () => {
+  storage(false);
+  const hub = new RelayHub();
+  try {
+    const a = connect(hub, 'a');
+    assert.equal(a.last('welcome').links, true);
+    const player = { uuid: '0f8b3c2e-1d4a-4b5c-9e6f-7a8b9c0d1e2f', name: 'Alex' };
+    const bad = await answerTo(a, { t: 'link', id: 1, code: 'not a code!', player });
+    assert.equal(bad.status, 400);
+    assert.match(bad.body.error, /not a link code/);
+    assert.equal((await answerTo(a, { t: 'link', id: 2, code: 'ABCD-EFGH', player: { uuid: 'x' } })).status, 400);
+    assert.equal((await answerTo(a, { t: 'unlink', id: 3, player: {} })).status, 400);
+    // Without object storage there is no library to save into; said before the link is looked up.
+    const save = await answerTo(a, { t: 'player_asset', id: 4, op: 'check', player, args: { name: 'window' } });
+    assert.equal(save.status, 503);
+    for (let id = 5; id < 23; id++) await answerTo(a, { t: 'link', id, code: '?', player });
+    const limited = await answerTo(a, { t: 'link', id: 23, code: '?', player });
+    assert.equal(limited.status, 429, 'twenty link attempts a minute per server');
+    // The limit belongs to the server, not to its socket.
+    const again = connect(hub, 'a');
+    assert.equal((await answerTo(again, { t: 'link', id: 24, code: '?', player })).status, 429);
+    assert.equal((await answerTo(connect(hub, 'b'), { t: 'link', id: 25, code: '?', player })).status, 400);
+    // Frames from a socket that never said hello, or was replaced, get no answer.
+    const fresh = new FakeSocket();
+    (hub as any).accept('c', fresh);
+    fresh.frame({ t: 'link', id: 26, code: '?', player });
+    assert.equal(await answerTo(a, { t: 'unlink', id: 27, player }), null);
+    assert.equal(fresh.sent.length, 0);
+  } finally {
+    hub.closeAll();
+  }
+});

@@ -27,6 +27,10 @@ final class FakePanel extends WebSocketServer {
     final BlockingQueue<JsonObject> events = new LinkedBlockingQueue<>();
     volatile java.util.function.Function<JsonObject, JsonObject> assetHandler = frame -> new JsonObject();
     volatile int assetStatus = 200;
+    /** Answers link, unlink and player_asset frames; every one of them is kept in {@link #playerFrames}. */
+    volatile java.util.function.Function<JsonObject, JsonObject> playerHandler = frame -> new JsonObject();
+    volatile int playerStatus = 200;
+    final BlockingQueue<JsonObject> playerFrames = new LinkedBlockingQueue<>();
 
     private final String token;
     private final CompletableFuture<JsonObject> hello = new CompletableFuture<>();
@@ -92,7 +96,7 @@ final class FakePanel extends WebSocketServer {
                     return;
                 }
                 plugin = conn;
-                conn.send("{\"t\":\"" + RelayProtocol.WELCOME + "\",\"archive\":false,\"assets\":true}");
+                conn.send("{\"t\":\"" + RelayProtocol.WELCOME + "\",\"archive\":false,\"assets\":true,\"links\":true}");
                 hello.complete(frame);
             }
             case RelayProtocol.REPLY -> {
@@ -106,6 +110,15 @@ final class FakePanel extends WebSocketServer {
                 answer.add("id", frame.get("id"));
                 answer.add("body", assetHandler.apply(frame));
                 answer.addProperty("status", assetStatus);
+                conn.send(answer.toString());
+            }
+            case RelayProtocol.LINK, RelayProtocol.UNLINK, RelayProtocol.PLAYER_ASSET -> {
+                playerFrames.add(frame);
+                JsonObject answer = new JsonObject();
+                answer.addProperty("t", RelayProtocol.ANSWER);
+                answer.add("id", frame.get("id"));
+                answer.add("body", playerHandler.apply(frame));
+                answer.addProperty("status", playerStatus);
                 conn.send(answer.toString());
             }
             default -> throw new AssertionError("unexpected frame from the plugin: " + text);
