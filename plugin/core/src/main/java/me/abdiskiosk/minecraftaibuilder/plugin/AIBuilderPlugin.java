@@ -66,6 +66,13 @@ public final class AIBuilderPlugin extends JavaPlugin {
             getLogger().warning("config.yml still has an http: section. It is no longer used and can be deleted: "
                     + "the plugin opens no port, and Claude Code connects through the panel (relay:).");
         }
+        try {
+            // The masked line is logged by this plugin's logger, which is not the command logger the filter drops from.
+            CommandLogFilter.install(line -> getLogger().info(line));
+        } catch (Throwable e) {
+            getLogger().warning("Could not hide link codes from the server log (" + e.getClass().getSimpleName()
+                    + "): /aibuilder link codes appear in it; a code that failed to link should be replaced on the panel.");
+        }
         config = PluginConfig.load(getConfig());
 
         try {
@@ -138,6 +145,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        LinkCodeMask.active = false; // the filter stays in Log4j (it cannot be removed) but lets every line through
         if (relay != null) relay.stop();
         if (checks != null) checks.shutdownNow();
         if (map != null) map.close();

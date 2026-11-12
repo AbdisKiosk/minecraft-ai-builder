@@ -444,8 +444,12 @@ Rules:
 - Codes: 8 characters from an alphabet without look-alikes (no I, O, 0 or 1), case, spaces and dashes ignored. Each is
   single use, valid for ten minutes, and spent by its first use, even a refused one. Making a new code cancels the
   unused one. A user can make at most five codes in ten minutes. Only the SHA-256 of a code is stored
-  (`minecraft_link_codes`, migration `009_minecraft_links.sql`), and codes are never logged. A server can try at most
-  twenty codes a minute.
+  (`minecraft_link_codes`, migration `009_minecraft_links.sql`), and the panel never logs a code. A server can try at
+  most twenty codes a minute.
+- The server log: Minecraft logs every command a player types, so the plugin installs a Log4j filter
+  (`CommandLogFilter`, `LinkCodeMask`) that drops `... issued server command: /aibuilder link <code>` and logs the line
+  again as `/aibuilder link ********`. If it cannot (a server without Log4j core), it warns at startup; there, make a
+  new code on the panel whenever a link fails, since a code the plugin could not send stays valid.
 - Storage: `minecraft_links` (player UUID, user, last-known player name, when linked). Deleting the user deletes its
   links.
 - Saves and lists need object storage, like the rest of the library. A panel from before account links answers nothing

@@ -44,7 +44,7 @@ welcome refuses the in-game commands at once).
 dialog places by anchor position but cannot turn an asset (the draft import has no rotation). Closed since the first
 update: the 3D anchor marker and click-to-pick (`anchor-ui`); an in-game save reads the world without the open draft,
 the unknown-blocks refusal names the "leave out blocks" checkbox of both dialogs, and players have `/aibuilder asset
-list` and tab completion (`ingame-polish`); the review findings fixed in `0bbe41a`.
+list` and tab completion (`ingame-polish`); the review findings fixed in `0bbe41a`, and link codes masked in the server log.
 
 **Old intro follows.** This is a return update for the session that finished phase 2, not an introduction to the
 project. Phase 2 is merged. Phase 3 has started with the `.schem` upload; the other four phase-3 bullets are still a
