@@ -43,6 +43,16 @@ class LegacyBlockTableTest {
     }
 
     @Test
+    void modelDefaultsIncludePropertiesOmittedFromCompactReads() {
+        BlockState stairs = BlockState.parse(table.defaultState("oak_stairs"));
+        assertEquals("oak_stairs", stairs.type());
+        assertEquals("north", stairs.props().get("facing"));
+        assertEquals("bottom", stairs.props().get("half"));
+        assertEquals("straight", stairs.props().get("shape"));
+        assertEquals("air", table.defaultState("air"));
+    }
+
+    @Test
     void otherDirectionalBlocks() {
         assertLegacy(65, 5, "ladder[facing=east]");
         assertLegacy(68, 3, "wall_sign[facing=south]");

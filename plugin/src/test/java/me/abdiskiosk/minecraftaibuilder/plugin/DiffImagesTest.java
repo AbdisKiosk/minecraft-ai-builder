@@ -10,11 +10,11 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class DiffImagesTest {
@@ -26,7 +26,7 @@ class DiffImagesTest {
         for (JsonElement run : o.getAsJsonArray(key)) {
             int count = run.getAsJsonArray().get(1).getAsInt();
             out = Arrays.copyOf(out, n + count);
-            Arrays.fill(out, n, n + count, palette.get(run.getAsJsonArray().get(0).getAsInt()).getAsJsonObject().get("state").getAsString());
+            Arrays.fill(out, n, n + count, palette.get(run.getAsJsonArray().get(0).getAsInt()).getAsString());
             n += count;
         }
         return out;
@@ -69,23 +69,30 @@ class DiffImagesTest {
     }
 
     @Test
-    void paletteCarriesColourAndShape() {
+    void paletteListsEachStateOnceInFirstSeenOrder() {
         Box box = Box.of(new Vec3(0, 0, 0), new Vec3(3, 0, 0));
         String[] before = {"air", "air", "air", "air"};
-        String[] after = {"stone", "oak_slab[type=bottom]", "glass", "air"};
+        String[] after = {"stone", "oak_slab[type=bottom]", "stone", "air"};
         JsonObject o = DiffImages.encode(box, before, after, BlockDiff.of(box, before, after));
+        assertEquals("[\"air\",\"stone\",\"oak_slab[type=bottom]\"]", o.get("palette").toString());
+        assertEquals("[[0,4]]", o.get("before").toString());
+        assertEquals("[[1,1],[2,1],[1,1],[0,1]]", o.get("after").toString());
+    }
 
-        Map<String, JsonObject> palette = new HashMap<>();
-        for (JsonElement e : o.getAsJsonArray("palette")) palette.put(e.getAsJsonObject().get("state").getAsString(), e.getAsJsonObject());
-        assertEquals(4, palette.size());
-        assertEquals(-1, palette.get("air").get("rgb").getAsInt());
-        JsonObject stone = palette.get("stone");
-        assertTrue(stone.get("rgb").getAsInt() >= 0);
-        assertFalse(stone.get("transparent").getAsBoolean());
-        assertFalse(stone.has("boxes"), "a full cube needs no boxes");
-        assertTrue(palette.get("glass").get("transparent").getAsBoolean());
-        JsonArray slab = palette.get("oak_slab[type=bottom]").getAsJsonArray("boxes");
-        assertEquals(1, slab.size());
-        assertEquals(6, slab.get(0).getAsJsonArray().size());
+    @Test
+    void modelStatesRestoreDefaultsWithoutChangingCompactLabelsOrExplicitProperties() {
+        JsonArray palette = new JsonArray();
+        for (String state : List.of("air", "oak_stairs", "oak_stairs[facing=east,half=top]")) palette.add(state);
+        Map<String, Integer> calls = new HashMap<>();
+        JsonArray models = DiffImages.modelStates(palette, type -> {
+            calls.merge(type, 1, Integer::sum);
+            return type.equals("oak_stairs")
+                    ? "minecraft:oak_stairs[waterlogged=false,shape=straight,half=bottom,facing=north]" : type;
+        });
+        assertEquals("oak_stairs", palette.get(1).getAsString());
+        assertEquals("air", models.get(0).getAsString());
+        assertEquals("oak_stairs[facing=north,half=bottom,shape=straight,waterlogged=false]", models.get(1).getAsString());
+        assertEquals("oak_stairs[facing=east,half=top,shape=straight,waterlogged=false]", models.get(2).getAsString());
+        assertEquals(Map.of("air", 1, "oak_stairs", 1), calls);
     }
 }

@@ -33,7 +33,7 @@ def webBuild = tasks.register('webBuild', Exec) {
     inputs.dir(web.dir('app'))
     inputs.dir(web.dir('components'))
     inputs.dir(web.dir('lib'))
-    inputs.dir(web.dir('public'))
+    inputs.files(web.dir('public').asFileTree)
     outputs.dir(web.dir('out'))
 }
 

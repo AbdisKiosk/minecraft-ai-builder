@@ -1,278 +1,213 @@
-// Interactive 3D view of a history entry or draft, for the Pictures card. Loaded only when "3D" is picked.
-// The data comes from /blocks (DiffImages.encode in the plugin): palette, run-length before/after, and the changes.
-import * as THREE from 'three';
-import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+// The 3D view: EngineHub's schematic viewer, with the changes marked on top and a click to inspect a block.
+// Loaded only when "3D" is picked, since it brings Babylon.js.
+import { renderSchematic, type SchematicHandles } from '@enginehub/schematicwebviewer';
+import { type ArcRotateCamera, Color3, EngineStore, InstancedMesh, Matrix, MeshBuilder, type Scene, StandardMaterial } from '@babylonjs/core';
+import { cells, type Diff, type Kind, toSchematic, type View } from './schematic';
+import { modelOverrides } from './modelResources';
 
-type Kind = 'ADDED' | 'REMOVED' | 'CHANGED';
-type SubBox = number[];
-
-/** What /blocks sends. */
-export interface BlockData {
-  box: number[];
-  palette: { state: string; rgb: number; transparent?: boolean; boxes?: SubBox[] }[];
-  before: [number, number][];
-  after: [number, number][];
-  changes: [number, Kind][];
-}
-
-export interface Viewer { dispose(): void }
-
-// The same colours as IsoRenderer.
+// The same colours as IsoRenderer and the legend.
 const BACKGROUND = 0x1E2228;
-const TINT = { ADDED: 0x3FD16B, REMOVED: 0xE5484D, CHANGED: 0xF2C94C };
-const KIND: Record<Kind, number> = { ADDED: 1, REMOVED: 2, CHANGED: 3 };
-const KIND_NAME = ['', 'added', 'removed', 'changed'];
-const KIND_TINT = [0, TINT.ADDED, TINT.REMOVED, TINT.CHANGED];
-const FULL: SubBox[] = [[0, 0, 0, 1, 1, 1]];
+const MARK: Record<Kind, string> = { ADDED: '#3FD16B', REMOVED: '#E5484D', CHANGED: '#F2C94C' };
 
-function mix(rgb: number, toward: number, f: number): number {
-  const r = ((rgb >> 16) & 255) * (1 - f) + ((toward >> 16) & 255) * f;
-  const g = ((rgb >> 8) & 255) * (1 - f) + ((toward >> 8) & 255) * f;
-  const b = (rgb & 255) * (1 - f) + (toward & 255) * f;
-  return (r << 16) | (g << 8) | b;
+export interface Picked {
+  pos: [number, number, number];
+  before: string;
+  after: string;
+  kind?: Kind;
 }
 
-function expand(runs: [number, number][], volume: number): Uint32Array {
-  const out = new Uint32Array(volume);
-  let i = 0;
-  for (const [index, count] of runs) {
-    out.fill(index, i, i + count);
-    i += count;
-  }
-  return out;
+export interface Viewer {
+  /** Draws a view; resolves once it shows. A later call replaces an earlier one still loading. */
+  show(view: View): Promise<void>;
+  dispose(): void;
 }
 
 export function supported(): boolean {
   try {
-    return !!document.createElement('canvas').getContext('webgl2');
+    const gl = document.createElement('canvas').getContext('webgl2');
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
+    return !!gl;
   } catch {
     return false;
   }
 }
 
-/** Draws {@code data} into {@code el}. Call dispose() on the result before removing the element. */
-export function mount(el: HTMLElement, data: BlockData): Viewer {
-  const [x1, y1, z1, x2, y2, z2] = data.box;
-  const sx = x2 - x1 + 1, sy = y2 - y1 + 1, sz = z2 - z1 + 1;
-  const volume = sx * sy * sz;
-  const palette = data.palette;
-  const before = expand(data.before, volume);
-  const after = expand(data.after, volume);
-  const kinds = new Uint8Array(volume);
-  let changeMin = [Infinity, Infinity, Infinity], changeMax = [-Infinity, -Infinity, -Infinity];
-  for (const [index, kind] of data.changes) {
-    kinds[index] = KIND[kind];
-    const p = [index % sx, Math.floor(index / (sx * sz)), Math.floor(index / sx) % sz];
-    for (let a = 0; a < 3; a++) {
-      changeMin[a] = Math.min(changeMin[a], p[a]);
-      changeMax[a] = Math.max(changeMax[a], p[a]);
+/**
+ * @param jarUrl the Minecraft client jar the viewer takes block models and textures from
+ * @param onPick called with the block clicked, or null for a click on nothing
+ */
+export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, onPick: (p: Picked | null) => void): Viewer {
+  const { width, height, length } = diff;
+  let current: { canvas: HTMLCanvasElement; handles: SchematicHandles } | null = null;
+  let shown = 0;
+  let disposed = false;
+  let loading = Promise.resolve();
+  let jar: Promise<string[]> | null = null;
+  const resourceUrls: string[] = [];
+  const abort = new AbortController();
+
+  // Check HTTP errors ourselves: the library otherwise tries to unzip the panel's JSON error response.
+  // Keep the blob for this viewer's lifetime so redraws need not fetch it again.
+  const resources = () => jar ??= (async () => {
+    const response = await fetch(jarUrl, { signal: abort.signal });
+    if (!response.ok) {
+      const body = await response.json().catch(() => null);
+      throw new Error(body?.error || `Could not load Minecraft textures (${response.status}).`);
     }
-  }
-  if (!data.changes.length) { changeMin = [0, 0, 0]; changeMax = [sx - 1, sy - 1, sz - 1]; }
-  // What the Changes view draws: the new blocks, with removed ones where they were.
-  const marked = after.slice();
-  for (let i = 0; i < volume; i++) if (kinds[i] === KIND.REMOVED) marked[i] = before[i];
+    const blob = await response.blob();
+    const overrides = await modelOverrides(await blob.arrayBuffer());
+    if (disposed) throw new Error('Viewer closed.');
+    // The library searches its first jar before resource packs, so put the small compatibility pack first.
+    if (overrides) resourceUrls.push(URL.createObjectURL(overrides));
+    resourceUrls.push(URL.createObjectURL(blob));
+    return resourceUrls;
+  })();
 
-  const drawn = palette.map(p => p.rgb >= 0);
-  const solid = palette.map(p => p.rgb >= 0 && !p.transparent && !p.boxes);
+  const size = () => ({ width: Math.max(1, holder.clientWidth), height: Math.max(1, holder.clientHeight) });
+  const resize = new ResizeObserver(() => {
+    const { width: w, height: h } = size();
+    current?.handles.setSize(w, h);
+  });
+  resize.observe(holder);
 
-  // ---------- controls ----------
-  el.innerHTML = `<div class="v3-bar">
-      <span class="seg" role="group" aria-label="Show">
-        <button type="button" data-mode="before">Before</button><button type="button" data-mode="after">After</button><button type="button" data-mode="changes">Changes</button>
-      </span>
-      <label class="v3-hide"><input type="checkbox"> only changed blocks</label>
-      <label class="v3-cut">Cut above y <input type="range" min="${y1}" max="${y2}" step="1"> <output></output></label>
-      <span class="spacer"></span>
-      <button type="button" class="ghost v3-reset">Reset view</button>
-    </div>
-    <div class="v3-stage"></div>
-    <div class="v3-info"></div>`;
-  const stage = el.querySelector<HTMLElement>('.v3-stage')!;
-  const info = el.querySelector<HTMLElement>('.v3-info')!;
-  const hide = el.querySelector<HTMLInputElement>('.v3-hide input')!;
-  const cut = el.querySelector<HTMLInputElement>('.v3-cut input')!;
-  const cutOut = el.querySelector<HTMLOutputElement>('.v3-cut output')!;
-  const hint = 'Drag to rotate, right-drag to pan, scroll to zoom. Click a block for its coordinates.';
-  let mode = 'changes';
-  // One above the highest change, so an edit inside a building shows without its roof.
-  cut.value = String(Math.min(y2, y1 + changeMax[1] + 1));
+  const scene = (): Scene => current!.handles.getEngine().scenes[0];
 
-  // ---------- scene ----------
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-  renderer.setClearColor(BACKGROUND);
-  stage.appendChild(renderer.domElement);
-  const scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 1.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 1.6);
-  sun.position.set(0.5, 1, 0.8);
-  scene.add(sun);
-  const camera = new THREE.PerspectiveCamera(45, 1, 0.5, 4000);
-  const controls = new OrbitControls(camera, renderer.domElement);
-  controls.zoomToCursor = true;
-  const cube = new THREE.BoxGeometry(1, 1, 1);
-  const opaqueMaterial = new THREE.MeshLambertMaterial();
-  const glassMaterial = new THREE.MeshLambertMaterial({ transparent: true, opacity: 0.45, depthWrite: false });
-  const outline = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(1.04, 1.04, 1.04)),
-      new THREE.LineBasicMaterial({ color: 0xffffff }));
-  outline.visible = false;
-  scene.add(outline);
-  // Minecraft and three.js are both right-handed with y up: x is east, z is south. The box is centred on the origin.
-  const ox = -sx / 2, oy = -sy / 2, oz = -sz / 2;
-  let meshes: THREE.InstancedMesh[] = [];
-  let queued = 0;
+  // The viewer centres the schematic on the origin, one unit per block.
+  const centre = (index: number) => {
+    const x = index % width, z = Math.floor(index / width) % length, y = Math.floor(index / (width * length));
+    return [x - width / 2 + 0.5, y - height / 2 + 0.5, z - length / 2 + 0.5];
+  };
 
-  function draw() {
-    if (queued) return;
-    queued = requestAnimationFrame(() => {
-      queued = 0;
-      renderer.render(scene, camera);
-    });
-  }
-
-  function rebuild() {
-    for (const m of meshes) { scene.remove(m); m.dispose(); }
-    meshes = [];
-    const changes = mode === 'changes';
-    const cells = mode === 'before' ? before : changes ? marked : after;
-    const onlyChanged = changes && hide.checked;
-    const layers = Number(cut.value) - y1 + 1;
-    const layer = sx * sz;
-    const shows = (i: number) => drawn[cells[i]] && !(onlyChanged && !kinds[i]);
-    const hides = (i: number) => solid[cells[i]] && !(onlyChanged && !kinds[i]);
-    // Instances: [cell, sub-box] pairs, for opaque blocks and for see-through ones.
-    const lists: number[][] = [[], []];
-    for (let y = 0, i = 0; y < layers; y++) {
-      for (let z = 0; z < sz; z++) {
-        for (let x = 0; x < sx; x++, i++) {
-          if (!shows(i)) continue;
-          // A block with a solid cube on every side cannot be seen.
-          if (x > 0 && x < sx - 1 && z > 0 && z < sz - 1 && y > 0 && y < layers - 1
-              && hides(i - 1) && hides(i + 1) && hides(i - sx) && hides(i + sx) && hides(i - layer) && hides(i + layer)) continue;
-          const p = palette[cells[i]];
-          const list = lists[p.transparent && !(changes && kinds[i]) ? 1 : 0];
-          const n = p.boxes ? p.boxes.length : 1;
-          for (let b = 0; b < n; b++) list.push(i, b);
-        }
-      }
+  function mark(s: Scene, view: View) {
+    const byKind = new Map<Kind, number[]>();
+    const top = (view.cut + 1) * width * length;
+    for (const [index, kind] of diff.kinds) {
+      if (index >= top) continue;
+      if (!byKind.has(kind)) byKind.set(kind, []);
+      byKind.get(kind)!.push(index);
     }
-    const color = new THREE.Color();
-    lists.forEach((list, which) => {
-      const count = list.length / 2;
-      if (!count) return;
-      const mesh = new THREE.InstancedMesh(cube, which ? glassMaterial : opaqueMaterial, count);
-      const matrix = mesh.instanceMatrix.array;
-      const colors = new Float32Array(count * 3);
-      const cellOf = new Uint32Array(count);
-      for (let n = 0; n < count; n++) {
-        const i = list[n * 2];
-        const x = i % sx, z = Math.floor(i / sx) % sz, y = Math.floor(i / layer);
-        const p = palette[cells[i]];
-        const b = (p.boxes || FULL)[list[n * 2 + 1]];
-        const o = n * 16;
-        matrix[o] = b[3] - b[0];
-        matrix[o + 5] = b[4] - b[1];
-        matrix[o + 10] = b[5] - b[2];
-        matrix[o + 12] = ox + x + (b[0] + b[3]) / 2;
-        matrix[o + 13] = oy + y + (b[1] + b[4]) / 2;
-        matrix[o + 14] = oz + z + (b[2] + b[5]) / 2;
-        matrix[o + 15] = 1;
-        let rgb = p.rgb;
-        if (changes) rgb = kinds[i] ? mix(rgb, KIND_TINT[kinds[i]], 0.65) : mix(rgb, BACKGROUND, 0.6);
-        // A little variation from block to block, or a flat wall of one material shows no blocks at all.
-        const shade = 0.94 + 0.12 * ((((x * 73856093) ^ (y * 19349663) ^ (z * 83492791)) >>> 0) % 7) / 6;
-        color.setHex(rgb).multiplyScalar(shade).toArray(colors, n * 3);
-        cellOf[n] = i;
-      }
-      mesh.instanceColor = new THREE.InstancedBufferAttribute(colors, 3);
-      mesh.userData.cellOf = cellOf;
-      mesh.renderOrder = which;
-      mesh.computeBoundingSphere();
-      scene.add(mesh);
-      meshes.push(mesh);
-    });
-    el.querySelectorAll<HTMLButtonElement>('.seg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
-    hide.disabled = !changes;
-    cutOut.textContent = cut.value;
-    outline.visible = false;
-    info.textContent = hint;
-    draw();
+    for (const [kind, indexes] of byKind) {
+      const box = MeshBuilder.CreateBox(`mark-${kind}`, { size: 1.04 }, s);
+      const material = new StandardMaterial(`mark-${kind}`, s);
+      material.emissiveColor = Color3.FromHexString(MARK[kind]);
+      material.disableLighting = true;
+      material.alpha = 0.45;
+      box.material = material;
+      box.isPickable = false;
+      const matrices = new Float32Array(indexes.length * 16);
+      indexes.forEach((index, i) => {
+        const [x, y, z] = centre(index);
+        Matrix.Translation(x, y, z).copyToArray(matrices, i * 16);
+      });
+      box.thinInstanceSetBuffer('matrix', matrices, 16, true);
+    }
+    // The viewer builds a selection octree before returning; meshes added after it are only drawn once it is rebuilt.
+    s.createOrUpdateSelectionOctree();
   }
 
-  function resetView() {
-    const c = [0, 1, 2].map(a => (changeMin[a] + changeMax[a] + 1) / 2);
-    const span = Math.hypot(...[0, 1, 2].map(a => changeMax[a] - changeMin[a] + 1));
-    controls.target.set(ox + c[0], oy + c[1], oz + c[2]);
-    // From the south-east, like the default picture.
-    camera.position.copy(controls.target).add(new THREE.Vector3(1, 0.9, 1).normalize().multiplyScalar(Math.max(14, span * 1.5)));
-    controls.update();
-    draw();
-  }
-
-  function resize() {
-    const w = stage.clientWidth, h = stage.clientHeight;
-    if (!w || !h) return;
-    renderer.setSize(w, h, false);
-    camera.aspect = w / h;
-    camera.updateProjectionMatrix();
-    draw();
-  }
-
-  // ---------- picking ----------
-  const raycaster = new THREE.Raycaster();
   let down: [number, number] | null = null;
   const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
   const onUp = (e: PointerEvent) => {
-    if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
-    const r = renderer.domElement.getBoundingClientRect();
-    raycaster.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
-    const hit = raycaster.intersectObjects(meshes, false)[0];
-    if (!hit) {
-      outline.visible = false;
-      info.textContent = hint;
-      return draw();
-    }
-    const i: number = hit.object.userData.cellOf[hit.instanceId!];
-    const x = i % sx, z = Math.floor(i / sx) % sz, y = Math.floor(i / (sx * sz));
-    outline.position.set(ox + x + 0.5, oy + y + 0.5, oz + z + 0.5);
-    outline.visible = true;
-    const was = palette[before[i]].state, now = palette[after[i]].state;
-    info.textContent = '';
-    const pos = document.createElement('b');
-    pos.textContent = `${x1 + x} ${y1 + y} ${z1 + z}`;
-    info.append(pos, kinds[i] ? `  ${was} → ${now}  (${KIND_NAME[kinds[i]]})` : `  ${now}  (unchanged)`);
-    draw();
+    const start = down;
+    down = null;
+    if (!current || !start || Math.hypot(e.clientX - start[0], e.clientY - start[1]) > 4) return;
+    const rect = current.canvas.getBoundingClientRect();
+    const s = scene();
+    const hit = s.pick(e.clientX - rect.left, e.clientY - rect.top);
+    if (!hit.hit || !hit.pickedMesh || !hit.pickedPoint) return onPick(null);
+    const normal = hit.getNormal(true);
+    // Each model element is an instance of a hidden prototype. Its translation relative to that prototype is
+    // the exact cell centre, even for thin/rotated models or a hit precisely on an edge between two cells.
+    const p = hit.pickedMesh instanceof InstancedMesh
+      ? hit.pickedMesh.position.subtract(hit.pickedMesh.sourceMesh.position)
+      : normal ? hit.pickedPoint.subtract(normal.scale(0.01)) : hit.pickedPoint;
+    const x = Math.floor(p.x + width / 2), y = Math.floor(p.y + height / 2), z = Math.floor(p.z + length / 2);
+    if (x < 0 || y < 0 || z < 0 || x >= width || y >= height || z >= length) return onPick(null);
+    const index = (y * length + z) * width + x;
+    onPick({
+      pos: [diff.origin[0] + x, diff.origin[1] + y, diff.origin[2] + z],
+      before: diff.palette[diff.before[index]],
+      after: diff.palette[diff.after[index]],
+      kind: diff.kinds.get(index),
+    });
   };
 
-  el.querySelectorAll<HTMLButtonElement>('.seg button').forEach(b => { b.onclick = () => { mode = b.dataset.mode!; rebuild(); }; });
-  hide.onchange = rebuild;
-  cut.oninput = rebuild;
-  el.querySelector<HTMLButtonElement>('.v3-reset')!.onclick = resetView;
-  controls.addEventListener('change', draw);
-  renderer.domElement.addEventListener('pointerdown', onDown);
-  renderer.domElement.addEventListener('pointerup', onUp);
-  const observer = new ResizeObserver(resize);
-  observer.observe(stage);
-
-  rebuild();
-  resize();
-  resetView();
+  async function draw(view: View, mine: number) {
+    if (disposed || mine !== shown) return;
+    const [url, ...packs] = await resources();
+    const schematic = await toSchematic(diff, cells(diff, view));
+    if (disposed || mine !== shown) return;
+    const canvas = document.createElement('canvas');
+    let handles: SchematicHandles;
+    try {
+      handles = await renderSchematic(canvas, schematic, {
+        size: size(),
+        getClientJarUrl: async () => {
+          // This hook runs after Scene/Camera creation but before any model meshes/materials are built. Match
+          // Minecraft's handedness here, so a north-facing camera has east on the left, like the PNG elevation.
+          const s = EngineStore.Instances.find(engine => engine.getRenderingCanvas() === canvas)!.scenes[0];
+          s.useRightHandedSystem = true;
+          s.activeCamera?.getViewMatrix(true);
+          s.activeCamera?.getProjectionMatrix(true);
+          return url;
+        },
+        resourcePacks: packs,
+        orbit: false,
+        antialias: true,
+        backgroundColor: BACKGROUND,
+      });
+    } catch (ex) {
+      // The library creates its engine before loading models, but returns no handles on failure.
+      EngineStore.Instances.find(engine => engine.getRenderingCanvas() === canvas)?.dispose();
+      throw ex;
+    }
+    if (disposed || mine !== shown) {
+      handles.destroy();
+      return;
+    }
+    const s = handles.getEngine().scenes[0];
+    try {
+      // The library's Intermediate performance preset makes every model/instance unpickable by default.
+      for (const mesh of s.meshes) mesh.isPickable = mesh.isVisible && mesh.isEnabled();
+      if (view.mode === 'changes') mark(s, view);
+      // Keep the camera where the user left it.
+      if (current) {
+        const was = scene().activeCamera as ArcRotateCamera, now = s.activeCamera as ArcRotateCamera;
+        now.alpha = was.alpha;
+        now.beta = was.beta;
+        now.radius = was.radius;
+        now.target.copyFrom(was.target);
+      }
+    } catch (ex) {
+      handles.destroy();
+      throw ex;
+    }
+    current?.handles.destroy();
+    const { width: w, height: h } = size();
+    handles.setSize(w, h);
+    canvas.addEventListener('pointerdown', onDown);
+    canvas.addEventListener('pointerup', onUp);
+    holder.replaceChildren(canvas);
+    current = { canvas, handles };
+    onPick(null);
+  }
 
   return {
+    show(view) {
+      const mine = ++shown;
+      // Do not parse several client jars/create several WebGL contexts at once when controls change quickly.
+      const next = loading.then(() => draw(view, mine));
+      loading = next.catch(() => {});
+      return next;
+    },
     dispose() {
-      observer.disconnect();
-      if (queued) cancelAnimationFrame(queued);
-      controls.dispose();
-      for (const m of meshes) m.dispose();
-      cube.dispose();
-      opaqueMaterial.dispose();
-      glassMaterial.dispose();
-      outline.geometry.dispose();
-      outline.material.dispose();
-      renderer.dispose();
-      renderer.forceContextLoss();
-      el.innerHTML = '';
+      disposed = true;
+      abort.abort();
+      resourceUrls.forEach(url => URL.revokeObjectURL(url));
+      resize.disconnect();
+      current?.handles.destroy();
+      current = null;
+      holder.replaceChildren();
     },
   };
 }
