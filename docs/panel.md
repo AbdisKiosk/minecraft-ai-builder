@@ -275,18 +275,45 @@ not to a server, so they can be placed on every server where the user is a build
   panel reads the blocks through the same `draft export` frame as promote, so `promote.max-volume` limits it, and it
   saves the world as it is, not an open draft. A region that is only air is refused.
 - The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
-  the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
-  and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+  the asset's own coordinates, and Share, Edit, Delete and **Place…**, which puts it into a draft on a chosen server,
+  world and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+  Assets others shared with a server you build on show their owner and only 3D view and Place.
 - **Upload .schem** on the Assets page (any signed-in user, no server role): a WorldEdit `.schem` of at most 8 MB, with
   a name (prefilled from the file name), description and tags as above. See "Upload a .schem" below.
 - Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Each asset is at most 2,000,000 blocks and 5 MB
   of compressed region data, whether saved on the panel or by Claude. Nobody can see, change or place another user's
-  asset; saving and placing need the builder role on the server, as promote does.
+  asset unless it is shared with a server they build on (see "Share an asset with a server" below); saving and
+  placing need the builder role on the server, as promote does.
 - Storage: one MySQL row per asset (`assets`), and in R2 under `users/<user>/assets/<id>/` the export frame's data
   (`region.bin`, which the import frame takes back) and the 3D view's blocks (`blocks.json.gz`). The export leaves out
   properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
   view; a wrong guess changes only how the preview draws a block, never what is placed. Migration
   `006_asset_usage.sql` adds `last_used_at`, which orders the list Claude sees.
+
+### Share an asset with a server
+
+**Share…** on one of your own assets lists the servers where you are a builder, admin or owner. Sharing with one lets
+every member there with at least the builder role use the asset without copying it: they see it on their Assets page
+(with your name, under **Shared with me**), open its 3D view, place it into a draft on that server, and Claude can
+paste it there by name. Viewers cannot. `GET`, `POST {server}` and `DELETE ?server=` on `/api/assets/<id>/shares`
+do the same from a script; migration `008_asset_shares.sql` adds the `asset_shares` table.
+
+- It stays your asset: only you share, unshare, rename, describe or delete it, and it counts against your quota alone;
+  using a shared asset costs a recipient nothing. A recipient's place or paste does not reorder your list.
+- A share counts only while both you and the member using it have the builder role or above on that server. Lose it
+  (or leave) and the share stops working until you have it again; it still shows in your Share dialog so you can
+  remove it. Unsharing, deleting the asset, or deleting the server or your account takes it away at once.
+- Placing a shared asset works only into a draft on a server it is shared with, never on another server the recipient
+  builds on.
+- Names for `paste name=` (which has no owner part): the caller's own asset wins. Otherwise, if exactly one asset of
+  that name is shared with this server, that one is used; if several owners shared one of the same name, the paste
+  fails with a message naming them, rather than picking one. `get_context` lists the caller's own assets first, then
+  shared ones (marked `by` with a short form of the owner's name), still at most 30 in all; a shared name hidden by an
+  own asset is left out.
+- Security: the plugin's asset requests carry the per-call grant as before. The panel takes the caller from the grant
+  and the server from the relay socket, checks the builder role there again, and serves a shared asset only if it is
+  shared with that very server. The download URL is signed for the owner's file, valid for 60 seconds as before.
+  `save` and `check` stay in the caller's own library.
 
 ### Upload a .schem
 
@@ -313,9 +340,11 @@ pasted by Claude like any other.
 Every MCP and REST call through `/s/<server>/` carries the account of its access token, so Claude and SDK scripts use
 that account's library on every server where it is a builder.
 
-- `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters.
+- `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters,
+  then, while there is room, those shared with this server, with `by`.
   If the library cannot be reached, it says so in `assets_error` and the rest of the context is still returned.
-- `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library.
+- `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library, then in the assets
+  shared with this server (see "Share an asset with a server").
 - `save_blueprint` (with an optional `description`) saves to the caller's library only, never on the server. A save
   that fails, for example on quota or a taken name, is not saved on the server instead.
 - Ownership: for each tool call the panel gives the plugin a random grant that ends with the call (at most 6 minutes).
@@ -324,7 +353,9 @@ that account's library on every server where it is a builder.
 - Saves go up the relay as base64. A paste fetches a download URL from R2 that is valid for 60 seconds; the plugin
   checks the file's SHA-256. There is no per-user download rate limit.
 - Cache: `plugins/AIBuilder/asset-cache/<user>/`, at most 128 MB per server in all (oldest files go first), not
-  configurable. Every paste asks the panel again before using a cached file, so a deleted asset cannot be pasted.
+  configurable. Files are named by asset id and SHA-256, never by name, so a renamed or replaced asset, or another
+  owner's of the same name, never reuses old bytes. Every paste asks the panel again before using a cached file, so a
+  deleted or unshared asset cannot be pasted.
 - Without R2 there is no library: the relay `welcome` frame carries `assets: false` and calls carry no grant. Calls
   then work as they do without the panel: `save_blueprint` saves on the server, `paste` with `name=` looks only in the
   server's saved blueprints, and `get_context` has neither `assets` nor `assets_error`. A library that exists but
