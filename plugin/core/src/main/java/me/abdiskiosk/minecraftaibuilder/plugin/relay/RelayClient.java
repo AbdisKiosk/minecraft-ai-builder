@@ -162,23 +162,31 @@ public final class RelayClient implements BuildService.JobListener {
 
     private void connect() {
         if (stopped) return;
+        Listener listener = new Listener();
         http.newWebSocketBuilder()
                 .header("Authorization", "Bearer " + token)
                 .connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(uri, new Listener())
+                .buildAsync(uri, listener)
                 .whenComplete((ws, error) -> {
                     if (error != null) {
                         failed(describe(error));
                         return;
                     }
+                    boolean closedEarly;
                     synchronized (this) {
                         socket = ws;
                         sendChain = CompletableFuture.completedFuture(null);
                         backoff = 1;
+                        closedEarly = listener.closedEarly;
                     }
                     lastHeard = System.currentTimeMillis();
                     if (!status.startsWith("connected")) logger.info("Relay connected to " + uri);
                     status = "connected to " + uri;
+                    // The panel closed it (a rejected token, say) before this ran, when closed() could not tell it was ours.
+                    if (closedEarly) {
+                        closed(ws, listener.earlyCode, listener.earlyReason);
+                        return;
+                    }
                     sendHello();
                 });
     }
@@ -709,6 +717,10 @@ public final class RelayClient implements BuildService.JobListener {
 
     private final class Listener implements WebSocket.Listener {
         private final StringBuilder buffer = new StringBuilder();
+        /** A close that came before connect() made this socket current; guarded by the RelayClient. */
+        private boolean closedEarly;
+        private int earlyCode;
+        private String earlyReason;
 
         @Override
         public void onOpen(WebSocket ws) {
@@ -744,6 +756,13 @@ public final class RelayClient implements BuildService.JobListener {
 
         @Override
         public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
+            synchronized (RelayClient.this) {
+                if (socket != ws && !closedEarly && !stopped) {
+                    closedEarly = true;
+                    earlyCode = code;
+                    earlyReason = reason;
+                }
+            }
             closed(ws, code, reason);
             return null;
         }
