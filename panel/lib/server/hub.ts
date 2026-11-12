@@ -279,7 +279,7 @@ export class RelayHub {
     s.connected(frame);
     console.info(`relay: server ${c.serverId} connected (${frame.mc ?? '?'} ${frame.bridge ?? '?'}, ${frame.plugin ?? '?'})`);
     // History goes to R2 when it is configured: the plugin then uploads each entry (see archive.ts).
-    // links: this panel takes link, unlink and player_asset frames (/aibuilder link and asset save in game).
+    // links: this panel takes link, unlink and player_asset frames (/aibuilder link, asset save and asset list in game).
     c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured(), links: true }));
     exec('UPDATE servers SET info = ?, last_seen_at = NOW() WHERE id = ?', [JSON.stringify(s.info), c.serverId])
       .catch(e => console.warn('relay: could not save server info', e.message));
@@ -334,7 +334,7 @@ export class RelayHub {
   }
 
   /**
-   * A player's request from the game: link, unlink, or an in-game asset save (player_asset). The server is this
+   * A player's request from the game: link, unlink, or an in-game asset list or save (player_asset). The server is this
    * socket's, never a frame field; the account comes from the player's link (minecraftLinks.ts), not from a tool
    * call's grant, so the grant path in asset() is untouched. Link codes are credentials: never log the frame.
    */

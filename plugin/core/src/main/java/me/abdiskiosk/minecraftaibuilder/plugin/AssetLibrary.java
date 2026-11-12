@@ -69,9 +69,12 @@ public final class AssetLibrary {
     public static final long MAX_VOLUME = 2_000_000;
     public static final int MAX_DESCRIPTION = 1000;
 
-    /** Saves a region into the calling account's library: see {@link #saveRegion(BiFunction, BuildService, String, Box, String, String)}. */
+    /**
+     * Saves a region into the calling account's library as Claude sees it (with an open draft laid over the world): see
+     * {@link #saveRegion(BiFunction, BuildService, String, Box, String, String, boolean)}.
+     */
     public JsonObject saveRegion(BuildService service, String world, Box box, String name, String description) {
-        return saveRegion(request, service, world, box, name, description);
+        return saveRegion(request, service, world, box, name, description, true);
     }
 
     /**
@@ -81,13 +84,15 @@ public final class AssetLibrary {
      * limits it), and sends at most {@link #MAX_BYTES} of region data.
      *
      * @param request whose library: the call's grant (save_blueprint) or the player's link (in game)
+     * @param withDraft with review on, lay the open draft over the world, as Claude's reads do (save_blueprint); false
+     *                  saves the world as players see it (in game, like the panel's Save as asset)
      */
     public static JsonObject saveRegion(BiFunction<String, JsonObject, JsonObject> request, BuildService service, String world,
-                                        Box box, String name, String description) {
+                                        Box box, String name, String description, boolean withDraft) {
         if (box.volume() > MAX_VOLUME) throw new EditException("assets are limited to " + MAX_VOLUME + " blocks; save a smaller region");
         if (description.length() > MAX_DESCRIPTION) throw new EditException("description is longer than " + MAX_DESCRIPTION + " characters");
         request.apply("check", named(name)); // quota/name failures before loading any chunks
-        byte[] data = service.reading(world, box, () -> StateArrays.encode(service.read(world, box)));
+        byte[] data = service.reading(world, box, () -> StateArrays.encode(service.read(world, box, withDraft)));
         if (data.length > MAX_BYTES) throw new EditException("asset region is larger than 5 MB; save a smaller region");
         JsonObject args = named(name);
         args.addProperty("description", description);

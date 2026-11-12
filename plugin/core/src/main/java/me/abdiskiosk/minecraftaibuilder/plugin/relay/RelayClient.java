@@ -420,12 +420,12 @@ public final class RelayClient implements BuildService.JobListener {
 
     /**
      * The library of the panel account the player is linked to, as {@link AssetLibrary#saveRegion} takes it: only
-     * {@code check} and {@code save}. The panel finds the account from the link; the plugin never names one. Throws at
-     * once when this panel cannot take in-game saves, before anything is read.
+     * {@code list}, {@code check} and {@code save}. The panel finds the account from the link; the plugin never names
+     * one. Throws at once when this panel cannot take in-game requests, before anything is read.
      */
     public BiFunction<String, JsonObject, JsonObject> playerLibrary(UUID player, String name) {
         playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
-        if (!assets) throw new EditException("the panel has no asset library (it needs object storage configured)");
+        if (!assets) throw new EditException("the panel has no asset library yet (it needs object storage); ask its owner to set one up");
         return (op, args) -> {
             JsonObject frame = playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
             frame.addProperty("op", op);
@@ -451,7 +451,8 @@ public final class RelayClient implements BuildService.JobListener {
             return answered(frame, ACCOUNT_TIMEOUT);
         } catch (IOException e) {
             String msg = e.getMessage();
-            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : "panel: " + msg);
+            // The panel's own words tell the player what to do; a dropped or silent connection is worth another try.
+            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : msg + "; try again in a moment");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EditException("interrupted");
