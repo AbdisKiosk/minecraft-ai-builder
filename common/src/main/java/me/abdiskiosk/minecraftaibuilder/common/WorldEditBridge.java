@@ -19,6 +19,11 @@ public interface WorldEditBridge {
     /** The blocks this server can place; see {@link BlockCheck}. */
     BlockCatalog catalog();
 
+    /** Complete default state for a type, including properties normally omitted from compact reads. */
+    default String defaultState(String type) {
+        return type;
+    }
+
     Optional<SelectionInfo> selection(UUID player);
 
     EditHandle begin(UUID actor, String world);

@@ -22,6 +22,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -304,5 +305,35 @@ class PanelServerTest {
         assertEquals("{\"t\":\"" + RelayProtocol.DRAFT + "\",\"op\":\"blocks\",\"id\":\"d1\",\"before\":[[0,8]]}", draft.body());
         assertEquals(401, get("/api/servers/survival/history/habc/blocks", null).statusCode());
         plugin.ws.abort();
+    }
+
+    @Test
+    void servesTheMinecraftClientJarToLoggedInUsers() throws Exception {
+        byte[] bytes = "PK fake jar".getBytes();
+        try (FakeMojang mojang = new FakeMojang("1.21.11", bytes)) {
+            Path dir = Files.createTempDirectory("jars");
+            PanelConfig config = PanelConfig.load(Files.createTempDirectory("panel").resolve("panel.json"));
+            config.passwordHash = Auth.hashPassword(PASSWORD);
+            config.save();
+            PanelServer withJars = new PanelServer(config, new ClientJars(dir, mojang.manifest(), HttpClient.newHttpClient()))
+                    .start("127.0.0.1", 0);
+            try {
+                String path = "http://127.0.0.1:" + withJars.port() + "/api/minecraft/1.21.11/client.jar";
+                assertEquals(401, http.send(HttpRequest.newBuilder(URI.create(path)).build(), HttpResponse.BodyHandlers.discarding()).statusCode());
+                HttpResponse<String> login = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + withJars.port() + "/api/login"))
+                        .POST(HttpRequest.BodyPublishers.ofString("{\"password\":\"" + PASSWORD + "\"}")).build(), HttpResponse.BodyHandlers.ofString());
+                String cookie = login.headers().firstValue("Set-Cookie").orElseThrow().split(";")[0];
+                HttpResponse<byte[]> jar = http.send(HttpRequest.newBuilder(URI.create(path)).header("Cookie", cookie).build(),
+                        HttpResponse.BodyHandlers.ofByteArray());
+                assertEquals(200, jar.statusCode());
+                assertArrayEquals(bytes, jar.body());
+                assertTrue(jar.headers().firstValue("Cache-Control").orElse("").contains("immutable"));
+                HttpResponse<String> unknown = http.send(HttpRequest.newBuilder(URI.create(path.replace("1.21.11", "1.99")))
+                        .header("Cookie", cookie).build(), HttpResponse.BodyHandlers.ofString());
+                assertEquals(404, unknown.statusCode());
+            } finally {
+                withJars.stop();
+            }
+        }
     }
 }

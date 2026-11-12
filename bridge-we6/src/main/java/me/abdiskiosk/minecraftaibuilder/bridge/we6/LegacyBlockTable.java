@@ -19,6 +19,7 @@ import java.util.TreeSet;
 import java.util.function.IntPredicate;
 
 import me.abdiskiosk.minecraftaibuilder.common.BlockNames;
+import me.abdiskiosk.minecraftaibuilder.common.BlockState;
 
 /**
  * Modern block states to 1.8-1.12 {@code id:data} and back, loaded from {@code legacy-blocks.txt}
@@ -105,6 +106,12 @@ final class LegacyBlockTable {
 
     boolean has(String type) {
         return byType.containsKey(canonical(type));
+    }
+
+    String defaultState(String type) {
+        String canonical = canonical(type);
+        return new BlockState(canonical,
+                defaults.getOrDefault(canonical, Map.of())).toString();
     }
 
     Set<String> names() {

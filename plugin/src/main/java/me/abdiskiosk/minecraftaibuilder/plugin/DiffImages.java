@@ -2,9 +2,8 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import me.abdiskiosk.minecraftaibuilder.common.BlockColors;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
-import me.abdiskiosk.minecraftaibuilder.common.BlockShape;
+import me.abdiskiosk.minecraftaibuilder.common.BlockState;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
@@ -17,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.function.UnaryOperator;
 
 /** Before, after and changes of a diff, as pictures or as blocks, on the world around it as it is now. For the panel. */
 final class DiffImages {
@@ -75,13 +75,30 @@ final class DiffImages {
     /** The same region as {@link #render}, as blocks for the panel's 3D view. */
     static JsonObject blocks(BuildService service, String world, BlockDiff diff, String what, long maxVolume, long perTick) {
         Region r = region(service, world, diff, what, maxVolume, perTick);
-        return encode(r.box(), r.before(), r.after(), diff);
+        JsonObject out = encode(r.box(), r.before(), r.after(), diff);
+        // Reads/history omit default properties; model variants require all of them. Resolve only the palette,
+        // on the server thread, without expanding every cell or changing the compact labels used for inspection.
+        out.add("models", service.sync(() -> modelStates(out.getAsJsonArray("palette"), service.bridge()::defaultState)));
+        return out;
+    }
+
+    static JsonArray modelStates(JsonArray palette, UnaryOperator<String> defaults) {
+        Map<String, BlockState> byType = new LinkedHashMap<>();
+        JsonArray models = new JsonArray();
+        for (var entry : palette) {
+            BlockState state = BlockState.parse(entry.getAsString());
+            BlockState base = byType.computeIfAbsent(state.type(), type -> BlockState.parse(defaults.apply(type)));
+            Map<String, String> properties = new TreeMap<>(base.props());
+            properties.putAll(state.props());
+            models.add(new BlockState(state.type(), properties).toString());
+        }
+        return models;
     }
 
     /**
-     * {@code palette} lists each distinct state with the renderer's colour and shape, {@code before} and {@code after}
-     * are run-length lists of {@code [paletteIndex, count]} in {@link RegionCodec#index} order, and {@code changes}
-     * lists {@code [index, kind]} in index order.
+     * {@code palette} lists each distinct state, {@code before} and {@code after} are run-length lists of
+     * {@code [paletteIndex, count]} in {@link RegionCodec#index} order (the order of a Sponge schematic's block data),
+     * and {@code changes} lists {@code [index, kind]} in index order.
      */
     static JsonObject encode(Box box, String[] before, String[] after, BlockDiff diff) {
         Map<String, Integer> palette = new LinkedHashMap<>();
@@ -90,23 +107,7 @@ final class DiffImages {
         JsonArray beforeRuns = runs(before, palette);
         JsonArray afterRuns = runs(after, palette);
         JsonArray entries = new JsonArray();
-        for (String state : palette.keySet()) {
-            JsonObject e = new JsonObject();
-            e.addProperty("state", state);
-            e.addProperty("rgb", BlockColors.rgb(state));
-            e.addProperty("transparent", BlockColors.isTransparent(state));
-            // Left out for a full cube, which most blocks are.
-            if (!BlockShape.isFullCube(state)) {
-                JsonArray boxes = new JsonArray();
-                for (double[] b : BlockShape.boxes(state)) {
-                    JsonArray one = new JsonArray();
-                    for (double v : b) one.add(v);
-                    boxes.add(one);
-                }
-                e.add("boxes", boxes);
-            }
-            entries.add(e);
-        }
+        for (String state : palette.keySet()) entries.add(state);
         o.add("palette", entries);
         o.add("before", beforeRuns);
         o.add("after", afterRuns);

@@ -33,6 +33,7 @@ import com.sk89q.worldedit.util.eventbus.EventBus;
 import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.block.BaseBlock;
 import com.sk89q.worldedit.world.block.BlockState;
+import com.sk89q.worldedit.world.block.BlockTypes;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
@@ -231,6 +232,12 @@ public final class We7Bridge implements WorldEditBridge {
             }
         }
         return new Schematic(sx, sy, sz, states);
+    }
+
+    @Override
+    public String defaultState(String type) {
+        var block = BlockTypes.get("minecraft:" + type);
+        return block == null ? type : block.getDefaultState().getAsString();
     }
 
     /** {@code oak_stairs[facing=east]}: namespace and properties that equal the block's default are left out. */

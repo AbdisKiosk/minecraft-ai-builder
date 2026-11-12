@@ -84,6 +84,11 @@ public final class We6Bridge implements WorldEditBridge {
     }
 
     @Override
+    public String defaultState(String type) {
+        return LegacyNames.table().defaultState(type);
+    }
+
+    @Override
     public String name() {
         return (fawe ? "FastAsyncWorldEdit (WE6 API) " : "WorldEdit ") + plugin.getDescription().getVersion();
     }
