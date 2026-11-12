@@ -69,9 +69,9 @@ class McpEndpointTest {
     }
 
     /**
-     * The tool list is sent to Claude in every session, so its size is a fixed token cost.
-     * It was 11,183 characters (about 3,300 tokens) before the schemas were trimmed; the cap of 7,800 leaves
-     * room for the clone, saved-blueprint and other builder tools added since.
+     * The tool list is sent to Claude in every session, so its size is a fixed token cost: more than a whole small
+     * build costs in tool calls. It was 11,183 characters (about 3,300 tokens) at first and 7,765 with 17 tools;
+     * one build tool whose ops are a line each brought it to about 5,400 while adding roof, tree and light.
      */
     @Test
     void toolListStaysWithinBudget() {
@@ -81,18 +81,33 @@ class McpEndpointTest {
         JsonObject list = real.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}"))
                 .getAsJsonObject().getAsJsonObject("result");
         int chars = list.toString().length();
-        assertTrue(chars <= 7800, "tools/list is " + chars + " characters; shorten descriptions or schemas before raising the budget");
-        assertTrue(McpEndpoint.INSTRUCTIONS.length() <= 1400, "instructions are " + McpEndpoint.INSTRUCTIONS.length() + " characters");
+        assertTrue(chars <= 5400, "tools/list is " + chars + " characters; shorten descriptions or schemas before raising the budget");
+        assertTrue(McpEndpoint.INSTRUCTIONS.length() <= 1300, "instructions are " + McpEndpoint.INSTRUCTIONS.length() + " characters");
 
         java.util.Set<String> names = new java.util.HashSet<>();
         list.getAsJsonArray("tools").forEach(t -> names.add(t.getAsJsonObject().get("name").getAsString()));
-        assertTrue(names.containsAll(java.util.List.of("get_context", "fill", "batch", "render_region")), names.toString());
-        for (String hidden : java.util.List.of("walls", "outline", "replace", "get_selection", "clone")) {
-            assertFalse(names.contains(hidden), hidden + " should not be listed");
+        assertEquals(java.util.Set.of("get_context", "block_info", "read_region", "check_region", "render_region", "build",
+                "decorate", "save_blueprint", "undo", "job_status", "tell"), names);
+        for (String hidden : java.util.List.of("batch", "fill", "set_blocks", "place_blueprint", "cylinder", "walls", "replace",
+                "get_selection", "clone")) {
             assertTrue(registry.has(hidden), hidden + " should still be callable");
         }
         assertEquals(ToolStats.SESSION, real.stats().rows().get(0).tool());
         assertEquals(chars, real.stats().rows().get(0).resultChars());
+    }
+
+    /** One oversized answer would cost more than a whole build, so it is refused with a way to ask for less. */
+    @Test
+    void anOversizedResultIsRefused() {
+        JsonObject big = new JsonObject();
+        big.addProperty("rows", "x".repeat(McpEndpoint.MAX_RESULT_CHARS));
+        ToolResult refused = endpoint.capped("read_region", ToolResult.of(big));
+        assertTrue(refused.error());
+        String text = refused.data().get("error").getAsString();
+        assertTrue(text.startsWith("read_region would return") && text.length() < 300, text);
+
+        ToolResult small = ToolResult.of(new JsonObject());
+        assertSame(small, endpoint.capped("read_region", small));
     }
 
     @Test

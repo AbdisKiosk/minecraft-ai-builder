@@ -3,9 +3,12 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCheck;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Draft;
+import me.abdiskiosk.minecraftaibuilder.common.BlockState;
+import me.abdiskiosk.minecraftaibuilder.common.BlockTraits;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
+import me.abdiskiosk.minecraftaibuilder.common.Lighting;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.PreviewHandle;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
@@ -42,6 +45,10 @@ import java.util.function.Supplier;
 public final class BuildService {
 
     private static final int MAX_JOBS = 200;
+    /** Blocks read per main-thread visit, so a large read costs each tick only a few milliseconds. */
+    private static final long READ_SLAB = 100_000;
+    private static final int MAX_TREE_WARNINGS = 5;
+    private static final int LIGHT_HEADROOM = 24;
 
     private final Plugin plugin;
     private final WorldEditBridge bridge;
@@ -132,7 +139,7 @@ public final class BuildService {
 
         Job(String id, List<String> warnings, Caller caller, Box bounds, long total) {
             this.id = id;
-            this.warnings = warnings;
+            this.warnings = new CopyOnWriteArrayList<>(warnings);
             this.caller = caller;
             this.bounds = bounds;
             this.total = total;
@@ -206,8 +213,12 @@ public final class BuildService {
         }
     }
 
-    /** The ops of a call and the pieces they were split into, so a failure can name the op it came from. */
-    private record Plan(List<Op> ops, List<Op> pieces, int[] owner) {
+    /**
+     * The ops of a call and the pieces they were split into, so a failure can name the op it came from.
+     *
+     * @param lights light ops, which run after every piece because they read what the pieces built
+     */
+    private record Plan(List<Op> ops, List<Op> pieces, int[] owner, List<Op.Light> lights) {
         RuntimeException explain(Throwable failure, int piece) {
             RuntimeException e = failure instanceof RuntimeException re ? re : new EditException(String.valueOf(failure), failure);
             if (ops.size() < 2 || piece < 0) return e;
@@ -295,12 +306,25 @@ public final class BuildService {
         checkWorld(world);
         if (box.volume() > config.maxReadVolume()) {
             throw new EditException("region is " + box.volume() + " blocks; max read is " + config.maxReadVolume()
-                    + ". Read a smaller box or use mode=summary on parts.");
+                    + ". Use a smaller region.");
         }
-        String[] states = sync(() -> bridge.read(world, box));
+        String[] states = readWorld(world, box);
         // With review on, the caller sees the world as the open draft would leave it.
         if (reviewOn()) drafts.overlay(world, box, states);
         return states;
+    }
+
+    /** The world as it is, in slabs off the main thread so a large read never holds a tick for long. */
+    private String[] readWorld(String world, Box box) {
+        if (box.volume() <= READ_SLAB || Bukkit.isPrimaryThread()) return sync(() -> bridge.read(world, box));
+        String[] out = new String[(int) box.volume()];
+        int at = 0;
+        for (Box slab : Op.slabs(box, READ_SLAB)) {
+            String[] part = sync(() -> bridge.read(world, slab));
+            System.arraycopy(part, 0, out, at, part.length);
+            at += part.length;
+        }
+        return out;
     }
 
     /** With review on, takes the newest edits out of the caller's world's draft instead of using WorldEdit's undo. */
@@ -395,18 +419,23 @@ public final class BuildService {
         List<String> warnings = validate(caller, ops);
         List<Op> pieces = new ArrayList<>();
         List<Integer> owners = new ArrayList<>();
+        List<Op.Light> lights = new ArrayList<>();
         long total = 0;
         Box bounds = null;
         for (int i = 0; i < ops.size(); i++) {
             Box b = ops.get(i).bounds();
             bounds = bounds == null ? b : Box.of(Vec3.min(bounds.min(), b.min()), Vec3.max(bounds.max(), b.max()));
+            if (ops.get(i) instanceof Op.Light light) {
+                lights.add(light);
+                continue;
+            }
             for (Op piece : ops.get(i).split(config.blocksPerTick())) {
                 pieces.add(piece);
                 owners.add(i);
                 total += piece.volume();
             }
         }
-        Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray());
+        Plan plan = new Plan(ops, pieces, owners.stream().mapToInt(Integer::intValue).toArray(), lights);
         // A dry run changes nothing in the world, so there is nothing to snapshot for the history.
         Recorder rec = preview ? null : recorder;
         List<Box> boxes = rec == null ? null : rec.boxes(caller, ops);
@@ -463,10 +492,11 @@ public final class BuildService {
             for (int i = 0; i < plan.pieces().size(); i++) {
                 at = i;
                 Op piece = plan.pieces().get(i);
-                job.changed += handle.apply(piece);
+                apply(handle, piece, job);
                 progress(job, piece.volume());
             }
             at = -1;
+            light(caller, handle, plan.lights(), job);
         } catch (Throwable t) {
             failure = t;
         }
@@ -544,6 +574,47 @@ public final class BuildService {
         return new JobInfo(i.id(), error == null ? "done" : "failed", "done", i.tool(), i.source(), i.caller(), i.world(),
                 i.bounds(), i.total(), i.processed(), i.changed(), i.started(), System.currentTimeMillis() - i.started(),
                 message, null, i.revertOf(), null, i.draftOf());
+    }
+
+    private void apply(EditHandle handle, Op piece, Job job) {
+        int changed = handle.apply(piece);
+        job.changed += changed;
+        if (changed == 0 && piece instanceof Op.Tree tree && job.warnings.size() < MAX_TREE_WARNINGS) {
+            job.warnings.add("no tree grew at " + tree.at() + ": it needs ground below and free space around");
+        }
+    }
+
+    /** Lights what the pieces built: reads each region as it now is and places the op's block on its dark floors. */
+    private void light(Caller caller, EditHandle handle, List<Op.Light> lights, Job job) {
+        for (Op.Light light : lights) {
+            handle.flush();
+            // A room is dark because of the floor under it and the roof over it, and the region given often
+            // stops short of both, so the layer below and some headroom are read with it.
+            Box box = light.box();
+            Box seen = box.withY(Math.max(caller.minY(), box.min().y() - 1), Math.min(caller.maxY(), box.max().y() + LIGHT_HEADROOM));
+            if (seen.volume() > config.maxReadVolume()) seen = box;
+            List<Vec3> spots = Lighting.place(seen, lightRead(caller.world(), seen, handle), emitted(light.block()), box.max().y());
+            if (spots.isEmpty()) continue;
+            job.changed += handle.apply(new Op.Blocks(spots.stream().map(p -> new Op.BlockAt(p, light.block())).toList()));
+        }
+    }
+
+    /**
+     * What the light op sees: the world after the pieces. A preview placed nothing, so that is the world with the
+     * open draft and this job's own dry-run writes laid over it.
+     */
+    private String[] lightRead(String world, Box box, EditHandle handle) {
+        if (!(handle instanceof PreviewHandle preview)) return read(world, box);
+        String[] states = readWorld(world, box);
+        drafts.overlay(world, box, states);
+        return preview.changes().overlay(box, states, true);
+    }
+
+    /** Block light a block gives off; the invisible {@code light} block carries it in its level. */
+    private static int emitted(String block) {
+        BlockState state = BlockState.parse(block);
+        if (state.type().equals("light")) return Integer.parseInt(state.props().getOrDefault("level", "15"));
+        return BlockTraits.light(block);
     }
 
     /** Waits up to the configured time; long jobs report "running" and keep going. */
@@ -642,7 +713,7 @@ public final class BuildService {
                 while (next < pieces.size() && budget > 0) {
                     at = next;
                     Op piece = pieces.get(next++);
-                    job.changed += handle.apply(piece);
+                    apply(handle, piece, job);
                     budget -= piece.volume();
                     applied += piece.volume();
                 }
@@ -650,6 +721,7 @@ public final class BuildService {
                 handle.flush();
                 progress(job, applied);
                 if (next >= pieces.size()) {
+                    light(caller, handle, plan.lights(), job);
                     handle.close();
                     closeDone(null);
                 }
@@ -686,6 +758,20 @@ public final class BuildService {
             if (volume > config.maxVolumePerOp()) {
                 throw new EditException(op.kind() + " touches ~" + volume
                         + " blocks; max per op is " + config.maxVolumePerOp());
+            }
+            if (op instanceof Op.Light light) {
+                if (volume > config.maxReadVolume()) {
+                    throw new EditException("light region is " + volume + " blocks; max is " + config.maxReadVolume());
+                }
+                int emit;
+                try {
+                    emit = emitted(light.block());
+                } catch (NumberFormatException e) {
+                    emit = 0;
+                }
+                if (emit < 1 || emit > 15) {
+                    throw new EditException("'" + light.block() + "' gives no light; use torch, lantern, glowstone, sea_lantern, end_rod or light");
+                }
             }
             Box bounds = op.bounds();
             checkZone(world, bounds);

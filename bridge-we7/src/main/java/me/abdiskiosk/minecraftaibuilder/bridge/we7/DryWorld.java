@@ -1,5 +1,6 @@
 package me.abdiskiosk.minecraftaibuilder.bridge.we7;
 
+import com.sk89q.worldedit.EditSession;
 import com.sk89q.worldedit.math.BlockVector3;
 import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.block.BlockState;
@@ -68,6 +69,9 @@ final class DryWorld implements InvocationHandler {
                 return true;
             }
         }
+        // WorldEdit grows a tree by writing through the edit session it is given, which is the dry one, and only
+        // reads the real world; swallowing it would make the tree op place nothing in a draft.
+        if (name.equals("generateTree") && editSession(args)) return forward(method, args);
         for (String prefix : MUTATORS) {
             if (name.startsWith(prefix)) return nothing(method.getReturnType());
         }
@@ -96,6 +100,14 @@ final class DryWorld implements InvocationHandler {
             if (a instanceof BlockStateHolder<?> b) return b;
         }
         return null;
+    }
+
+    private static boolean editSession(Object[] args) {
+        if (args == null) return false;
+        for (Object a : args) {
+            if (a instanceof EditSession) return true;
+        }
+        return false;
     }
 
     private static Object nothing(Class<?> type) {

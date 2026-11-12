@@ -9,7 +9,10 @@ import java.util.Map;
 /** Turns raw block arrays into token-cheap summaries, or into the {@link Blueprint} text format. */
 public final class RegionCodec {
 
-    private static final String KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%&*+-=@!?~<>/|:;";
+    /** ASCII first, since those are the cheapest to read; Greek and Cyrillic letters carry regions with many states. */
+    private static final String KEYS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz#$%&*+-=@!?~<>/|:;"
+            + "αβγδεζηθικλμνξοπρστυφχψωΓΔΘΛΞΠΣΦΨΩ"
+            + "бвгджзийклмнптфцчшщъыьэюяБГДЖЗИЙЛПФЦЧШЩЪЫЬЭЮЯ";
     public static final char AIR_KEY = '_';
 
     private RegionCodec() {
