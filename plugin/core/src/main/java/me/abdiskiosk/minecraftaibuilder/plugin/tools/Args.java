@@ -6,12 +6,14 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
+import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.TreeSet;
 
@@ -205,14 +207,17 @@ public final class Args {
         throw new EditException("\"" + name + "\" must be \"selection\", \"@area\" or [x1,y1,z1,x2,y2,z2]");
     }
 
-    /** An area is absolute, like a marker. */
+    /** An area marked on the panel's map, else a WorldGuard region (its bounding box); absolute, like a marker. */
     private Box area(String name) {
         Markers markers = service.markers();
-        return markers.area(caller.world(), name).map(Markers.Area::box).orElseThrow(() -> {
-            Set<String> known = markers.areas(caller.world()).keySet();
-            return new EditException("unknown area \"@" + name + "\" in world '" + caller.world() + "'; "
-                    + (known.isEmpty() ? "none marked yet" : "areas: " + String.join(", ", known))
-                    + ". Areas are marked on the panel's map.");
-        });
+        RegionGuard guard = service.guard();
+        return markers.area(caller.world(), name).map(Markers.Area::box)
+                .or(() -> guard == null ? Optional.empty() : guard.region(caller.world(), name))
+                .orElseThrow(() -> {
+                    Set<String> known = markers.areas(caller.world()).keySet();
+                    return new EditException("unknown area \"@" + name + "\" in world '" + caller.world() + "'; "
+                            + (known.isEmpty() ? "none marked yet" : "areas: " + String.join(", ", known))
+                            + ". Areas are marked on the panel's map" + (guard == null ? "." : "; WorldGuard regions work too."));
+                });
     }
 }

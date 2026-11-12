@@ -10,7 +10,10 @@ COPY plugin/gradlew ./
 COPY plugin/gradle ./gradle
 RUN ./gradlew --no-daemon --version
 COPY plugin/ ./
-RUN ./gradlew --no-daemon :core:shadowJar
+# The commit goes into the jar's name, and so into every server's download; .git is not in the build context, so
+# pass it: --build-arg GIT_COMMIT=$(git rev-parse --short HEAD). Coolify passes SOURCE_COMMIT by itself.
+ARG GIT_COMMIT= SOURCE_COMMIT=
+RUN GIT_COMMIT="${GIT_COMMIT:-$SOURCE_COMMIT}" ./gradlew --no-daemon :core:shadowJar
 
 FROM node:24-alpine AS build
 WORKDIR /app

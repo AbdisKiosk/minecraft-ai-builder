@@ -1,0 +1,51 @@
+name: Build and deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # GITHUB_TOKEN can only push to this repository's own package, and GHCR names must be lowercase.
+      - name: Set image name and commit
+        run: |
+          echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> "$GITHUB_ENV"
+          echo "GIT_COMMIT=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: panel/Dockerfile
+          platforms: linux/amd64
+          # The commit in the plugin jar's name; the build context has no .git to read it from.
+          build-args: GIT_COMMIT=${{ env.GIT_COMMIT }}
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      # COOLIFY_WEBHOOK is the resource's Deploy Webhook (Webhooks tab: .../api/v1/deploy?uuid=...), not the GitHub
+      # webhook, which answers 200 "Nothing to do" to anything that is not a GitHub event.
+      - name: Trigger Coolify deployment
+        run: |
+          response=$(curl --fail --silent --show-error '${{ secrets.COOLIFY_WEBHOOK }}' \
+            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}')
+          echo "$response"
+          grep -q '"deployments"' <<< "$response"

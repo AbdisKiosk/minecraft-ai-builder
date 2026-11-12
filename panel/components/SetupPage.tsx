@@ -11,16 +11,17 @@ type Download = 'idle' | 'busy' | 'done' | 'failed';
 function useDownload(id: string) {
   const [state, setState] = useState<Download>('idle');
   const [error, setError] = useState('');
-  const follow = (p: Promise<void>) => {
+  const [name, setName] = useState('');
+  const follow = (p: Promise<string>) => {
     setState('busy');
     setError('');
-    p.then(() => setState('done'), ex => { setState('failed'); setError(message(ex)); });
+    p.then(n => { setName(n); setState('done'); }, ex => { setState('failed'); setError(message(ex)); });
   };
   useEffect(() => {
     const p = pluginDownload(id);
     if (p) follow(p);
   }, [id]);
-  return { state, error, start: () => follow(downloadPlugin(id)) };
+  return { state, error, name, start: () => follow(downloadPlugin(id)) };
 }
 
 function Step({ n, title, done, children }: { n: number; title: string; done?: boolean; children?: ReactNode }) {
@@ -57,17 +58,17 @@ export default function SetupPage({ server }: { server: Server }) {
                 the <a href="https://modrinth.com/plugin/worldedit" target="_blank" rel="noreferrer">WorldEdit</a> plugin.
                 Most Minecraft hosts can install both for you.</li>
               <li>
-                {download.state === 'done' ? <>Find <b>AIBuilder.jar</b> in your downloads. </>
+                {download.state === 'done' ? <>Find <b>{download.name}</b> in your downloads. </>
                   : download.state === 'busy' ? <>Your download is starting… </> : <>Download your copy of the plugin. </>}
                 It&apos;s made for <b>{server.name}</b> and already knows how to connect here.
                 <div className="toolbar step-action">
                   <button className={download.state === 'done' ? 'ghost' : ''} onClick={download.start} disabled={download.state === 'busy'}>
-                    {download.state === 'busy' ? 'Downloading…' : download.state === 'done' ? 'Download again' : 'Download AIBuilder.jar'}
+                    {download.state === 'busy' ? 'Downloading…' : download.state === 'done' ? 'Download again' : 'Download the plugin'}
                   </button>
                 </div>
                 {download.error && <p className="error">Download failed: {download.error}</p>}
               </li>
-              <li>Put <b>AIBuilder.jar</b> in your server&apos;s <code>plugins</code> folder, next to WorldEdit. On a hosted server,
+              <li>Put <b>{download.name || 'the AIBuilder jar'}</b> in your server&apos;s <code>plugins</code> folder, next to WorldEdit. On a hosted server,
                 use the host&apos;s file manager or FTP. Replace any older AIBuilder file that&apos;s already there.</li>
               <li><b>Restart the server.</b></li>
             </ol>

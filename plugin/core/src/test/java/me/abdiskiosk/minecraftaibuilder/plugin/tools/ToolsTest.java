@@ -12,6 +12,7 @@ import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
+import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
@@ -570,5 +571,68 @@ class ToolsTest {
         JsonObject typo = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":"
                 + "{\"name\":\"lesson\",\"arguments\":{\"lesson\":\"x\"}}}")).getAsJsonObject().getAsJsonObject("result");
         assertTrue(typo.get("isError").getAsBoolean());
+    }
+
+    /** WorldGuard with a spawn and a shop; it would refuse every edit if protection were on. */
+    private static final class FakeRegions implements RegionGuard {
+        final Map<String, Box> all = Map.of(
+                "spawn", Box.of(new Vec3(-20, -64, -20), new Vec3(20, 319, 20)),
+                "shop", Box.of(new Vec3(100, 60, 100), new Vec3(110, 80, 110)));
+
+        @Override
+        public String name() {
+            return "WorldGuard test";
+        }
+
+        @Override
+        public List<String> denied(UUID actor, String world, Box box) {
+            return List.of("spawn");
+        }
+
+        @Override
+        public Map<String, Box> regions(String world) {
+            return all;
+        }
+
+        @Override
+        public Optional<Box> region(String world, String name) {
+            return Optional.ofNullable(all.get(name));
+        }
+    }
+
+    @Test
+    void worldGuardRegionsAreBuildTargetsByName() {
+        service.setGuard(new FakeRegions(), false);
+        Args a = new Args(JsonParser.parseString("{\"region\":\"@spawn\"}").getAsJsonObject(), caller, service);
+        assertEquals(Box.of(new Vec3(-20, -64, -20), new Vec3(20, 319, 20)), a.region("region"));
+        String unknown = assertThrows(EditException.class, () -> new Args(JsonParser.parseString("{\"region\":\"@nowhere\"}")
+                .getAsJsonObject(), caller, service).region("region")).getMessage();
+        assertTrue(unknown.contains("WorldGuard regions work too"), unknown);
+    }
+
+    @Test
+    void regionsAreOnlyAProtectionWhenAskedFor() {
+        BuildService.Caller ann = new BuildService.Caller(UUID.randomUUID(), "Ann", "world", new Vec3(0, 64, 0), 0, List.of("Ann"), 0, 255);
+        Box inSpawn = Box.of(new Vec3(0, 64, 0), new Vec3(0, 70, 0));
+        service.setGuard(new FakeRegions(), false);
+        service.checkEditable(ann, inSpawn, "pillar");
+        service.setGuard(new FakeRegions(), true);
+        String refused = assertThrows(EditException.class, () -> service.checkEditable(ann, inSpawn, "pillar")).getMessage();
+        assertTrue(refused.contains("WorldGuard region spawn, where Ann may not build"), refused);
+    }
+
+    @Test
+    void getContextListsRegionsNearestFirst() {
+        Map<String, Box> all = new FakeRegions().all;
+        assertEquals("{\"shop\":[100,60,100,110,80,110],\"spawn\":[-20,-64,-20,20,319,20]}",
+                Tools.regions(all, new Vec3(105, 64, 105)).toString());
+        assertEquals("{\"spawn\":[-20,-64,-20,20,319,20],\"shop\":[100,60,100,110,80,110]}",
+                Tools.regions(all, new Vec3(0, 64, 0)).toString());
+        Map<String, Box> many = new HashMap<>();
+        for (int i = 0; i < 40; i++) many.put("plot" + i, Box.of(new Vec3(i * 10, 0, 0), new Vec3(i * 10 + 9, 10, 9)));
+        JsonObject listed = Tools.regions(many, new Vec3(0, 64, 0));
+        assertEquals(31, listed.size());
+        assertTrue(listed.has("plot0"));
+        assertEquals(10, listed.get("(more, use @name)").getAsInt());
     }
 }

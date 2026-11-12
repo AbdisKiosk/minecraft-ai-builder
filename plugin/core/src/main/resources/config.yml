@@ -32,6 +32,16 @@ safety:
   # Directories place_blueprint may read files from. Empty = any absolute path.
   blueprint-dirs: []
 
+worldguard:
+  # With WorldGuard (6.1+ or 7) installed, Claude sees its regions: get_context lists them, nearest first, and any
+  # region works as "@name", so a player can ask for "a pillar in the spawn region".
+  enabled: true
+  # Also refuse edits where WorldGuard would stop the acting player from building (owners, members, priorities, the
+  # build flags and worldguard.region.bypass.<world> count, as in WorldGuard). With no player, as for a script while
+  # nobody is online, only unprotected ground is buildable. The panel's approve, revert and promote are not checked.
+  # If the hook fails to load while this is on, AIBuilder stays off.
+  protect: false
+
 players:
   # Whether the tell tool may teleport the acting player to a build.
   allow-teleport: true

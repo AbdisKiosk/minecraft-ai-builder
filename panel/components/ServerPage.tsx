@@ -116,7 +116,7 @@ function SettingsCard({ server }: { server: Server }) {
           <p className="muted">Updating the plugin, or moved to a new machine? Download it again and replace the old file in
             the server&apos;s <code>plugins</code> folder. It stays connected to this page.</p>
           <div className="toolbar">
-            <button className="ghost" onClick={download}>Download AIBuilder.jar</button>
+            <button className="ghost" onClick={download}>Download the plugin</button>
             <button className="ghost" onClick={rotate}>Disconnect and make a new key</button>
             <span className="spacer" />
             <button className="danger" onClick={remove}>Delete server</button>

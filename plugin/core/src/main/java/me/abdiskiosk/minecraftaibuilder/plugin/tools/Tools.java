@@ -16,6 +16,7 @@ import me.abdiskiosk.minecraftaibuilder.common.Halves;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
+import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.RegionLint;
 import me.abdiskiosk.minecraftaibuilder.common.Roofs;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
@@ -38,6 +39,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -79,6 +81,7 @@ public final class Tools {
     private static final int MAX_TELL = 256;
     private static final int MAX_BLOCKS_PER_OP = 200_000;
     private static final int MAX_ROOF_SIDE = 256;
+    private static final int MAX_LISTED_REGIONS = 30;
     private static final String TELL_PREFIX = "[AIBuilder] ";
     private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
@@ -87,7 +90,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, player notes, lessons, server version.",
+                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, regions, player notes, lessons, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -311,6 +314,12 @@ public final class Tools {
             JsonObject m = new JsonObject();
             areas.forEach((name, area) -> m.add(name, Markers.json(area)));
             out.add("areas", m);
+        }
+        RegionGuard guard = service.guard();
+        if (guard != null) {
+            // WorldGuard regions, so "build a pillar in spawn" finds spawn; the nearest first when a player acts.
+            Map<String, Box> all = guard.regions(caller.world());
+            if (!all.isEmpty()) out.add("regions", regions(all, caller.feet()));
         }
         JsonArray notes = new JsonArray();
         if (caller.isPlayer()) {
@@ -1062,6 +1071,25 @@ public final class Tools {
         a.add(v.y());
         a.add(v.z());
         return a;
+    }
+
+    /** Regions for get_context: the nearest to {@code at} first (by name without a player), at most a few dozen. */
+    static JsonObject regions(Map<String, Box> all, Vec3 at) {
+        JsonObject m = new JsonObject();
+        all.entrySet().stream()
+                .sorted(at == null ? Map.Entry.comparingByKey()
+                        : Comparator.comparingLong((Map.Entry<String, Box> e) -> distanceSquared(e.getValue(), at)))
+                .limit(MAX_LISTED_REGIONS)
+                .forEach(e -> m.add(e.getKey(), region(e.getValue())));
+        if (all.size() > MAX_LISTED_REGIONS) m.addProperty("(more, use @name)", all.size() - MAX_LISTED_REGIONS);
+        return m;
+    }
+
+    /** From a point to the nearest column of a box, on the ground plane. */
+    static long distanceSquared(Box b, Vec3 p) {
+        long dx = Math.max(0, Math.max(b.min().x() - p.x(), p.x() - b.max().x()));
+        long dz = Math.max(0, Math.max(b.min().z() - p.z(), p.z() - b.max().z()));
+        return dx * dx + dz * dz;
     }
 
     /** A box in the form the region argument takes: {@code [x1,y1,z1,x2,y2,z2]}. */

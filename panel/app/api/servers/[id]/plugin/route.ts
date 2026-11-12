@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
-import { addJarEntry, SETUP_ENTRY, setupProperties } from '../../../../../lib/server/jarSetup';
+import { one } from '../../../../../lib/server/db';
+import { addJarEntry, downloadName, SETUP_ENTRY, setupProperties } from '../../../../../lib/server/jarSetup';
 import { findJar } from '../../../../../lib/server/jarSource';
 import { hub } from '../../../../../lib/server/hub';
 import { currentRelayToken } from '../../../../../lib/server/relayToken';
@@ -15,6 +16,7 @@ export const POST = route<{ id: string }>(async (req, { id }) => {
   await requireRole(user, id, 'owner');
   const jar = await findJar();
   if (!jar) throw new HttpError(503, 'this panel has no plugin jar to hand out; build it with ./gradlew build in plugin/');
+  const server = await one<{ name: string }>('SELECT name FROM servers WHERE id = ?', [id]);
   const { token, replaced } = await currentRelayToken(id);
   if (replaced) hub().kick(id, 'relay token replaced');
   const relay = relayConfig(baseUrl(req), token);
@@ -23,8 +25,8 @@ export const POST = route<{ id: string }>(async (req, { id }) => {
     headers: {
       'Content-Type': 'application/java-archive',
       'Content-Length': String(bytes.length),
-      // Always the same name, so a new download replaces the old file instead of sitting next to it.
-      'Content-Disposition': 'attachment; filename="AIBuilder.jar"',
+      // Which server it is for and which commit it was built from; replace the old jar in plugins/ with it.
+      'Content-Disposition': `attachment; filename="${downloadName(server?.name ?? id, jar.name)}"`,
       'Cache-Control': 'no-store',
     },
   });

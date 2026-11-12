@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import JSZip from 'jszip';
-import { addJarEntry, SETUP_ENTRY, setupProperties } from '../lib/server/jarSetup.ts';
+import { addJarEntry, downloadName, SETUP_ENTRY, setupProperties } from '../lib/server/jarSetup.ts';
 import { deriveAccessToken, deriveRelayToken } from '../lib/server/tokens.ts';
 
 test('adds the setup file to a jar and keeps every other entry', async () => {
@@ -37,4 +37,12 @@ test('access tokens are rebuilt from their seed and never equal a relay token fr
   assert.match(t, /^aibc_[A-Za-z0-9_-]{43}$/);
   assert.equal(deriveAccessToken('seed-1', 'key'), t);
   assert.notEqual(t.slice(5), deriveRelayToken('seed-1', 'key').slice(5));
+});
+
+test('names a download after the server and the commit in the built jar', () => {
+  assert.equal(downloadName('Survival', 'AIBuilder-0.1.0-SNAPSHOT+f7e20c1.jar'), 'AIBuilder-Survival-f7e20c1.jar');
+  assert.equal(downloadName('My Server! (ÆØÅ é)', 'AIBuilder-0.1.0+f7e20c1-dirty.jar'), 'AIBuilder-My-Server-A-e-f7e20c1-dirty.jar');
+  assert.equal(downloadName('Survival', 'AIBuilder-0.1.0-SNAPSHOT.jar'), 'AIBuilder-Survival.jar');
+  assert.equal(downloadName('!!!', 'AIBuilder-0.1.0-SNAPSHOT.jar'), 'AIBuilder.jar');
+  assert.equal(downloadName('x'.repeat(80), 'AIBuilder-1+abc1234.jar'), `AIBuilder-${'x'.repeat(40)}-abc1234.jar`);
 });
