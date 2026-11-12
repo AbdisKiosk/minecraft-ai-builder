@@ -67,7 +67,7 @@ class Builder:
         if not self.url:
             raise AIBuilderError("set AIBUILDER_URL to the server's address on the panel, https://<panel>/s/<server>")
         if not self.token:
-            raise AIBuilderError("set AIBUILDER_TOKEN to an access token made in the panel")
+            raise AIBuilderError("set AIBUILDER_TOKEN to your access token for this server (Connect Claude on its page in the panel)")
         self.player = player
         self.world = world
         self.timeout = timeout

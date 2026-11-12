@@ -1,6 +1,6 @@
-import { useState } from 'react';
-import { api, message } from '../lib/api';
-import { tokensHref } from '../lib/routes';
+import { useEffect, useState } from 'react';
+import { api, message, serverApi } from '../lib/api';
+import { ago } from '../lib/format';
 import type { Server } from '../lib/types';
 import { CopyButton } from './shared';
 
@@ -11,20 +11,38 @@ export function mcpName(server: { id: string; name: string }): string {
   return slug.startsWith('minecraft') ? slug : 'minecraft-' + slug;
 }
 
-/** The steps from nothing to Claude Code building on this server, with a command that has the user's key in it. */
+export interface AccessToken { token: string | null; created: number; lastUsed: number | null }
+
+/** The command that adds the server to Claude Code, with the user's access token for it. */
+export function claudeCommand(server: { id: string; name: string }, token: string): string {
+  return `claude mcp add --transport http --scope user ${mcpName(server)} ${window.location.origin}/s/${server.id}/mcp`
+    + ` --header "Authorization: Bearer ${token}"`;
+}
+
+/** The steps from nothing to Claude Code building on this server, with a command that has the user's token in it. */
 export default function ConnectClaude({ server }: { server: Server }) {
-  const [token, setToken] = useState<string | null>(null);
+  const [saved, setSaved] = useState<AccessToken | null | undefined>(undefined);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const url = `${window.location.origin}/s/${server.id}`;
   const name = mcpName(server);
+  const base = `${serverApi(server.id)}/access-token`;
 
-  const create = async () => {
+  useEffect(() => {
+    let current = true;
+    api<{ accessToken: AccessToken | null }>(base).then(
+      r => { if (current) setSaved(r.accessToken); },
+      ex => { if (current) { setSaved(null); setError(message(ex)); } });
+    return () => { current = false; };
+  }, [base]);
+
+  const make = async (renew: boolean) => {
+    if (renew && !confirm('Make a new token for this server? The command you used before stops working on every computer '
+      + 'that has it, until you run the new one there.')) return;
     setBusy(true);
     setError('');
     try {
-      const label = `Claude Code · ${server.name}`.slice(0, 64);
-      setToken((await api<{ token: string }>('/api/tokens', { method: 'POST', body: JSON.stringify({ label }) })).token);
+      setSaved((await api<{ accessToken: AccessToken }>(base, { method: 'POST', body: JSON.stringify({ renew }) })).accessToken);
     } catch (ex) {
       setError(message(ex));
     } finally {
@@ -32,7 +50,8 @@ export default function ConnectClaude({ server }: { server: Server }) {
     }
   };
 
-  const command = `claude mcp add --transport http --scope user ${name} ${url}/mcp --header "Authorization: Bearer ${token}"`;
+  const token = saved?.token;
+  const command = token ? claudeCommand(server, token) : '';
   return (
     <div className="connect-claude">
       <ol className="howto">
@@ -44,16 +63,19 @@ export default function ConnectClaude({ server }: { server: Server }) {
         <li>
           <b>Paste your command into that terminal</b> and press Enter. It tells Claude Code where your server is and lets
           it build as you.
-          {!token ? (
+          {saved === undefined ? <p className="muted">Loading…</p> : !token ? (
             <div className="toolbar step-action">
-              <button onClick={create} disabled={busy}>{busy ? 'Making your command…' : 'Show my command'}</button>
+              <button onClick={() => make(false)} disabled={busy}>{busy ? 'Making your command…' : 'Show my command'}</button>
             </div>
           ) : (
             <>
               <div className="command"><pre>{command}</pre><CopyButton text={command} label="Copy command" /></div>
-              <p className="muted small-print">This command contains your personal key: don&apos;t share it. It&apos;s shown only now;
-                you can make another any time, and turn old ones off under <a href={tokensHref}>Access tokens</a>.
-                If Claude Code says <code>{name}</code> already exists, run <code>claude mcp remove {name}</code> first.</p>
+              <p className="muted small-print">This command contains your personal token for <b>{server.name}</b>: don&apos;t share it.
+                It works on this server only, and you can come back here to copy it again.{' '}
+                {saved?.lastUsed ? <>Last used {ago(saved.lastUsed)}. </> : null}
+                If Claude Code says <code>{name}</code> already exists, run <code>claude mcp remove {name}</code> first.
+                Shared it by mistake? <button type="button" className="link" onClick={() => make(true)} disabled={busy}>Make a new token</button>.
+              </p>
             </>
           )}
           {error && <p className="error">{error}</p>}
@@ -66,9 +88,10 @@ export default function ConnectClaude({ server }: { server: Server }) {
       </ol>
       <details className="more">
         <summary>Using build scripts or another MCP client?</summary>
-        <p>The server&apos;s MCP address is <code>{url}/mcp</code>; send your access token as <code>Authorization: Bearer …</code>.
+        <p>The server&apos;s MCP address is <code>{url}/mcp</code>; send your token for this server (the one in the command above)
+          as <code>Authorization: Bearer …</code>.
           The Python SDK and the repository&apos;s <code>mcp.json</code> read these two variables:</p>
-        <pre>export AIBUILDER_URL={url} AIBUILDER_TOKEN=&lt;your token&gt;</pre>
+        <pre>export AIBUILDER_URL={url} AIBUILDER_TOKEN={token || '<your token>'}</pre>
       </details>
     </div>
   );

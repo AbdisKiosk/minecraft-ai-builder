@@ -1,4 +1,4 @@
-import { exec, one, query } from './db';
+import { one, query } from './db';
 import type { Role } from './roles';
 import { sha256 } from './tokens';
 
@@ -28,16 +28,6 @@ export async function membersOf(serverId: string): Promise<number[]> {
 export async function serverForRelayToken(token: string): Promise<string | null> {
   const r = await one<{ id: string }>('SELECT id FROM servers WHERE token_hash = ?', [sha256(token)]);
   return r?.id ?? null;
-}
-
-/** The user a client token belongs to; records its use at most once a minute. */
-export async function userForClientToken(token: string): Promise<number | null> {
-  const r = await one<{ id: string; user_id: number; recent: number }>(
-    `SELECT id, user_id, (last_used_at IS NOT NULL AND last_used_at > NOW() - INTERVAL 1 MINUTE) AS recent
-       FROM client_tokens WHERE token_hash = ?`, [sha256(token)]);
-  if (!r) return null;
-  if (!r.recent) exec('UPDATE client_tokens SET last_used_at = NOW() WHERE id = ?', [r.id]).catch(() => {});
-  return r.user_id;
 }
 
 export async function serverExists(id: string): Promise<boolean> {

@@ -1,7 +1,7 @@
 # Panel
 
 `panel/` is the web panel: a hosted, multi-user Next.js app. People sign up, add their Minecraft servers, invite others
-and make access tokens for Claude Code. Each server's AIBuilder plugin connects **out** to the panel over a WebSocket
+and get an access token for each server to connect Claude Code. Each server's AIBuilder plugin connects **out** to the panel over a WebSocket
 and never opens a port on the Minecraft server: the panel is the only way to reach it. The panel serves that server's
 MCP and REST endpoints under `/s/<server>/`, shows live job progress, and keeps a git-like history of every edit with before/after pictures and
 revert.
@@ -84,33 +84,39 @@ there and put the downloaded jar's settings, or the jar itself, in `plugin/core/
 
 ## Connect Claude Code
 
-**Connect Claude** (on the setup page and the server page) makes an access token and shows one command with it inside:
+Each user has one access token (`aibc_`) per server, and it opens that server only. **Connect Claude** (on the setup
+page and the server page) makes it the first time and shows one command with it inside:
 
 ```bash
 claude mcp add --transport http --scope user minecraft-<server name> https://panel.example.com/s/<server>/mcp --header "Authorization: Bearer aibc_..."
 ```
 
-Tokens are listed, and revoked, under **Access tokens**. In this repository, `mcp.json` works for one server as it is:
+Like relay tokens, access tokens are derived from a stored seed (`lib/server/accessTokens.ts`), so the command can be
+shown again: Connect Claude shows the same one every time, and **Access tokens** lists a user's tokens with **Show
+command** and **Revoke**. **Make a new token** replaces it; the old one stops working. A token goes when its user leaves
+the server, and is refused there while their role is below builder.
+
+In this repository, `mcp.json` works for one server as it is:
 
 ```bash
 export AIBUILDER_URL=https://panel.example.com/s/<server> AIBUILDER_TOKEN=aibc_...
 ```
 
-For several servers in one session, add one entry per server (all use the same access token):
+For several servers in one session, add one entry per server, each with that server's token:
 
 ```json
 {
   "mcpServers": {
     "survival": { "type": "http", "url": "https://panel.example.com/s/<server id>/mcp",
-                  "headers": { "Authorization": "Bearer ${AIBUILDER_TOKEN}" } },
+                  "headers": { "Authorization": "Bearer ${SURVIVAL_TOKEN}" } },
     "creative": { "type": "http", "url": "https://panel.example.com/s/<other server id>/mcp",
-                  "headers": { "Authorization": "Bearer ${AIBUILDER_TOKEN}" } }
+                  "headers": { "Authorization": "Bearer ${CREATIVE_TOKEN}" } }
   }
 }
 ```
 
-The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>`, so build scripts can
-run against several servers in parallel.
+The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>` and that server's
+`AIBUILDER_TOKEN`, so build scripts can run against several servers in parallel.
 
 ## Roles
 
@@ -118,14 +124,14 @@ run against several servers in parallel.
 | --- | --- |
 | owner | everything, including downloading the server's plugin, giving it a new key and deleting it |
 | admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
-| builder | build through Claude Code and scripts with an access token, promote regions |
+| builder | build through Claude Code and scripts with their access token for the server, promote regions |
 | viewer | see jobs, history and drafts |
 
 Invite links are single use and last seven days. Owners invite admins, builders and viewers; admins invite builders
 and viewers. A member can be changed or removed only by someone ranked above them, and anyone but the owner can leave.
 
-An access token (`aibc_`) builds on every server where its user is builder or above, so treat it like an SSH key. A
-server token (`aibs_`) only lets a server connect as itself.
+An access token (`aibc_`) builds on one server as its user, so treat it like an SSH key. A server token (`aibs_`) only
+lets a server connect as itself.
 
 ## History
 

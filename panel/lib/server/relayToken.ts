@@ -20,6 +20,7 @@ export async function replaceRelayToken(serverId: string): Promise<string> {
   return token;
 }
 
+/** The key relay and access tokens are derived from. */
 export function relaySecret(): string {
   const s = process.env.RELAY_SECRET || process.env.AUTH0_SECRET;
   if (!s) throw new Error('set AUTH0_SECRET (or RELAY_SECRET)');

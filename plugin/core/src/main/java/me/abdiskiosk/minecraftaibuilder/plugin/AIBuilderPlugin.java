@@ -172,7 +172,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage(NOT_CONNECTED);
         } else {
             sender.sendMessage("Panel relay: " + relay.status());
-            sender.sendMessage("Claude Code and scripts connect through the panel, with an access token made there.");
+            sender.sendMessage("Claude Code and scripts connect through the panel, with an access token from Connect Claude on this server's page.");
         }
         return true;
     }

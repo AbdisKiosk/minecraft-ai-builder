@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
-import { roleOf, serverExists, userForClientToken } from './access';
+import { roleOf, serverExists } from './access';
+import { accessForToken } from './accessTokens';
 import { hub, type Json } from './hub';
 import { atLeast } from './roles';
 import { bearer } from './tokens';
@@ -10,8 +11,8 @@ const MAX_BODY = 16 * 1024 * 1024;
 
 /**
  * The plugin's own endpoints under /s/<server>/, so AIBUILDER_URL=https://<app>/s/<server> works for Claude Code
- * and the Python SDK unchanged: mcp, api/tools, api/<tool>, api/health. A client token reaches the servers where
- * its user is builder or above.
+ * and the Python SDK unchanged: mcp, api/tools, api/<tool>, api/health. An access token opens the one server it was
+ * made for, while its user is builder or above there.
  */
 export async function handlePluginProxy(req: IncomingMessage, res: ServerResponse): Promise<void> {
   const url = new URL(req.url || '/', 'http://x');
@@ -25,12 +26,15 @@ export async function handlePluginProxy(req: IncomingMessage, res: ServerRespons
   }
 
   const token = bearer(req.headers.authorization);
-  const userId = token ? await userForClientToken(token) : null;
-  if (!userId) {
+  const access = token ? await accessForToken(token) : null;
+  if (!access) {
     res.setHeader('WWW-Authenticate', 'Bearer');
-    return send(res, 401, { error: 'missing or wrong bearer token (make one under Access tokens in the panel)' });
+    return send(res, 401, { error: "missing or wrong access token (copy this server's command from Connect Claude on its page in the panel)" });
   }
-  const role = await roleOf(userId, serverId);
+  if (access.serverId !== serverId) {
+    return send(res, 403, { error: "this access token is for another server; each server has its own (Connect Claude on the server's page)" });
+  }
+  const role = await roleOf(access.userId, serverId);
   // Same answer for "no such server" and "not yours", so tokens can't probe for server ids.
   if (!role) return send(res, 404, { error: `unknown server '${serverId}'` });
   if (!atLeast(role, 'builder')) return send(res, 403, { error: `your role on '${serverId}' is ${role}; building needs builder` });

@@ -1,6 +1,6 @@
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 
-/** Server tokens (aibs_) let a plugin connect; client tokens (aibc_) let Claude Code build; invites (aibi_) join. */
+/** Server tokens (aibs_) let a plugin connect; access tokens (aibc_) let Claude Code build; invites (aibi_) join. */
 export function newToken(prefix: 'aibs_' | 'aibc_' | 'aibi_'): string {
   return prefix + randomBytes(32).toString('base64url');
 }
@@ -25,8 +25,9 @@ export function bearer(header: string | null | undefined): string | null {
   return m ? m[1] : null;
 }
 
-// A server's relay token (aibs_) is HMAC(secret, seed). The database keeps only the seed and the token's hash, so a
-// leaked database gives no working token, yet the panel can rebuild the token for every download of the plugin.
+// Relay tokens (aibs_) and access tokens (aibc_) are HMAC(secret, seed). The database keeps only the seed and the
+// token's hash, so a leaked database gives no working token, yet the panel can rebuild a token to show it again (in a
+// plugin download, or in a user's Claude Code command).
 
 export function newSeed(): string {
   return randomBytes(16).toString('base64url');
@@ -34,4 +35,8 @@ export function newSeed(): string {
 
 export function deriveRelayToken(seed: string, key: string): string {
   return 'aibs_' + createHmac('sha256', key).update('relay-token:' + seed).digest('base64url');
+}
+
+export function deriveAccessToken(seed: string, key: string): string {
+  return 'aibc_' + createHmac('sha256', key).update('access-token:' + seed).digest('base64url');
 }

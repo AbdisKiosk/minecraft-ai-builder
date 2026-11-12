@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import JSZip from 'jszip';
 import { addJarEntry, SETUP_ENTRY, setupProperties } from '../lib/server/jarSetup.ts';
-import { deriveRelayToken } from '../lib/server/tokens.ts';
+import { deriveAccessToken, deriveRelayToken } from '../lib/server/tokens.ts';
 
 test('adds the setup file to a jar and keeps every other entry', async () => {
   const zip = new JSZip();
@@ -30,4 +30,11 @@ test('relay tokens are rebuilt from their seed and differ by seed and key', () =
   assert.equal(deriveRelayToken('seed-1', 'key'), a);
   assert.notEqual(deriveRelayToken('seed-2', 'key'), a);
   assert.notEqual(deriveRelayToken('seed-1', 'other'), a);
+});
+
+test('access tokens are rebuilt from their seed and never equal a relay token from the same seed', () => {
+  const t = deriveAccessToken('seed-1', 'key');
+  assert.match(t, /^aibc_[A-Za-z0-9_-]{43}$/);
+  assert.equal(deriveAccessToken('seed-1', 'key'), t);
+  assert.notEqual(t.slice(5), deriveRelayToken('seed-1', 'key').slice(5));
 });
