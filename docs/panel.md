@@ -308,10 +308,18 @@ An asset can say where it attaches and which way it faces, so Claude can put a w
   uploaded `.schem` has neither: nothing is invented for them (migration `007_asset_anchor.sql` adds nullable
   `anchor_x`, `anchor_y`, `anchor_z` and `facing`), so they keep placing by their lowest corner.
 - **Save as asset** starts the anchor at `0 0 0` and the facing at none; clear the anchor to save without one. The
-  map does not know which way the player looks, so the facing is never guessed. **Edit** sets, changes or clears both
-  on any asset, uploads included (`PATCH /api/assets/<id>` with `anchor: [x,y,z] | null`, `facing: string | null`). The
-  card shows them; clicking a block in the 3D view shows its position, to pick an anchor. The **Place…** dialog still
-  takes the lowest corner.
+  map does not know which way the player looks, so the facing is never guessed, and the region is not read until Save,
+  so there is no 3D view to click there. **Edit** sets, changes or clears both on any asset, uploads included
+  (`PATCH /api/assets/<id>` with `anchor: [x,y,z] | null`, `facing: string | null`); on a wide enough screen, and when
+  the asset's Minecraft version is known, it shows the asset in 3D, and clicking a block there makes it the anchor.
+- The card lists both. The 3D view (on the page and in Edit, as typed) outlines the anchor cell in blue, drawn over
+  the blocks so it shows even inside the asset, and a blue arrow sticks out of it the way the asset faces (up/down point
+  up/down); with a facing but no anchor the arrow starts at the middle of that side of the asset.
+- **Place…** on an asset with an anchor asks where the **anchor position** goes (the default) or the **lowest corner**,
+  and sends corner = position − anchor (`lib/anchor.ts`); without an anchor it takes the lowest corner as before. It
+  never turns the asset: the draft import (`draft import` → `Drafts#importRegion`) pastes with rotation 0 and has no
+  rotation argument, so the asset goes in as saved, facing its stored way. Turning to a facing is Claude's `paste`
+  `at` + `facing` only.
 - The relay's asset `get` answer carries `anchor` and `facing` when set; older plugins ignore them. The relay `save`
   accepts them too, though the plugin does not send them. The `get_context` listing leaves them out (its size cap).
 
