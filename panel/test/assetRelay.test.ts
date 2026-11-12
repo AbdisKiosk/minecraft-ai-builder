@@ -166,3 +166,17 @@ test('two saves racing for the last free asset slot: the locked store check deci
   const kept = new Set(f.rows.map(r => r.id));
   for (const key of f.blobs.keys()) assert.ok(kept.has(key.split('/')[1]), `files of the refused save were removed: ${key}`);
 });
+
+test('get carries an anchor and facing only when set, the listing neither', async () => {
+  const f = fakes();
+  await f.save(1, 'legacy');
+  await f.save(1, 'window', { size: [1, 1, 1], anchor: [0, 0, 0], facing: 'south' });
+  const legacy = await f.call(1, 'get', { name: 'legacy' });
+  assert.equal('anchor' in legacy || 'facing' in legacy, false, 'an old asset sends neither');
+  const window = await f.call(1, 'get', { name: 'window' });
+  assert.deepEqual([window.anchor, window.facing], [[0, 0, 0], 'south']);
+  // Not in the listing: get_context's 30 assets are capped at 5,500 characters (ToolsTest#largestAssetListingStaysSmall).
+  for (const a of (await f.call(1, 'list')).assets) assert.deepEqual(Object.keys(a).sort(), ['description', 'name', 'size']);
+  await assert.rejects(f.save(1, 'bad', { anchor: [1, 0, 0] }), /anchor must be/);
+  await assert.rejects(f.save(1, 'bad', { facing: 'sideways' }), /facing must be/);
+});

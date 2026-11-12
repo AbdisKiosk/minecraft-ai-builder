@@ -145,7 +145,13 @@ export interface Asset {
   bytes: number;
   created: number;
   updated: number;
+  /** The attachment cell from the lowest corner, and the way the asset faces; null when not set. */
+  anchor: [number, number, number] | null;
+  facing: Facing | null;
 }
+
+export const FACINGS = ['north', 'south', 'east', 'west', 'up', 'down'] as const;
+export type Facing = typeof FACINGS[number];
 
 export interface AssetList {
   assets: Asset[];

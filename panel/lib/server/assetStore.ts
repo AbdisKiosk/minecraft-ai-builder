@@ -1,5 +1,6 @@
 import type { UserRow } from './access';
-import { AssetError, assetPrefix, fileKey, type AssetFiles, type AssetRow, type AssetStore, type Changes, type Deps } from './assets';
+import { anchorColumns, COLUMNS, row, type Db } from './assetRow';
+import { AssetError, assetPrefix, fileKey, type AssetFiles, type AssetStore, type Changes, type Deps } from './assets';
 import { exec, one, query, transaction } from './db';
 import { hub } from './hub';
 import { relayError } from './plugin-proxy';
@@ -10,23 +11,6 @@ import { HttpError, json, requireRole } from './route';
 
 /** Exporting or importing a large region can take minutes, as for promote. */
 const RELAY_TIMEOUT_MS = 6 * 60_000;
-
-interface Db {
-  id: string; user_id: number; name: string; description: string; tags: unknown;
-  size_x: number; size_y: number; size_z: number; block_count: number; mc_version: string | null; bytes: number | string;
-  created_at: Date; updated_at: Date;
-}
-
-const COLUMNS = 'id, user_id, name, description, tags, size_x, size_y, size_z, block_count, mc_version, bytes, created_at, updated_at';
-
-function row(r: Db): AssetRow {
-  const tags = typeof r.tags === 'string' ? JSON.parse(r.tags) : r.tags;
-  return {
-    id: r.id, owner: r.user_id, name: r.name, description: r.description, tags: Array.isArray(tags) ? tags : [],
-    size: [r.size_x, r.size_y, r.size_z], blocks: r.block_count, mc: r.mc_version, bytes: Number(r.bytes),
-    created: r.created_at.getTime(), updated: r.updated_at.getTime(),
-  };
-}
 
 const taken = (e: unknown, name: string) => (e as { code?: string })?.code === 'ER_DUP_ENTRY'
   ? new AssetError(409, `you already have an asset named '${name}'`) : e;
@@ -56,19 +40,26 @@ export const store: AssetStore = {
       check({ count: Number(r?.n ?? 0), bytes: Number(r?.bytes ?? 0) });
       try {
         await exec(
-          `INSERT INTO assets (id, user_id, name, description, tags, size_x, size_y, size_z, block_count, mc_version, bytes)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [a.id, a.owner, a.name, a.description, JSON.stringify(a.tags), a.size[0], a.size[1], a.size[2], a.blocks, a.mc, a.bytes], c);
+          `INSERT INTO assets (id, user_id, name, description, tags, size_x, size_y, size_z, block_count, mc_version, bytes,
+             anchor_x, anchor_y, anchor_z, facing)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [a.id, a.owner, a.name, a.description, JSON.stringify(a.tags), a.size[0], a.size[1], a.size[2], a.blocks, a.mc, a.bytes,
+            ...anchorColumns(a)], c);
       } catch (e) {
         throw taken(e, a.name);
       }
     });
   },
   async update(owner, id, changes: Changes) {
-    const sets: string[] = [], params: (string | number)[] = [];
+    const sets: string[] = [], params: (string | number | null)[] = [];
     if (changes.name !== undefined) { sets.push('name = ?'); params.push(changes.name); }
     if (changes.description !== undefined) { sets.push('description = ?'); params.push(changes.description); }
     if (changes.tags !== undefined) { sets.push('tags = ?'); params.push(JSON.stringify(changes.tags)); }
+    if (changes.anchor !== undefined) {
+      sets.push('anchor_x = ?, anchor_y = ?, anchor_z = ?');
+      params.push(...anchorColumns({ anchor: changes.anchor, facing: null }).slice(0, 3));
+    }
+    if (changes.facing !== undefined) { sets.push('facing = ?'); params.push(changes.facing); }
     if (!sets.length) return;
     try {
       await exec(`UPDATE assets SET ${sets.join(', ')} WHERE id = ? AND user_id = ?`, [...params, id, owner]);

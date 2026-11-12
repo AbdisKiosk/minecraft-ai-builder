@@ -2,10 +2,11 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import {
-  AssetError, type AssetRow, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps, getAsset,
+  AssetError, type AssetRow, checkAnchor, checkFacing, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps, getAsset,
   listAssets, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, solidBlocks, assetBlocks, updateAsset, viewerBlocks,
 } from '../lib/server/assets.ts';
 import { decode } from '../lib/schematic.ts';
+import { anchorColumns, row as fromDb } from '../lib/server/assetRow.ts';
 
 /** What StateArrays.encode writes (palette + runs, gzipped), for a list of states in y, z, x order. */
 function encode(states: string[]): Buffer {
@@ -244,4 +245,63 @@ test('a failing usage update does not fail a place that happened', async () => {
   f.deps.store.touch = async () => { throw new Error('database is read-only'); };
   const reply = await placeAsset(f.deps, user(1), a.id, { server: 'a', world: 'world', origin: [0, 64, 0] });
   assert.equal(reply.status, 200);
+});
+
+test('an anchor lies inside the asset and a facing is one of six; empty means none', () => {
+  assert.deepEqual(checkAnchor([0, 0, 0], [3, 2, 1]), [0, 0, 0]);
+  assert.deepEqual(checkAnchor([2, 1, 0], [3, 2, 1]), [2, 1, 0]);
+  for (const none of [undefined, null, '']) assert.equal(checkAnchor(none, [3, 2, 1]), null);
+  for (const bad of [[3, 0, 0], [0, 2, 0], [0, 0, 1], [-1, 0, 0], [0.5, 0, 0], [0, 0], '0 0 0', [0, 0, '0']]) {
+    assert.throws(() => checkAnchor(bad, [3, 2, 1]), (e: unknown) => e instanceof AssetError && e.status === 400
+      && e.message === 'anchor must be [x,y,z] inside the asset, from 0 0 0 to 2 1 0', JSON.stringify(bad));
+  }
+  for (const f of ['north', 'south', 'east', 'west', 'up', 'down']) assert.equal(checkFacing(f), f);
+  for (const none of [undefined, null, '']) assert.equal(checkFacing(none), null);
+  for (const bad of ['North', 'n', 'sideways', 90]) {
+    assert.throws(() => checkFacing(bad), /facing must be one of north, south, east, west, up, down/);
+  }
+});
+
+test('Save as asset stores an anchor and facing, refused before the server reads when out of bounds', async () => {
+  const f = fakes();
+  const plain = await save(f.deps, 1, 'plain');
+  assert.deepEqual([plain.anchor, plain.facing], [null, null], 'none unless given');
+  const a = await save(f.deps, 1, 'stair', { anchor: [1, 0, 1], facing: 'east' });
+  assert.deepEqual([a.anchor, a.facing], [[1, 0, 1], 'east']);
+  assert.deepEqual([f.rows.get(a.id)!.anchor, f.rows.get(a.id)!.facing], [[1, 0, 1], 'east']);
+  const before = f.frames.length;
+  await rejects(save(f.deps, 1, 'out', { anchor: [2, 0, 0] }), 400);
+  await rejects(save(f.deps, 1, 'tilted', { facing: 'northeast' }), 400);
+  assert.equal(f.frames.length, before);
+});
+
+test('Edit sets, changes and clears an anchor and facing on any asset', async () => {
+  const f = fakes();
+  const a = await save(f.deps, 1, 'stair');
+  const b = await updateAsset(f.deps, 1, a.id, { anchor: [1, 1, 0], facing: 'up' });
+  assert.deepEqual([b.anchor, b.facing, b.name], [[1, 1, 0], 'up', 'stair']);
+  const c = await updateAsset(f.deps, 1, a.id, { facing: null });
+  assert.deepEqual([c.anchor, c.facing], [[1, 1, 0], null], 'each is cleared on its own');
+  const d = await updateAsset(f.deps, 1, a.id, { anchor: null });
+  assert.deepEqual([d.anchor, d.facing], [null, null]);
+  await rejects(updateAsset(f.deps, 1, a.id, { anchor: [0, 2, 0] }), 400);
+  await rejects(updateAsset(f.deps, 1, a.id, { facing: 'left' }), 400);
+  f.as(2);
+  await rejects(updateAsset(f.deps, 2, a.id, { anchor: [0, 0, 0] }), 404);
+});
+
+test('a MySQL row reads its anchor only when all three cells are set, and writes NULL for none', () => {
+  const db = {
+    id: 'abcdefghijkm', user_id: 1, name: 'w', description: '', tags: '["oak"]', size_x: 3, size_y: 2, size_z: 1,
+    block_count: 4, mc_version: '1.21.4', bytes: '10', created_at: new Date(1), updated_at: new Date(2),
+    anchor_x: null, anchor_y: null, anchor_z: null, facing: null,
+  };
+  const legacy = fromDb(db);
+  assert.deepEqual([legacy.anchor, legacy.facing, legacy.tags, legacy.bytes], [null, null, ['oak'], 10]);
+  const set = fromDb({ ...db, anchor_x: 2, anchor_y: 1, anchor_z: 0, facing: 'west' });
+  assert.deepEqual([set.anchor, set.facing], [[2, 1, 0], 'west']);
+  assert.equal(fromDb({ ...db, anchor_x: 2, anchor_y: null, anchor_z: 0 }).anchor, null);
+  assert.equal(fromDb({ ...db, facing: 'sideways' }).facing, null);
+  assert.deepEqual(anchorColumns({ anchor: null, facing: null }), [null, null, null, null]);
+  assert.deepEqual(anchorColumns({ anchor: [2, 1, 0], facing: 'down' }), [2, 1, 0, 'down']);
 });
