@@ -15,6 +15,8 @@ export interface MapIndex {
   maxY: number;
   /** [rx, rz, version] for each region file. */
   regions: [number, number, string][];
+  /** The folder the plugin reads, relative to the server's worlds. */
+  source?: string;
   spawn?: [number, number];
   players?: { name: string; x: number; y: number; z: number }[];
   markers: Record<string, [number, number, number]>;
@@ -85,10 +87,14 @@ export class TileLayer {
 
   private readonly root: HTMLElement;
   private readonly url: (level: number, x: number, z: number, v: string) => string;
+  private readonly onError: (message: string) => void;
 
-  constructor(root: HTMLElement, url: (level: number, x: number, z: number, v: string) => string) {
+  /** @param onError hears why a tile could not be drawn, when the server says */
+  constructor(root: HTMLElement, url: (level: number, x: number, z: number, v: string) => string,
+      onError: (message: string) => void = () => {}) {
     this.root = root;
     this.url = url;
+    this.onError = onError;
   }
 
   setIndex(index: MapIndex) {
@@ -151,6 +157,11 @@ export class TileLayer {
           // A server that was busy or offline: try again on a later frame.
           tile.failed = true;
           img.remove();
+          // An <img> cannot read the error; ask once more for the message.
+          fetch(img.src, { credentials: 'same-origin' })
+            .then(r => (r.ok || r.status === 404 ? null : r.json()))
+            .then(b => { if (b && typeof b.error === 'string') this.onError(b.error); })
+            .catch(() => {});
           setTimeout(() => { if (this.tiles.get(key) === tile) this.tiles.delete(key); }, 8000);
         };
         img.src = this.url(level, x, z, v);

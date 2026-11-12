@@ -337,7 +337,8 @@ details.more ul { padding-left: 20px; display: grid; gap: 6px; }
 .map-empty { position: absolute; inset: 0; display: grid; place-items: center; color: #8b949e; margin: 0; }
 .map-hud { position: absolute; left: 10px; bottom: 10px; z-index: 30; display: flex; gap: 12px; padding: 4px 10px; border-radius: 6px;
   background: rgba(14, 17, 22, .72); color: #e6edf3; font-size: 12px; pointer-events: none; }
-.map-hud.top { bottom: auto; top: 10px; }
+.map-hud.top { bottom: auto; top: 10px; right: 56px; width: fit-content; max-width: calc(100% - 76px); }
+.map-hud.error-hud { color: #ffb4b8; }
 .map-hud .muted { color: #9aa6b2; }
 .map-zoom { position: absolute; right: 10px; top: 10px; z-index: 30; display: grid; gap: 6px; }
 .map-zoom button { width: 32px; height: 32px; padding: 0; font-size: 18px; line-height: 1; background: rgba(14, 17, 22, .72); color: #e6edf3;

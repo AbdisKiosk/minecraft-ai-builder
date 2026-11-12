@@ -94,7 +94,7 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
           )}
           {builder && ready && (
             <button className={drawMode ? '' : 'ghost'} onClick={() => setDrawMode(!drawMode)} aria-pressed={drawMode}>
-              {drawMode ? 'Drag on the map… (Esc)' : 'Mark area'}</button>
+              {drawMode ? 'Cancel marking (Esc)' : 'Mark area'}</button>
           )}
         </div>
       </div>
@@ -144,6 +144,11 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
   const [, setFrame] = useState(0);
   const [hover, setHover] = useState<{ x: number; z: number } | null>(null);
   const [drawing, setDrawing] = useState<Rect | null>(null);
+  // Marking by clicks: the first corner, waiting for the second.
+  const [corner, setCorner] = useState<{ x: number; z: number } | null>(null);
+  const cornerRef = useRef(corner);
+  cornerRef.current = corner;
+  const [tileError, setTileError] = useState('');
   const raf = useRef(0);
   const anim = useRef(0);
   const props = useRef({ drawMode, onSelect, onDrawn, index });
@@ -170,15 +175,23 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
   useEffect(() => {
     const url = (l: number, x: number, z: number, v: string) =>
       `${serverApi(serverId)}/map/tile/${enc(index.world)}/${l}/${x}/${z}?v=${enc(v)}`;
-    const tl = new TileLayer(tilesRoot.current!, url);
+    const tl = new TileLayer(tilesRoot.current!, url, setTileError);
     layer.current = tl;
     return () => { tl.clear(); layer.current = null; cancelAnimationFrame(raf.current); cancelAnimationFrame(anim.current); };
   }, [serverId, index.world]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     layer.current?.setIndex(index);
+    setTileError('');
     redraw();
   }, [index, redraw]);
+
+  useEffect(() => {
+    if (!drawMode) {
+      setCorner(null);
+      setDrawing(null);
+    }
+  }, [drawMode]);
 
   useEffect(() => {
     const el = stage.current!;
@@ -254,7 +267,9 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
       setDrawing(null);
       return;
     }
-    const drawFrom = props.current.drawMode ? toBlock(e.clientX, e.clientY) : undefined;
+    // Marking: press where no corner is set yet, then either drag to the other corner or let go and click it.
+    // Once a corner is set, dragging moves the map, so the other corner can be anywhere.
+    const drawFrom = props.current.drawMode && !cornerRef.current ? toBlock(e.clientX, e.clientY) : undefined;
     gesture.current = { start: { x: e.clientX, y: e.clientY }, moved: false, drawFrom };
     if (drawFrom) setDrawing(norm(drawFrom, drawFrom));
   };
@@ -262,6 +277,8 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
   const onPointerMove = (e: React.PointerEvent) => {
     const b = toBlock(e.clientX, e.clientY);
     setHover(h => (h && h.x === b.x && h.z === b.z ? h : b));
+    const c = cornerRef.current;
+    if (c) setDrawing(norm(c, b));
     const prev = pointers.current.get(e.pointerId);
     const g = gesture.current;
     if (!prev || !g) return;
@@ -293,13 +310,24 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
     if (pointers.current.size > 0) return;
     gesture.current = null;
     if (!g) return;
+    const end = toBlock(e.clientX, e.clientY);
     if (g.drawFrom && !g.pinch) {
-      const end = toBlock(e.clientX, e.clientY);
-      setDrawing(null);
-      props.current.onDrawn(norm(g.drawFrom, end));
+      if (g.moved) {
+        setDrawing(null);
+        props.current.onDrawn(norm(g.drawFrom, end));
+      } else {
+        setCorner(g.drawFrom); // the first of two clicks
+      }
       return;
     }
-    if (!g.moved) {
+    const c = cornerRef.current;
+    if (c && props.current.drawMode && !g.moved && !g.pinch) {
+      setCorner(null);
+      setDrawing(null);
+      props.current.onDrawn(norm(c, end));
+      return;
+    }
+    if (!g.moved && !props.current.drawMode) {
       // A click: select the smallest area under it, or nothing.
       const b = toBlock(e.clientX, e.clientY);
       const hits = Object.entries(props.current.index.areas)
@@ -365,9 +393,13 @@ function MapStage({ serverId, index, drawMode, selected, onSelect, onDrawn, fly 
         <span className="mono">{hover ? `x ${hover.x}  z ${hover.z}` : ' '}</span>
         <span className="mono muted">{v.scale >= 1 ? `${+v.scale.toFixed(1)} px/block` : `1 px = ${+(1 / v.scale).toFixed(1 / v.scale < 10 ? 1 : 0)} blocks`}</span>
       </div>
-      {drawing && (
-        <div className="map-hud top mono">{drawing.x2 - drawing.x1 + 1} × {drawing.z2 - drawing.z1 + 1}</div>
+      {drawMode && (
+        <div className="map-hud top">
+          {drawing && <span className="mono">{drawing.x2 - drawing.x1 + 1} × {drawing.z2 - drawing.z1 + 1}</span>}
+          <span>{corner ? 'Click the opposite corner' : 'Click one corner, or drag across the area'}</span>
+        </div>
       )}
+      {tileError && !drawMode && <div className="map-hud top error-hud">Part of the map could not be drawn: {tileError}</div>}
       <div className="map-zoom">
         <button className="ghost small" aria-label="Zoom in" onClick={() => setView({ ...view.current, scale: view.current.scale * 2 })}>+</button>
         <button className="ghost small" aria-label="Zoom out" onClick={() => setView({ ...view.current, scale: view.current.scale / 2 })}>−</button>
@@ -416,7 +448,7 @@ const MapSide = memo(function MapSide({ index, selected, builder, onSelect, onFl
           </ul>
         ) : (
           <p className="muted">{builder
-            ? 'None yet. Press Mark area and drag on the map. Claude sees areas in get_context and can build in "@name".'
+            ? 'None yet. Press Mark area, then click two corners on the map (or drag). Claude sees areas in get_context and can build in "@name".'
             : 'None yet. Builders mark areas for Claude to build in.'}</p>
         )}
       </section>
@@ -438,6 +470,10 @@ const MapSide = memo(function MapSide({ index, selected, builder, onSelect, onFl
             ))}
           </ul>
         </section>
+      )}
+      {index.source && (
+        <p className="muted small-print">Drawn from <code>{index.source}</code>, {num(index.regions.length)} region
+          file{index.regions.length === 1 ? '' : 's'}.</p>
       )}
       <p className="muted small-print">Drag to move, scroll or pinch to zoom. The map shows what the server has saved; Claude&apos;s edits show
         right away, other changes after the next autosave.</p>

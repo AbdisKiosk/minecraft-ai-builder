@@ -75,7 +75,8 @@ public final class WorldMap implements BuildService.JobListener {
     private static final int DEFAULT_HEADROOM = 32;
 
     /** One world as the map sees it. */
-    record Dim(String name, Path regionDir, int ceiling, int minY, int maxY) {
+    /** @param source where the region files are, for the panel to show: relative to the server's world container */
+    record Dim(String name, Path regionDir, String source, int ceiling, int minY, int maxY) {
     }
 
     /** The region files of a world, as (rx, rz) to version, read at most every {@link #LISTING_MS}. */
@@ -165,6 +166,7 @@ public final class WorldMap implements BuildService.JobListener {
         out.addProperty("maxZoom", MAX_ZOOM);
         out.addProperty("minY", d.minY());
         out.addProperty("maxY", d.maxY() - 1);
+        out.addProperty("source", d.source());
         JsonArray regions = new JsonArray();
         l.versions().forEach((key, v) -> {
             JsonArray r = new JsonArray();
@@ -289,17 +291,37 @@ public final class WorldMap implements BuildService.JobListener {
         MapRaster raster = new MapRaster(TILE);
         Path file = d.regionDir().resolve("r." + rx + "." + rz + ".mca");
         if (Files.isRegularFile(file)) {
+            int failed = 0;
+            RuntimeException first = null;
             try (RegionFile region = RegionFile.open(file)) {
                 for (int cz = 0; cz < 32; cz++) {
                     for (int cx = 0; cx < 32; cx++) {
                         if (!region.has(cx, cz)) continue;
                         Map<String, Object> chunk = region.chunk(cx, cz, ChunkColumns.SKIP);
-                        if (chunk != null) ChunkColumns.draw(chunk, raster, cx * 16, cz * 16, d.ceiling());
+                        if (chunk == null) continue;
+                        try {
+                            ChunkColumns.draw(chunk, raster, cx * 16, cz * 16, d.ceiling());
+                        } catch (RuntimeException e) {
+                            // One chunk this cannot make sense of stays blank; the rest of the region still draws.
+                            failed++;
+                            if (first == null) first = e;
+                        }
                     }
                 }
+                if (region.unreadable() > 0 || failed > 0) {
+                    logger.warning("map: " + file.getFileName() + " in " + d.source() + ": " + region.unreadable()
+                            + " chunks unreadable, " + failed + " not drawn" + (first == null ? "" : " (" + first + ")"));
+                }
+            } catch (IOException e) {
+                throw new EditException("could not read " + file.getFileName() + " in " + d.source() + ": " + e.getMessage());
             }
         }
-        overlay(d, rx, rz, raster);
+        try {
+            overlay(d, rx, rz, raster);
+        } catch (RuntimeException e) {
+            // The saved version of those chunks is still on the map; it just lags behind the edit.
+            logger.log(Level.WARNING, "map: could not draw the edited chunks of region " + rx + "," + rz + " from the world", e);
+        }
         return MapRaster.png(raster.argb(), TILE);
     }
 
@@ -535,7 +557,15 @@ public final class WorldMap implements BuildService.JobListener {
             World w = Bukkit.getWorld(world);
             if (w == null) throw new EditException("unknown world '" + world + "'; worlds: " + String.join(", ", service.worlds()));
             World.Environment env = w.getEnvironment();
-            return new Dim(world, regionDir(w.getWorldFolder().toPath(), env.name()),
+            Path dir = regionDir(w.getWorldFolder().toPath(), env.name(), key(w));
+            String source;
+            try {
+                source = Bukkit.getWorldContainer().toPath().toAbsolutePath().normalize().relativize(dir.toAbsolutePath().normalize()).toString();
+            } catch (RuntimeException e) {
+                source = dir.toString();
+            }
+            logger.info("map: world '" + world + "' is drawn from " + dir);
+            return new Dim(world, dir, source.replace('\\', '/'),
                     env == World.Environment.NETHER ? ChunkColumns.NETHER_CEILING : ChunkColumns.OPEN_SKY,
                     minHeight(w), w.getMaxHeight());
         });
@@ -544,21 +574,59 @@ public final class WorldMap implements BuildService.JobListener {
     }
 
     /**
-     * Where a world keeps its region files: {@code region} for the overworld, {@code DIM-1/region} and
-     * {@code DIM1/region} for the nether and the end (Bukkit gives each its own folder), or the
-     * {@code dimensions/<namespace>/<name>/region} layout.
+     * Where a world keeps its region files. Before 26.1 that is {@code region} for the overworld and
+     * {@code DIM-1/region} / {@code DIM1/region} for the nether and the end; since 26.1 every dimension is in
+     * {@code dimensions/<namespace>/<name>/region}. A world upgraded to 26.1 can keep an old folder beside the new
+     * one, so of the folders that exist, the one the server wrote to last wins.
+     *
+     * @param key the world's key ("minecraft:overworld"), or null before Paper had them
      */
-    static Path regionDir(Path folder, String environment) {
-        List<String> candidates = switch (environment) {
-            case "NETHER" -> List.of("DIM-1/region", "dimensions/minecraft/the_nether/region", "region");
-            case "THE_END" -> List.of("DIM1/region", "dimensions/minecraft/the_end/region", "region");
-            default -> List.of("region", "dimensions/minecraft/overworld/region");
-        };
+    static Path regionDir(Path folder, String environment, String key) {
+        List<String> candidates = new ArrayList<>(switch (environment) {
+            case "NETHER" -> List.of("DIM-1/region", "dimensions/minecraft/the_nether/region");
+            case "THE_END" -> List.of("DIM1/region", "dimensions/minecraft/the_end/region");
+            case "NORMAL" -> List.of("region", "dimensions/minecraft/overworld/region");
+            default -> List.of();
+        });
+        if (key != null && key.indexOf(':') > 0) {
+            candidates.add("dimensions/" + key.substring(0, key.indexOf(':')) + "/" + key.substring(key.indexOf(':') + 1) + "/region");
+        }
+        Path best = null;
+        long newest = Long.MIN_VALUE;
         for (String c : candidates) {
             Path p = folder.resolve(c);
-            if (Files.isDirectory(p)) return p;
+            if (!Files.isDirectory(p)) continue;
+            long t = newestRegionFile(p);
+            if (best == null || t > newest) {
+                best = p;
+                newest = t;
+            }
         }
+        if (best != null) return best;
+        // The world folder may be the dimension's own folder (newer Paper), or a custom dimension's.
+        Path plain = folder.resolve("region");
+        if (Files.isDirectory(plain) || candidates.isEmpty()) return plain;
         return folder.resolve(candidates.get(0));
+    }
+
+    private static long newestRegionFile(Path dir) {
+        long newest = Long.MIN_VALUE + 1;
+        try (DirectoryStream<Path> files = Files.newDirectoryStream(dir, "r.*.mca")) {
+            for (Path f : files) newest = Math.max(newest, Files.getLastModifiedTime(f).toMillis());
+        } catch (IOException e) {
+            // an unreadable folder counts as an empty one
+        }
+        return newest;
+    }
+
+    /** The world's key, e.g. "minecraft:overworld", on servers that have them (Paper 1.16+). */
+    private static String key(World w) {
+        try {
+            Object k = w.getClass().getMethod("getKey").invoke(w);
+            return k == null ? null : k.toString();
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return null;
+        }
     }
 
     private static int minHeight(World w) {

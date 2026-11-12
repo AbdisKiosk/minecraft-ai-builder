@@ -201,6 +201,8 @@ The plugin draws it from the world's region files on disk (`region/r.<x>.<z>.mca
 its own low-priority threads, so viewing the map never loads a chunk into the server and never touches the main thread
 for unedited chunks. One region (512x512 blocks) takes about 50 ms. A zoom-0 tile is one region; each zoom level
 halves four tiles into one, up to 64x64 regions per tile. The nether is drawn below its bedrock roof.
+Since 26.1 worlds keep their chunks in `dimensions/<namespace>/<name>/region`; when an upgraded world still has its
+old folder too, the map reads whichever the server wrote to last. The side panel shows which folder that is.
 
 Tiles are versioned by their region file's time stamp. The plugin caches them in `plugins/AIBuilder/map/` and draws a
 tile again only when its region changes; the panel keeps them in memory (`MAP_CACHE_MB`, default 256) and the browser
@@ -209,7 +211,7 @@ server saves, so chunks an edit job changed are drawn from a snapshot of the loa
 builds show at once, players' changes after the next autosave. While a server is offline the panel shows the last map
 it saw.
 
-**Mark area** (builders) lets you drag a rectangle onto the map, name it and say what should go there. Claude sees areas
+**Mark area** (builders): click two opposite corners on the map (drag between the clicks to move it) or drag across the area, then name it and say what should go there. Claude sees areas
 in `get_context` with their notes and can use `"@name"` wherever a region goes. The height runs from the lowest ground
 in the area to 32 blocks above the highest, unless you give one. Areas live in the plugin's `areas.json` and share
 their names with markers.
