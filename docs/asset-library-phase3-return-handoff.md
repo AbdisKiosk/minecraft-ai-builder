@@ -1,7 +1,53 @@
 # Return handoff: asset-library phase 3
 
-This is a return update for the session that finished phase 2, not an introduction to the project. Phase 2 is merged.
-Phase 3 has started with the `.schem` upload; the other four phase-3 bullets are still a plan.
+## Update: all five phase-3 bullets are built (2026-11-12)
+
+The sections after this one are the earlier handoff, kept for its plan, decisions and gotchas. This update supersedes
+its "Current state", "Latest verified results" and "Decisions still needed".
+
+**Branch** `asset-library-phase-3`, with `origin/main` (`1b7c5e3`) merged in. Each step was built on its own branch
+from `0f7adef` and merged with `--no-ff`, so `git log --first-parent` shows them one by one:
+
+| Step | Merged from | What shipped |
+|---|---|---|
+| Fix | `0f7adef` | `Lessons` repeated an id after a reload (made `LessonsTest` flaky) |
+| 1 Version mismatch | `phase3-version-mismatch` | Place… warns when the asset is newer than the server (`lib/mcVersion.ts`) and lists skipped states; `paste name=` of a library asset leaves out unknown states as keep cells and returns `skipped` (≤10) + `skipped_total` |
+| 2 Anchor and facing | `phase3-anchor` | Migration `007`; anchor/facing on Save as asset and Edit; `paste` `at` + `facing` (`common/Anchor.java`), checked against WorldEdit's own transform in `AnchorRotationTest` |
+| 3 Sharing | `phase3-sharing` | Migration `008`; `/api/assets/[id]/shares`; Share dialog and "Shared with me" filter; relay `list`/`get` serve shared assets |
+| 4 Account link + in-game save | `phase3-account-link` | Migration `009`; Minecraft account card on the Access tokens page; `/aibuilder link|unlink|asset save`; relay frames `link`, `unlink`, `player_asset`; `AssetLibrary.saveRegion` shared with `save_blueprint` |
+| Fix | `b8bcd61` | `node dist/server.js` (the Docker `CMD`) failed at startup on `main` too: esbuild hoisted `next/server` out of the lazily imported asset store. The build now uses `--splitting --outdir=dist` and aliases `next/server` to `next/server.js` |
+
+**Decisions taken** (the defaults this document recommended; confirm or change them in the PR):
+1. Facing is stored six-way, but only the four horizontal facings turn; an `up`/`down` asset pastes only facing its
+   own way (no vertical flip in `Blueprint`).
+2. Legacy and uploaded assets keep NULL anchor and facing. `at` then means the lowest corner; `facing` is refused.
+3. The account link is global (UUID → one account, at most 5 UUIDs per account), made with an 8-character code valid
+   10 minutes, stored hashed, single use, 5 codes per user per 10 minutes, 20 link attempts per server per minute.
+4. Sharing reaches members with the builder role or above, and only while the owner is a builder there too. Own
+   assets win on `paste name=`; a name shared by several owners is a 409 naming them.
+5. Version mismatch is report-only; nothing is remapped.
+6. The `.schem` upload cap stays 8 MB.
+7. `/aibuilder link|unlink|asset` need the new permission `aibuilder.asset` (default op).
+
+**Verified:** panel `npm test` (105), `npm run typecheck`, `npm run build`, and the built `dist/server.js` starts and
+answers `/api/health`; `cd plugin && ./gradlew build` with the tool-list budget (5,399 of 5,400 characters); SDK tests;
+`git diff --check`. Migrations 001-006 then 007 and 008 were applied by agents to a throwaway MySQL 8.4 with existing
+assets.
+
+**Not verified yet:** nothing ran in a browser (Auth0) or against a live Minecraft server: real WorldEdit v2/v3
+`.schem` files, quota and cleanup on R2, the new dialogs, a live `paste` with `at` + `facing`, a shared paste through
+the relay with R2, `/aibuilder link` and `/aibuilder asset save` on a running server, and old-panel/new-plugin
+combinations (reasoned through only: every new field and frame is additive, and a plugin without `links:true` in the
+welcome refuses the in-game commands at once).
+
+**Known gaps:** no anchor marker in the 3D view; anchors are not in `get_context` (its 30-asset listing is at 5,201 of
+5,500 characters); the Place… dialog still takes the lowest corner; on a server with review on, an in-game save
+includes the open draft (as `save_blueprint` does); the plugin's "Promote again with skip unknown blocks" text also
+shows in the Place… dialog.
+
+**Old intro follows.** This is a return update for the session that finished phase 2, not an introduction to the
+project. Phase 2 is merged. Phase 3 has started with the `.schem` upload; the other four phase-3 bullets are still a
+plan.
 
 ## Work completed since the phase 2 handoff
 
