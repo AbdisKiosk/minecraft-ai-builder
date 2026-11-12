@@ -315,6 +315,10 @@ public final class Tools {
         Box box = a.region("region");
         String mode = a.str("mode", "summary");
         if (!mode.equals("summary") && !mode.equals("full")) throw new EditException("mode must be summary or full");
+        return service.reading(a.caller().world(), box, () -> readNow(a, service, box, mode));
+    }
+
+    private static ToolResult readNow(Args a, BuildService service, Box box, String mode) {
         String[] states = service.read(a.caller().world(), box);
         if (mode.equals("full")) {
             RegionCodec.Encoded enc = RegionCodec.encode(box, states);
@@ -352,9 +356,11 @@ public final class Tools {
             }
             if (kinds.isEmpty()) kinds = null;
         }
-        String[] states = service.read(a.caller().world(), box);
+        Set<String> only = kinds;
+        List<RegionLint.Issue> found = service.reading(a.caller().world(), box, () ->
+                RegionLint.check(box, service.read(a.caller().world(), box), only, service.bridge().catalog().legacy(), limit));
         JsonArray issues = new JsonArray();
-        for (RegionLint.Issue issue : RegionLint.check(box, states, kinds, service.bridge().catalog().legacy(), limit)) {
+        for (RegionLint.Issue issue : found) {
             JsonObject o = new JsonObject();
             o.addProperty("kind", issue.kind());
             o.addProperty("count", issue.count());
@@ -380,7 +386,8 @@ public final class Tools {
             case "large" -> IsoRenderer.Size.LARGE;
             default -> throw new EditException("size must be small, medium or large");
         };
-        IsoRenderer.Rendered rendered = IsoRenderer.render(box, service.read(a.caller().world(), box), view, corner, size);
+        IsoRenderer.Rendered rendered = service.reading(a.caller().world(), box, () ->
+                IsoRenderer.render(box, service.read(a.caller().world(), box), view, corner, size));
         JsonObject meta = new JsonObject();
         meta.add("box", region(rendered.box())); // what the image shows: the region cropped to its blocks
         return ToolResult.image(rendered.png(), meta);

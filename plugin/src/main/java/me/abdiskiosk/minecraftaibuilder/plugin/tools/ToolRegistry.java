@@ -53,6 +53,10 @@ public final class ToolRegistry {
         } catch (RuntimeException e) {
             logger.log(Level.WARNING, "tool " + name + " failed", e);
             return ToolResult.error(name + " failed: " + e);
+        } catch (OutOfMemoryError e) {
+            // Unwinding to here has let go of what the call built, so the server can carry on.
+            logger.warning("tool " + name + " ran out of memory");
+            return ToolResult.error(name + " ran out of server memory and was stopped. Use a smaller region, or give the server more memory.");
         }
     }
 }

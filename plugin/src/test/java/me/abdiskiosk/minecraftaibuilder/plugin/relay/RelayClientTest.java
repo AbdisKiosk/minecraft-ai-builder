@@ -64,7 +64,7 @@ class RelayClientTest {
 
         WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
                 new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> m.getName().equals("name") ? "fake" : null);
-        PluginConfig config = new PluginConfig(false, "127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 30,
+        PluginConfig config = new PluginConfig(false, "127.0.0.1", 0, "", 4000, 2_000_000L, 262_144L, 0, 30,
                 List.of(), "", null, List.of(), true, "", "", null, null);
         BuildService service = new BuildService(null, bridge, config, dir);
         History.Settings settings = new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000);
