@@ -333,6 +333,48 @@ that account's library on every server where it is a builder.
   panel gets no account, so it behaves as before (server blueprints only). An older plugin with a new panel ignores
   the grant and never uses the library.
 
+### Save assets in game
+
+A player saves a WorldEdit selection into their own library from the game, after linking their Minecraft account to
+their panel account once.
+
+1. **Link.** On the panel, **Access tokens** (top bar) → **Minecraft account** → **Make a link code** shows a command
+   such as `/aibuilder link ABCD-EFGH`. Type it in game, within ten minutes, on a server where you are a builder. The
+   card then lists the linked player (name and UUID) with **Unlink**.
+2. **Save.** Select a region with WorldEdit and run `/aibuilder asset save <name> [description]`. The asset is saved
+   as if Claude had saved it with `save_blueprint`: the same name rules, quota, 2,000,000-block and 5 MB limits, and
+   the server's `max-read-volume`. The world is read through the plugin's large-read queue and memory check, and the
+   panel checks the name and quota before any chunk is loaded. A selection that is not a cuboid saves its bounding
+   box. With review on, the read includes the open draft, as Claude's reads do.
+3. **Unlink.** `/aibuilder unlink` in game (on a server where the linked account is a member), or **Unlink** on the
+   panel.
+
+Rules:
+
+- The commands need the `aibuilder.asset` permission (default: op; give it to your builders with a permissions plugin)
+  and a player. Everything else under `/aibuilder` still needs `aibuilder.admin`.
+- A link is global: one Minecraft account belongs to at most one panel account, and an account links at most five.
+  It is not tied to the server it was made on, but linking and every save need the **builder** role on the server the
+  command runs on, checked again on each save. A save never falls back to the server's own blueprints: without a link
+  it fails and names the panel page and `/aibuilder link`.
+- Codes: 8 characters from an alphabet without look-alikes (no I, O, 0 or 1), case, spaces and dashes ignored. Each is
+  single use, valid for ten minutes, and spent by its first use, even a refused one. Making a new code cancels the
+  unused one. A user can make at most five codes in ten minutes. Only the SHA-256 of a code is stored
+  (`minecraft_link_codes`, migration `009_minecraft_links.sql`), and codes are never logged. A server can try at most
+  twenty codes a minute.
+- Storage: `minecraft_links` (player UUID, user, last-known player name, when linked). Deleting the user deletes its
+  links.
+- Saves need object storage, like the rest of the library. A panel from before account links answers nothing to
+  these frames, so the plugin does not send them: without `links: true` in the relay `welcome`, the commands say the
+  panel does not support account linking yet.
+
+**Trust.** The plugin reports the player's UUID, and the panel cannot check it: a malicious server operator could
+claim a linked player's UUID. That only reaches the library of an account that is a builder on that very server
+(someone the server's owner chose to let build there), and only to add assets to it (in-game requests cannot list,
+fetch or delete assets). The server is always the one the relay socket authenticated with its token, never a frame
+field, and the plugin never names a user. A server can unlink a UUID only when the linked account is a member of that
+server.
+
 ## Drafts: approve edits before they are placed
 
 Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone
