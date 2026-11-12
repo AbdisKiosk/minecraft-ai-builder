@@ -964,13 +964,14 @@ public final class Tools {
             String name = savedName(a.str("name"));
             AssetLibrary library = a.service().personalLibrary();
             if (!Files.isRegularFile(savedDir(a.service()).resolve(name + ".json")) && library != null) {
-                Blueprint asset;
+                AssetLibrary.Asset asset;
                 try {
                     asset = library.load(name, a.service().config().maxVolumePerOp());
                 } catch (EditException e) {
                     throw new EditException("no local blueprint '" + name + "'; " + e.getMessage(), e);
                 }
-                return withoutUnknown(asset, name, a);
+                // Skipped cells are kept, not removed, so the size and with it the anchor stay valid.
+                return new AssetLibrary.Asset(withoutUnknown(asset.blueprint(), name, a), asset.anchor());
             }
             json = readSavedBlueprint(name, a.service());
         } else {

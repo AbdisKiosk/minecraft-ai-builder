@@ -390,7 +390,9 @@ class ToolsTest {
     void pasteAtPutsTheAnchorThereAndFacingTurnsTheAsset() throws Exception {
         // A 3x1x2 library asset (x, y, z) whose anchor is cell 2,0,0, facing north. Its bytes are already in the cache,
         // so the library resolves it through "get" without a download.
-        String[] states = {"stone", "stone", "oak_planks", "stone", "stone", "stone"};
+        // States the fake server knows, so the version-mismatch skip leaves them all in.
+        String S = "oak_stairs[facing=north]", P = "oak_stairs[facing=east]";
+        String[] states = {S, S, P, S, S, S};
         byte[] data = StateArrays.encode(states);
         String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));
         Files.createDirectories(dataDir.resolve("asset-cache/7"));
