@@ -4,6 +4,7 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
+import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
 
@@ -59,14 +60,34 @@ public final class AssetLibrary {
         return out;
     }
 
-    public void check(String name) { request.apply("check", named(name)); }
+    /** The most blocks an asset holds (the panel's MAX_REGION_VOLUME). */
+    public static final long MAX_VOLUME = 2_000_000;
+    public static final int MAX_DESCRIPTION = 1000;
 
-    public JsonObject save(String name, String description, int sx, int sy, int sz, byte[] data) {
+    /** Saves a region into the calling account's library: see {@link #saveRegion(BiFunction, BuildService, String, Box, String, String)}. */
+    public JsonObject saveRegion(BuildService service, String world, Box box, String name, String description) {
+        return saveRegion(request, service, world, box, name, description);
+    }
+
+    /**
+     * Saves a region of the world as an asset, the one way both {@code save_blueprint} and {@code /aibuilder asset save}
+     * do it: refuses a region over {@link #MAX_VOLUME} blocks, asks the panel to check the name and quota before any
+     * chunk is loaded, reads through {@link BuildService#reading} (so the memory rules apply and {@code max-read-volume}
+     * limits it), and sends at most {@link #MAX_BYTES} of region data.
+     *
+     * @param request whose library: the call's grant (save_blueprint) or the player's link (in game)
+     */
+    public static JsonObject saveRegion(BiFunction<String, JsonObject, JsonObject> request, BuildService service, String world,
+                                        Box box, String name, String description) {
+        if (box.volume() > MAX_VOLUME) throw new EditException("assets are limited to " + MAX_VOLUME + " blocks; save a smaller region");
+        if (description.length() > MAX_DESCRIPTION) throw new EditException("description is longer than " + MAX_DESCRIPTION + " characters");
+        request.apply("check", named(name)); // quota/name failures before loading any chunks
+        byte[] data = service.reading(world, box, () -> StateArrays.encode(service.read(world, box)));
         if (data.length > MAX_BYTES) throw new EditException("asset region is larger than 5 MB; save a smaller region");
         JsonObject args = named(name);
         args.addProperty("description", description);
         JsonArray size = new JsonArray();
-        size.add(sx); size.add(sy); size.add(sz);
+        size.add(box.sizeX()); size.add(box.sizeY()); size.add(box.sizeZ());
         args.add("size", size);
         args.addProperty("data", Base64.getEncoder().encodeToString(data));
         return request.apply("save", args);

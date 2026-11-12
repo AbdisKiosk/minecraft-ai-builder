@@ -48,6 +48,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     /** Runs the background correction checks, one at a time. */
     private java.util.concurrent.ExecutorService checks;
     private BuildService service;
+    private AccountCommands accounts;
 
     @Override
     public void onEnable() {
@@ -76,6 +77,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
         }
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
+        accounts = new AccountCommands(this, service, () -> relay, getLogger());
         if (getServer().getPluginManager().isPluginEnabled("WorldGuard") && getConfig().getBoolean("worldguard.enabled", true)) {
             boolean protect = getConfig().getBoolean("worldguard.protect", false);
             try {
@@ -182,6 +184,16 @@ public final class AIBuilderPlugin extends JavaPlugin {
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (bridge == null) {
             sender.sendMessage("AIBuilder is not running; check the server log.");
+            return true;
+        }
+        // Players with aibuilder.asset may link and save without aibuilder.admin, which everything else needs.
+        if (args.length > 0 && AccountCommands.COMMANDS.contains(args[0].toLowerCase(Locale.ROOT))) {
+            accounts.run(sender, args);
+            return true;
+        }
+        if (!sender.hasPermission("aibuilder.admin")) {
+            sender.sendMessage("You need aibuilder.admin for this. Players with " + AccountCommands.PERMISSION
+                    + " can use /aibuilder link <code>, /aibuilder unlink and /aibuilder asset save <name> [description].");
             return true;
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("stats")) {

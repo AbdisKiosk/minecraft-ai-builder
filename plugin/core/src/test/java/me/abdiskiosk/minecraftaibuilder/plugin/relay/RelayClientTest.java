@@ -4,8 +4,11 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.RelayProtocol;
+import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
+import me.abdiskiosk.minecraftaibuilder.plugin.AccountCommands;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
@@ -46,6 +49,9 @@ class RelayClientTest {
     private BuildService service;
     private ToolRegistry registry;
     private String url;
+    /** The fake WorldEdit selection every player has, and how many reads reached the world. */
+    private volatile SelectionInfo selection;
+    private final java.util.concurrent.atomic.AtomicInteger reads = new java.util.concurrent.atomic.AtomicInteger();
 
     @BeforeEach
     void start() throws Exception {
@@ -54,7 +60,17 @@ class RelayClientTest {
 
         Path dir = Files.createTempDirectory("relay");
         WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
-                new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> m.getName().equals("name") ? "fake" : null);
+                new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> switch (m.getName()) {
+                    case "name" -> "fake";
+                    case "selection" -> java.util.Optional.ofNullable(selection);
+                    case "read" -> {
+                        reads.incrementAndGet();
+                        String[] states = new String[(int) ((Box) a[1]).volume()];
+                        java.util.Arrays.fill(states, "stone");
+                        yield states;
+                    }
+                    default -> null;
+                });
         PluginConfig config = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
                 List.of(), "", null, List.of(), true, "", "", null, null, null);
         service = new BuildService(null, bridge, config, dir);
@@ -325,6 +341,133 @@ class RelayClientTest {
         } finally {
             storage.stop(0);
         }
+    }
+
+    // ---- account links and in-game saves ----
+
+    private static final java.util.UUID ALEX = java.util.UUID.fromString("0f8b3c2e-1d4a-4b5c-9e6f-7a8b9c0d1e2f");
+
+    /** Waits until the plugin has handled everything the panel sent before, such as a welcome. */
+    private void settled() throws Exception {
+        assertEquals(200, panel.request(frame("{\"t\":\"api\",\"tool\":\"tools\"}")).get("status").getAsInt());
+    }
+
+    private String perform(AccountCommands.Request request) {
+        return AccountCommands.perform(request, relay, service, ALEX, "Alex");
+    }
+
+    private String refused(AccountCommands.Request request) {
+        return org.junit.jupiter.api.Assertions.assertThrows(EditException.class, () -> perform(request)).getMessage();
+    }
+
+    @Test
+    void linksAndUnlinksAPlayerByUuidWithoutNamingAnAccount() throws Exception {
+        settled();
+        panel.playerHandler = f -> frame("{\"linked\":true,\"already\":false}");
+        assertTrue(perform(new AccountCommands.Link("abcd-efgh")).startsWith("Linked to your panel account."));
+        JsonObject link = panel.playerFrames.poll(5, TimeUnit.SECONDS);
+        assertNotNull(link);
+        assertEquals(RelayProtocol.LINK, link.get("t").getAsString());
+        assertEquals("abcd-efgh", link.get("code").getAsString(), "the panel normalizes the code");
+        assertEquals(ALEX.toString(), link.getAsJsonObject("player").get("uuid").getAsString());
+        assertEquals("Alex", link.getAsJsonObject("player").get("name").getAsString());
+        assertFalse(link.has("user") || link.has("assetKey") || link.has("server"), "the panel decides who and where: " + link);
+
+        panel.playerHandler = f -> frame("{\"linked\":true,\"already\":true}");
+        assertTrue(perform(new AccountCommands.Link("abcdefgh")).startsWith("This Minecraft account was already linked"));
+        panel.playerFrames.clear();
+
+        panel.playerHandler = f -> frame("{\"unlinked\":true}");
+        assertTrue(perform(new AccountCommands.Unlink()).startsWith("Unlinked"));
+        JsonObject unlink = panel.playerFrames.poll(5, TimeUnit.SECONDS);
+        assertEquals(RelayProtocol.UNLINK, unlink.get("t").getAsString());
+        assertFalse(unlink.has("code"));
+
+        // The panel's refusal reaches the player in its own words.
+        panel.playerStatus = 400;
+        panel.playerHandler = f -> frame("{\"error\":\"this code is wrong, used or expired; make a new one on the panel\"}");
+        assertEquals("this code is wrong, used or expired; make a new one on the panel", refused(new AccountCommands.Link("abcdefgh")));
+    }
+
+    @Test
+    void anOlderPanelIsToldApartAtOnceInsteadOfWaitingForAnAnswer() throws Exception {
+        settled();
+        panel.send("{\"t\":\"welcome\",\"archive\":false,\"assets\":true}"); // a panel from before account links
+        settled();
+        long start = System.nanoTime();
+        assertEquals("this panel does not support account linking yet; ask its owner to update it", refused(new AccountCommands.Link("abcdefgh")));
+        assertEquals("this panel does not support account linking yet; ask its owner to update it", refused(new AccountCommands.Unlink()));
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 64, 0), new Vec3(0, 64, 0)), 1, List.of());
+        assertEquals("this panel does not support account linking yet; ask its owner to update it",
+                refused(new AccountCommands.Save("window", "")));
+        assertTrue(System.nanoTime() - start < TimeUnit.SECONDS.toNanos(5), "no request waited for an answer");
+        assertTrue(panel.playerFrames.isEmpty());
+        assertEquals(0, reads.get());
+
+        panel.send("{\"t\":\"welcome\",\"archive\":false,\"assets\":false,\"links\":true}"); // links, but no object storage
+        settled();
+        assertEquals("the panel has no asset library (it needs object storage configured)", refused(new AccountCommands.Save("window", "")));
+        assertEquals(0, reads.get());
+    }
+
+    @Test
+    void savesTheSelectionIntoTheLinkedPlayersLibrary() throws Exception {
+        fakeServer();
+        settled();
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 64, 0), new Vec3(1, 64, 1)), 4, List.of());
+        panel.playerHandler = f -> {
+            JsonObject args = f.getAsJsonObject("args");
+            assertEquals("window", args.get("name").getAsString());
+            if (f.get("op").getAsString().equals("check")) return new JsonObject();
+            assertEquals("oak window", args.get("description").getAsString());
+            assertEquals("[2,1,2]", args.get("size").toString());
+            assertEquals(List.of("stone", "stone", "stone", "stone"), List.of(StateArrays.decode(
+                    java.util.Base64.getDecoder().decode(args.get("data").getAsString()), 4)));
+            return frame("{\"saved\":\"window\",\"size\":[2,1,2],\"blocks\":4,\"library\":true}");
+        };
+        assertEquals("Saved window (2x1x2, 4 blocks) to your asset library on the panel.",
+                perform(new AccountCommands.Save("window", "oak window")));
+        JsonObject check = panel.playerFrames.poll(5, TimeUnit.SECONDS), save = panel.playerFrames.poll(5, TimeUnit.SECONDS);
+        assertEquals(List.of("check", "save"), List.of(check.get("op").getAsString(), save.get("op").getAsString()));
+        for (JsonObject f : List.of(check, save)) {
+            assertEquals(RelayProtocol.PLAYER_ASSET, f.get("t").getAsString());
+            assertEquals(ALEX.toString(), f.getAsJsonObject("player").get("uuid").getAsString());
+            assertFalse(f.has("assetKey") || f.has("user"), "authorized by the link, not a grant or a user id: " + f);
+        }
+        assertTrue(Files.notExists(service.dataDir().resolve("blueprints/window.json")), "never saved on the server instead");
+
+        selection = new SelectionInfo("world", "poly2d", Box.of(new Vec3(0, 64, 0), new Vec3(1, 64, 1)), 3, List.of());
+        assertTrue(perform(new AccountCommands.Save("window", "oak window")).endsWith("A poly2d selection saves its bounding box."));
+    }
+
+    @Test
+    void anInGameSaveIsRefusedBeforeTheWorldIsRead() throws Exception {
+        fakeServer();
+        settled();
+        assertEquals("Make a WorldEdit selection first (//wand, or //pos1 and //pos2).", refused(new AccountCommands.Save("window", "")));
+
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 0, 0), new Vec3(199, 99, 199)), 4_000_000, List.of());
+        assertEquals("assets are limited to 2000000 blocks; save a smaller region", refused(new AccountCommands.Save("window", "")));
+        assertTrue(panel.playerFrames.isEmpty(), "too large is said before asking the panel");
+
+        // Not linked (or no quota, or a taken name): the panel says so before any chunk is loaded.
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 64, 0), new Vec3(1, 64, 1)), 4, List.of());
+        panel.playerStatus = 403;
+        panel.playerHandler = f -> frame("{\"error\":\"your Minecraft account is not linked to a panel account: make a code under "
+                + "Minecraft account on https://panel.example/dashboard#/tokens, then run /aibuilder link <code> here\"}");
+        assertTrue(refused(new AccountCommands.Save("window", "")).contains("/aibuilder link <code>"));
+        assertEquals("check", panel.playerFrames.poll(5, TimeUnit.SECONDS).get("op").getAsString());
+        assertTrue(panel.playerFrames.isEmpty(), "nothing is saved after a refused check");
+
+        // Over max-read-volume: the read limit save_blueprint has applies here too.
+        panel.playerStatus = 200;
+        panel.playerHandler = f -> new JsonObject();
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 0, 0), new Vec3(99, 29, 99)), 300_000, List.of());
+        assertTrue(refused(new AccountCommands.Save("window", "")).contains("max read is 262144"));
+        assertEquals("check", panel.playerFrames.poll(5, TimeUnit.SECONDS).get("op").getAsString());
+        assertTrue(panel.playerFrames.isEmpty());
+        assertEquals(0, reads.get(), "no refused save read the world");
+        assertTrue(Files.notExists(service.dataDir().resolve("blueprints/window.json")));
     }
 
     @Test

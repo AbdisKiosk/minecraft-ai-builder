@@ -25,7 +25,6 @@ import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.AssetLibrary;
-import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
@@ -1001,7 +1000,8 @@ public final class Tools {
         return service.dataDir().resolve("blueprints");
     }
 
-    private static String savedName(String name) {
+    /** A saved blueprint's or asset's name; also checked by {@code /aibuilder asset save}. */
+    public static String savedName(String name) {
         if (!SAVED_NAME.matcher(name).matches()) throw new EditException("name must be 1-40 of a-z, 0-9, _ and -");
         return name;
     }
@@ -1034,11 +1034,7 @@ public final class Tools {
         if (description.length() > 1000) throw new EditException("description is longer than 1000 characters");
         AssetLibrary library = service.personalLibrary();
         if (library != null) {
-            if (box.volume() > 2_000_000) throw new EditException("assets are limited to 2000000 blocks; save a smaller region");
-            library.check(name); // quota/name failures before loading any chunks
-            byte[] data = service.reading(a.caller().world(), box,
-                    () -> StateArrays.encode(service.read(a.caller().world(), box)));
-            JsonObject result = library.save(name, description, box.sizeX(), box.sizeY(), box.sizeZ(), data);
+            JsonObject result = library.saveRegion(service, a.caller().world(), box, name, description);
             if (Files.isRegularFile(savedDir(service).resolve(name + ".json")))
                 result.addProperty("note", "a local blueprint has this name and takes precedence when pasting on this server");
             return ToolResult.of(result);
