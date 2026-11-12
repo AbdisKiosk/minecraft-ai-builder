@@ -4,7 +4,8 @@ A builder saves their own windows, pillars, trees and other pieces once, and Cla
 its own. The library lives on the panel and belongs to the account, so the assets follow the builder to every server.
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
-Status: phase 1 is built (panel only, see "Assets" in `panel.md`). Phases 2 and 3 are plans.
+Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
+Phase 3 is a plan.
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -38,6 +39,15 @@ No plugin change is needed for this phase.
   so the result size stays fixed (see "Token cost" in `CLAUDE.md`).
 - **Save from Claude:** `save_blueprint` gains `description` and stores to the caller's library when a user is known.
 - **Skill update:** the `build` skill tells Claude to check the library before inventing a window, pillar or tree.
+
+Built with these deviations:
+- **Grant, not a bare user id:** the panel sends a random per-request grant (`assetKey`) with the user id and takes
+  ownership from the grant. The plugin uses the id only to name its cache directory.
+- **Inline save:** `save_blueprint` sends the region up the relay as base64 (at most 5 MB compressed) instead of a
+  presigned upload. Reads use a signed download URL valid for 60 seconds, as planned.
+- **Ordering:** by `last_used_at` (migration `006_asset_usage.sql`) rather than `updated_at`: it is set when Claude
+  fetches the asset for a paste or the panel places it, so renaming or describing an asset does not move it up.
+- **Listing:** at most 30 assets, descriptions cut to 80 characters.
 
 ## Phase 3: making assets fit
 - **Anchor and facing:** store which block is the attachment point and which way the asset faces, so Claude can rotate
