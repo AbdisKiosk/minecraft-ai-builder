@@ -8,6 +8,7 @@ import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.Corrections;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
@@ -43,6 +44,8 @@ public final class History implements BuildService.Recorder {
     /** Changes listed by {@link #get}; the rest are only in the stats. */
     private static final int LISTED_CHANGES = 200;
     private static final int LISTED_CONFLICTS = 50;
+    /** Rows per list in {@link #corrections}. */
+    private static final int LISTED_CORRECTIONS = 10;
 
     public record Settings(boolean enabled, long maxVolume, int keep, long maxBytes, long readsPerTick, long maxRenderVolume) {
     }
@@ -370,9 +373,7 @@ public final class History implements BuildService.Recorder {
 
     private JsonObject revert(String id, JsonObject e, BlockDiff diff, boolean force) {
         String world = e.get("world").getAsString();
-        List<Box> boxes = new ArrayList<>();
-        if (e.has("boxes")) e.getAsJsonArray("boxes").forEach(b -> boxes.add(box(b.getAsJsonArray())));
-        if (boxes.isEmpty() && diff.bounds() != null) boxes.add(diff.bounds());
+        List<Box> boxes = boxes(e, diff);
         JsonObject o = new JsonObject();
         if (diff.isEmpty()) {
             o.addProperty("blocks", 0);
@@ -395,6 +396,146 @@ public final class History implements BuildService.Recorder {
             o.addProperty("job", job.id());
         }
         return o;
+    }
+
+    /**
+     * What people changed in the blocks an entry placed, as counts and a few coordinates, and stamps the entry with
+     * {@code corrected: {cells, share, time}} ({@code cells: 0} when nothing above the noise threshold changed).
+     * Cells a later entry changed are measured against that entry's after-state.
+     */
+    public JsonObject corrections(String id) {
+        JsonObject e;
+        List<JsonObject> later = new ArrayList<>();
+        synchronized (this) {
+            JsonObject live = entry(id);
+            e = live.deepCopy();
+            boolean after = false;
+            for (JsonObject other : entries.values()) {
+                if (after) later.add(other.deepCopy());
+                else after = other == live;
+            }
+        }
+        if (!e.get("tracked").getAsBoolean()) {
+            throw new EditException("entry " + id + " has no diff (the job was larger than history.max-volume or failed early)");
+        }
+        BlockDiff diff = storedDiff(id, e);
+        if (diff == null) throw new EditException("the diff of entry " + id + " is gone from the history folder");
+        if (diff.isEmpty()) throw new EditException("entry " + id + " changed no blocks, so nothing of it can have been corrected");
+        String world = e.get("world").getAsString();
+        Box bounds = diff.bounds();
+
+        List<BlockDiff> laterDiffs = new ArrayList<>();
+        List<Box> unknown = new ArrayList<>();
+        for (JsonObject l : later) {
+            if (!world.equals(l.get("world").getAsString()) || !l.has("bounds")) continue;
+            Box b = box(l.getAsJsonArray("bounds"));
+            if (!overlaps(b, bounds)) continue;
+            BlockDiff d = null;
+            if (l.get("tracked").getAsBoolean()) {
+                try {
+                    d = storedDiff(l.get("id").getAsString(), l);
+                } catch (RuntimeException ex) {
+                    // unreadable: treated like an untracked edit below
+                }
+            }
+            if (d == null) {
+                unknown.add(b); // a later edit whose cells are unknown: its whole box is left out
+                continue;
+            }
+            // Only the part over this entry is kept, so one later diff at a time is held in full.
+            BlockDiff.Builder part = new BlockDiff.Builder();
+            for (BlockDiff.Change c : d.changes()) if (inside(bounds, c.pos())) part.change(c.pos(), c.before(), c.after());
+            laterDiffs.add(part.build());
+        }
+
+        RegionSnapshot now = service.readStepped(world, boxes(e, diff), settings.readsPerTick());
+        Corrections.Result r = Corrections.find(diff, laterDiffs, unknown, p -> {
+            String s = now.get(p);
+            return s == null ? "air" : s;
+        }, Corrections.Threshold.DEFAULT);
+
+        double share = Math.round(r.share() * 1000) / 1000.0;
+        JsonObject stamp = new JsonObject();
+        stamp.addProperty("cells", r.cells());
+        stamp.addProperty("share", share);
+        stamp.addProperty("time", System.currentTimeMillis());
+        synchronized (this) {
+            JsonObject live = entries.get(id);
+            if (live != null) { // not pruned meanwhile
+                live.add("corrected", stamp);
+                rewriteIndex();
+            }
+        }
+
+        JsonObject o = new JsonObject();
+        o.addProperty("cells", r.cells());
+        o.addProperty("placed", r.placed());
+        o.addProperty("share", share);
+        JsonArray subs = new JsonArray();
+        for (Corrections.Substitution s : r.substitutions().subList(0, Math.min(LISTED_CORRECTIONS, r.substitutions().size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("from", s.from());
+            row.addProperty("to", s.to());
+            row.addProperty("count", s.count());
+            JsonArray at = new JsonArray();
+            for (Vec3 p : s.at()) {
+                JsonArray xyz = new JsonArray();
+                xyz.add(p.x());
+                xyz.add(p.y());
+                xyz.add(p.z());
+                at.add(xyz);
+            }
+            row.add("at", at);
+            subs.add(row);
+        }
+        o.add("substitutions", subs);
+        o.add("removed", typeCounts(r.removed()));
+        o.add("states", typeCounts(r.states()));
+        return o;
+    }
+
+    private static JsonArray typeCounts(List<Corrections.TypeCount> counts) {
+        JsonArray out = new JsonArray();
+        for (Corrections.TypeCount t : counts.subList(0, Math.min(LISTED_CORRECTIONS, counts.size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("type", t.type());
+            row.addProperty("count", t.count());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /** The boxes an entry was recorded in, to read them again. */
+    private static List<Box> boxes(JsonObject e, BlockDiff diff) {
+        List<Box> boxes = new ArrayList<>();
+        if (e.has("boxes")) e.getAsJsonArray("boxes").forEach(b -> boxes.add(box(b.getAsJsonArray())));
+        if (boxes.isEmpty() && diff.bounds() != null) boxes.add(diff.bounds());
+        return boxes;
+    }
+
+    private static boolean overlaps(Box a, Box b) {
+        return a.min().x() <= b.max().x() && b.min().x() <= a.max().x() && a.min().y() <= b.max().y()
+                && b.min().y() <= a.max().y() && a.min().z() <= b.max().z() && b.min().z() <= a.max().z();
+    }
+
+    private static boolean inside(Box b, Vec3 p) {
+        return p.x() >= b.min().x() && p.x() <= b.max().x() && p.y() >= b.min().y() && p.y() <= b.max().y()
+                && p.z() >= b.min().z() && p.z() <= b.max().z();
+    }
+
+    /** A tracked entry's diff; null when it changed blocks but its file is gone. */
+    private BlockDiff storedDiff(String id, JsonObject e) {
+        Path file = dir.resolve(id + ".diff.gz");
+        if (!Files.exists(file)) {
+            long changed = 0;
+            for (String k : new String[]{"added", "removed", "changed"}) changed += e.has(k) ? e.get(k).getAsLong() : 0;
+            return changed == 0 ? BlockDiff.empty() : null;
+        }
+        try {
+            return BlockDiff.decode(Files.readAllBytes(file));
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
     }
 
     private synchronized JsonObject entry(String id) {

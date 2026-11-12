@@ -446,6 +446,7 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("view") ? args.get("view").getAsString() : null,
                     args.has("corner") ? args.get("corner").getAsString() : null));
             case "blocks" -> new RestApi.Response(200, history.blocks(str(args, "id")));
+            case "corrections" -> new RestApi.Response(200, history.corrections(str(args, "id")));
             case "revert" -> new RestApi.Response(200, args.has("diff")
                     ? history.revertArchived(str(args, "id"), args.getAsJsonObject("entry"),
                             java.util.Base64.getDecoder().decode(str(args, "diff")), bool(args, "force"))

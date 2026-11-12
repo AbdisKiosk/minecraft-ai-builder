@@ -1,0 +1,129 @@
+package me.abdiskiosk.minecraftaibuilder.plugin;
+
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
+import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.EditException;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
+import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
+import org.junit.jupiter.api.Test;
+
+import java.lang.reflect.Proxy;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/** {@link History#corrections} against a fake world that reads off the main thread. */
+class HistoryCorrectionsTest {
+
+    private final Map<Vec3, String> world = new HashMap<>();
+
+    private BuildService service(Path dir) {
+        WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
+                new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> switch (m.getName()) {
+                    case "name" -> "fake";
+                    case "async" -> true;
+                    case "read" -> read((Box) a[1]);
+                    default -> null;
+                });
+        PluginConfig config = new PluginConfig(4000, 2_000_000L, 262_144L, 0, 30,
+                List.of(), "", null, List.of(), true, "", "", null, null, null);
+        return new BuildService(null, bridge, config, dir);
+    }
+
+    private String[] read(Box box) {
+        String[] out = new String[(int) box.volume()];
+        int i = 0;
+        for (int y = box.min().y(); y <= box.max().y(); y++) {
+            for (int z = box.min().z(); z <= box.max().z(); z++) {
+                for (int x = box.min().x(); x <= box.max().x(); x++) out[i++] = world.getOrDefault(new Vec3(x, y, z), "air");
+            }
+        }
+        return out;
+    }
+
+    private static History history(BuildService service) {
+        return new History(null, service, new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000));
+    }
+
+    private static String record(History h, BlockDiff diff, Box box) {
+        return h.record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world", box,
+                0, 0, 0, System.currentTimeMillis(), 1, null, null, null, null, null), diff, diff == null ? null : List.of(box), null);
+    }
+
+    private static Vec3 at(int x) {
+        return new Vec3(x, 64, 0);
+    }
+
+    @Test
+    void summarisesWhatPeopleChangedAndStampsTheEntry() throws Exception {
+        Path dir = Files.createTempDirectory("corrections");
+        BuildService service = service(dir);
+        History h = history(service);
+        Box box = Box.of(at(0), at(5));
+        BlockDiff.Builder placed = new BlockDiff.Builder();
+        for (int x = 0; x < 6; x++) {
+            placed.change(at(x), "air", "oak_planks");
+            world.put(at(x), "oak_planks");
+        }
+        String id = record(h, placed.build(), box);
+        // A later Claude edit put glass at x=5; that is not a correction.
+        record(h, new BlockDiff.Builder().change(at(5), "oak_planks", "glass").build(), Box.of(at(5), at(5)));
+        world.put(at(5), "glass");
+        for (int x = 0; x < 4; x++) world.put(at(x), "spruce_planks");
+
+        JsonObject o = h.corrections(id);
+        assertEquals(4, o.get("cells").getAsInt());
+        assertEquals(6, o.get("placed").getAsInt());
+        assertEquals(0.667, o.get("share").getAsDouble(), 1e-9);
+        JsonObject sub = o.getAsJsonArray("substitutions").get(0).getAsJsonObject();
+        assertEquals("oak_planks", sub.get("from").getAsString());
+        assertEquals("spruce_planks", sub.get("to").getAsString());
+        assertEquals(4, sub.get("count").getAsInt());
+        JsonArray first = sub.getAsJsonArray("at").get(0).getAsJsonArray();
+        assertEquals(List.of(0, 64, 0), List.of(first.get(0).getAsInt(), first.get(1).getAsInt(), first.get(2).getAsInt()));
+        assertEquals(0, o.getAsJsonArray("removed").size());
+        assertEquals(0, o.getAsJsonArray("states").size());
+
+        // The stamp survives a restart.
+        JsonObject entry = history(service).get(id);
+        assertEquals(4, entry.getAsJsonObject("corrected").get("cells").getAsInt());
+        assertEquals(0.667, entry.getAsJsonObject("corrected").get("share").getAsDouble(), 1e-9);
+        assertTrue(entry.getAsJsonObject("corrected").has("time"));
+    }
+
+    @Test
+    void anUncorrectedEntryIsStampedWithZero() throws Exception {
+        Path dir = Files.createTempDirectory("corrections");
+        BuildService service = service(dir);
+        History h = history(service);
+        world.put(at(0), "stone");
+        String id = record(h, new BlockDiff.Builder().change(at(0), "air", "stone").build(), Box.of(at(0), at(0)));
+        JsonObject o = h.corrections(id);
+        assertEquals(0, o.get("cells").getAsInt());
+        assertEquals(0, h.get(id).getAsJsonObject("corrected").get("cells").getAsInt());
+    }
+
+    @Test
+    void entriesWithoutADiffAreRefused() throws Exception {
+        Path dir = Files.createTempDirectory("corrections");
+        History h = history(service(dir));
+        Box box = Box.of(at(0), at(0));
+        String untracked = record(h, null, box);
+        String empty = record(h, BlockDiff.empty(), box);
+        String gone = record(h, new BlockDiff.Builder().change(at(0), "air", "stone").build(), box);
+        Files.delete(dir.resolve("history").resolve(gone + ".diff.gz"));
+
+        assertTrue(assertThrows(EditException.class, () -> h.corrections(untracked)).getMessage().contains("has no diff"));
+        assertTrue(assertThrows(EditException.class, () -> h.corrections(empty)).getMessage().contains("changed no blocks"));
+        assertTrue(assertThrows(EditException.class, () -> h.corrections(gone)).getMessage().contains("is gone"));
+        assertTrue(assertThrows(EditException.class, () -> h.corrections("hnope")).getMessage().contains("no history entry"));
+    }
+}

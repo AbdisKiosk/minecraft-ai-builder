@@ -42,6 +42,7 @@ function resolveGet(req: NextRequest, path: string[]): Op | null {
   if (!sub) return op(t, 'get', { id });
   if (sub === 'render') return op(t, 'render', viewArgs(req, id));
   if (sub === 'blocks') return op(t, 'blocks', { id });
+  if (sub === 'corrections' && t === 'history') return op(t, 'corrections', { id });
   return null;
 }
 
