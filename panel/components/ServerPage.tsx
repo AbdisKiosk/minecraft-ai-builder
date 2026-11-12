@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
-import { api, message, serverApi } from '../lib/api';
+import { api, downloadPlugin, message, serverApi } from '../lib/api';
 import { ago, boxText, dateTime, num, OFFLINE } from '../lib/format';
-import { diffHref, draftHref, go, tokensHref } from '../lib/routes';
+import { diffHref, draftHref, go, setupHref } from '../lib/routes';
 import { can, type DraftSummary, type HistorySummary, type Server } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
 import MembersCard from './MembersCard';
-import { Badge, Jobs, PluginDownload, RelaySetup, ServerMeta, Stats, type RelayConfig } from './shared';
+import ConnectClaude from './ConnectClaude';
+import { Badge, Jobs, ServerMeta, Stats } from './shared';
 
 interface HistoryPage { entries: HistorySummary[]; total: number }
 interface DraftList { drafts: DraftSummary[]; review?: boolean }
@@ -15,34 +16,34 @@ export default function ServerPage({ server, servers }: { server: Server; server
   const id = server.id;
   const [connect, setConnect] = useState(false);
   const [promote, setPromote] = useState(false);
-  const base = `${window.location.origin}/s/${id}`;
+  const builder = can(server.role, 'builder');
+  // Until its first connection, a server has no drafts, jobs or history to show.
+  const fresh = !server.online && !server.lastSeen;
 
   return (
     <>
       <div className="page-head"><div><h1>{server.name} {server.role !== 'owner' && <Badge>{server.role}</Badge>}</h1>
-        <div className="muted"><span className="mono">{id}</span> · <ServerMeta server={server} /></div></div>
+        <div className="muted"><span className={`dot inline ${server.online ? 'on' : ''}`} /> <ServerMeta server={server} /></div></div>
         <div className="toolbar" style={{ margin: 0 }}>
-          {can(server.role, 'builder') && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
-          {can(server.role, 'builder') && <button className="ghost small" onClick={() => setConnect(!connect)}>Connect Claude Code</button>}</div></div>
-      {connect && (
-        <div className="card connect">
-          <h2>Connect Claude Code</h2>
-          <p className="muted">Make a token under <a href={tokensHref}>Access tokens</a>, then in the repo:</p>
-          <pre>export AIBUILDER_URL={base} AIBUILDER_TOKEN=&lt;your token&gt;</pre>
-          <p className="muted">The repo&apos;s <code>mcp.json</code> and the Python SDK use these as they are. For several servers in one
-            Claude Code session, add one MCP entry per server with url <code>{base}/mcp</code>.</p>
-        </div>
-      )}
-      {!server.online && !server.lastSeen && can(server.role, 'owner') && (
-        <div className="card"><h2>Waiting for the plugin</h2>
-          <PluginDownload />
-          <p>This server has never connected. Put the <code>relay</code> settings you got when you made it into the plugin&apos;s
-            config and restart the server. Lost the token? Make a new one under Settings below.</p></div>
+          {builder && !fresh && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
+          {builder && <button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
+            {connect ? 'Hide' : 'Connect Claude'}</button>}</div></div>
+      {connect && <section className="card"><h2>Connect Claude</h2><ConnectClaude server={server} /></section>}
+      {fresh && (
+        <a className="card finish-setup big" href={setupHref(id)}>
+          <b>{can(server.role, 'owner') ? 'Finish setting up this server' : 'This server hasn\u2019t connected yet'}</b>
+          <span className="muted">{can(server.role, 'owner')
+            ? 'Install the plugin you downloaded and restart the server. The setup page shows when it connects.'
+            : 'Its owner still has to install the plugin.'}</span>
+          <span aria-hidden="true">→</span>
+        </a>
       )}
       <div className="stack">
-        <section className="card"><h2>Drafts</h2><Drafts id={id} server={server} /></section>
-        <section className="card"><h2>Jobs</h2><div><Jobs server={server} recent={10} /></div></section>
-        <History id={id} server={server} />
+        {!fresh && <>
+          <section className="card"><h2>Drafts</h2><Drafts id={id} server={server} /></section>
+          <section className="card"><h2>Jobs</h2><div><Jobs server={server} recent={10} /></div></section>
+          <History id={id} server={server} />
+        </>}
         <MembersCard server={server} />
         {can(server.role, 'admin') && <SettingsCard server={server} />}
       </div>
@@ -52,10 +53,10 @@ export default function ServerPage({ server, servers }: { server: Server; server
   );
 }
 
-/** Rename (admins), new relay token and delete (owner). */
+/** Rename (admins); download the plugin again, replace its key and delete (owner). */
 function SettingsCard({ server }: { server: Server }) {
   const [error, setError] = useState('');
-  const [relay, setRelay] = useState<RelayConfig | null>(null);
+  const [note, setNote] = useState('');
   const owner = server.role === 'owner';
   const base = serverApi(server.id);
 
@@ -65,15 +66,26 @@ function SettingsCard({ server }: { server: Server }) {
     try {
       const name = String(new FormData(ev.currentTarget).get('name') || '');
       await api(base, { method: 'PATCH', body: JSON.stringify({ name }) });
+      setNote('Renamed.');
+    } catch (ex) {
+      setError(message(ex));
+    }
+  };
+  const download = async () => {
+    setError('');
+    try {
+      await downloadPlugin(server.id);
     } catch (ex) {
       setError(message(ex));
     }
   };
   const rotate = async () => {
-    if (!confirm('Make a new relay token? The old one stops working and the server disconnects until its config has the new one.')) return;
+    if (!confirm('Disconnect this server and give it a new key? The plugin on the server stops working until you install a '
+      + 'fresh download from here. Do this if the plugin file got into the wrong hands.')) return;
     setError('');
     try {
-      setRelay((await api<{ relay: RelayConfig }>(`${base}/token`, { method: 'POST' })).relay);
+      await api(`${base}/token`, { method: 'POST' });
+      setNote('The old key no longer works. Download the plugin again and install it on the server.');
     } catch (ex) {
       setError(message(ex));
     }
@@ -91,19 +103,23 @@ function SettingsCard({ server }: { server: Server }) {
   return (
     <section className="card"><h2>Settings</h2>
       <form className="toolbar" onSubmit={rename}>
-        <input type="text" name="name" defaultValue={server.name} maxLength={64} required />
+        <input type="text" name="name" defaultValue={server.name} maxLength={64} required aria-label="Server name" />
         <button type="submit" className="ghost">Rename</button>
       </form>
       {owner && (
         <>
+          <h3>Plugin</h3>
+          <p className="muted">Updating the plugin, or moved to a new machine? Download it again and replace the old file in
+            the server&apos;s <code>plugins</code> folder. It stays connected to this page.</p>
           <div className="toolbar">
-            <button className="ghost" onClick={rotate}>New relay token</button>
+            <button className="ghost" onClick={download}>Download AIBuilder.jar</button>
+            <button className="ghost" onClick={rotate}>Disconnect and make a new key</button>
             <span className="spacer" />
             <button className="danger" onClick={remove}>Delete server</button>
           </div>
-          {relay && <div className="connect"><RelaySetup relay={relay} /></div>}
         </>
       )}
+      {note && <p className="muted">{note}</p>}
       {error && <p className="error">{error}</p>}
     </section>
   );

@@ -1,6 +1,5 @@
 import type { ReactNode } from 'react';
 import { ago, duration, num } from '../lib/format';
-import { PLUGIN_JAR_HREF } from '../lib/pluginJar';
 import { diffHref, draftHref, serverHref } from '../lib/routes';
 import type { Counts, Detail, Job, Placed, Server } from '../lib/types';
 
@@ -45,15 +44,6 @@ export function ServerMeta({ server: s }: { server: Server }) {
   return <>{parts.map((p, n) => <span key={n}>{n > 0 && ' · '}{p}</span>)}</>;
 }
 
-/** Where to get the plugin, for the places that tell someone to install it. */
-export function PluginDownload() {
-  return (
-    <p><a className="button ghost small" href={PLUGIN_JAR_HREF}>Download the plugin</a>{' '}
-      <span className="muted">Put the jar in the server&apos;s <code>plugins</code> folder, next to WorldEdit, and start
-        the server once so it writes its config.</span></p>
-  );
-}
-
 export interface RelayConfig { url: string; token: string }
 
 /** The relay settings for a server's plugin config, with the token that is only shown once. */
@@ -64,7 +54,7 @@ export function RelaySetup({ relay }: { relay: RelayConfig }) {
       <p>Put this in the server&apos;s <code>plugins/AIBuilder/config.yml</code> and restart it:</p>
       <pre>{yaml}</pre>
       <div className="toolbar"><CopyButton text={yaml} /></div>
-      <p className="muted">The token is shown only now. If you lose it, make a new one from the server&apos;s page.</p>
+      <p className="muted">These are the same settings the downloaded plugin carries. Keep the token private.</p>
     </>
   );
 }

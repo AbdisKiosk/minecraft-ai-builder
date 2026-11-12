@@ -5,11 +5,13 @@ export type Route =
   | { page: 'dashboard' }
   | { page: 'tokens' }
   | { page: 'server'; server: string }
+  | { page: 'setup'; server: string }
   | { page: 'diff'; server: string; id: string }
   | { page: 'draft'; server: string; id: string };
 
 export const tokensHref = '#/tokens';
 export const serverHref = (server: string) => `#/s/${encodeURIComponent(server)}`;
+export const setupHref = (server: string) => `${serverHref(server)}/setup`;
 export const diffHref = (server: string, id: string) => `${serverHref(server)}/h/${encodeURIComponent(id)}`;
 export const draftHref = (server: string, id: string) => `${serverHref(server)}/d/${encodeURIComponent(id)}`;
 
@@ -19,6 +21,7 @@ export function parseRoute(hash: string): Route {
   });
   if (parts[0] === 'tokens') return { page: 'tokens' };
   if (parts[0] === 's' && parts[1]) {
+    if (parts[2] === 'setup') return { page: 'setup', server: parts[1] };
     if (parts[2] === 'h' && parts[3]) return { page: 'diff', server: parts[1], id: parts[3] };
     if (parts[2] === 'd' && parts[3]) return { page: 'draft', server: parts[1], id: parts[3] };
     return { page: 'server', server: parts[1] };

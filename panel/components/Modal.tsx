@@ -8,6 +8,8 @@ export default function Modal({ className, onClose, onClick, children }:
     // No close() on cleanup: removing the element closes it, and a close event here would call onClose.
     const dialog = ref.current!;
     if (!dialog.open) dialog.showModal();
+    // showModal() focuses the first focusable element (often a close button); React's autoFocus ran before it.
+    dialog.querySelector<HTMLElement>('[data-autofocus]')?.focus();
   }, []);
   return <dialog ref={ref} className={className} onClose={onClose} onClick={onClick}>{children}</dialog>;
 }

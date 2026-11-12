@@ -54,12 +54,20 @@ tokens and the session cookie travel in every request.
 
 ## Connect a Minecraft server
 
-Download the plugin from the panel (**Download the plugin** on the landing page and when you add a server, or
-`https://panel.example.com/download/AIBuilder.jar`), put it in the server's `plugins` folder next to WorldEdit and start
-the server once. The jar is the one built with the panel, so the two speak the same relay protocol.
+On the dashboard, name the server and press **Add server & download plugin**. The panel makes the server and downloads
+`AIBuilder.jar` with the server's relay settings inside (`aibuilder-setup.properties`, added by
+`lib/server/jarSetup.ts`). Put it in the server's `plugins` folder next to WorldEdit and restart: on start the plugin
+writes those settings into `plugins/AIBuilder/config.yml` (`JarSetup`) and connects. The setup page waits for that
+connection live and then shows how to connect Claude Code.
 
-Then add a server on the dashboard. The panel shows its `relay` settings once; put them in the server's
-`plugins/AIBuilder/config.yml` and restart it:
+The panel does not store relay tokens, only their hash and a seed: a token is `HMAC(RELAY_SECRET or AUTH0_SECRET, seed)`
+(`lib/server/relayToken.ts`), so the same jar can be downloaded again from the server's settings and keeps working.
+**Disconnect and make a new key** gives the server a new seed: the old jar stops working until a fresh download is
+installed. Changing `AUTH0_SECRET` (without a `RELAY_SECRET`) has the same effect on the next download of each server.
+
+The plugin applies the jar's settings once; a marker file (`plugins/AIBuilder/.jar-setup`) remembers which. Edits to
+`config.yml` after that win, until a jar with different settings is installed. To set a server up by hand, take the
+plain jar from `/download/AIBuilder.jar` and the settings from **Restarted, but it doesn't connect?** on the setup page:
 
 ```yaml
 relay:
@@ -67,18 +75,22 @@ relay:
   token: "aibs_..."
 ```
 
-Until both are set the plugin has no connection and Claude Code cannot reach the server. Run `/aibuilder` in the
-console to see the relay status. If the panel is unreachable, the plugin keeps retrying,
-backing off up to one minute. Edits that are running keep going while it is disconnected. The server's owner can make
-a new relay token on the server page; the old one stops working.
+Run `/aibuilder` in the console to see the relay status. If the panel is unreachable, the plugin keeps retrying,
+backing off up to one minute. Edits that are running keep going while it is disconnected.
 
-For a dev server (`./gradlew :core:runServer` in `plugin/`), run the panel locally too (`npm run dev`) and add the
-server there; the file is `plugin/core/run/<version>/plugins/AIBuilder/config.yml`, with `url: "ws://127.0.0.1:3000"`.
-Claude Code, `tools/mcp_cli.py` and the SDK then use `AIBUILDER_URL=http://127.0.0.1:3000/s/<server>`.
+For a dev server (`./gradlew :core:runServer` in `plugin/`), run the panel locally too (`npm run dev`), add the server
+there and put the downloaded jar's settings, or the jar itself, in `plugin/core/run/<version>/plugins/`; the relay URL is
+`ws://127.0.0.1:3000`. Claude Code, `tools/mcp_cli.py` and the SDK then use `AIBUILDER_URL=http://127.0.0.1:3000/s/<server>`.
 
 ## Connect Claude Code
 
-Make an access token under **Access tokens**. For one server, the repo's `mcp.json` works as it is:
+**Connect Claude** (on the setup page and the server page) makes an access token and shows one command with it inside:
+
+```bash
+claude mcp add --transport http --scope user minecraft-<server name> https://panel.example.com/s/<server>/mcp --header "Authorization: Bearer aibc_..."
+```
+
+Tokens are listed, and revoked, under **Access tokens**. In this repository, `mcp.json` works for one server as it is:
 
 ```bash
 export AIBUILDER_URL=https://panel.example.com/s/<server> AIBUILDER_TOKEN=aibc_...
@@ -104,7 +116,7 @@ run against several servers in parallel.
 
 | Role | Can |
 | --- | --- |
-| owner | everything, including deleting the server and making a new relay token |
+| owner | everything, including downloading the server's plugin, giving it a new key and deleting it |
 | admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
 | builder | build through Claude Code and scripts with an access token, promote regions |
 | viewer | see jobs, history and drafts |

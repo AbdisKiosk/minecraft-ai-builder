@@ -4,7 +4,8 @@ relay:
   # The panel to connect out to, e.g. wss://panel.example.com (see docs/panel.md). Claude Code and scripts then
   # use https://panel.example.com/s/<server> with an access token made in the panel.
   url: ""
-  # Shown once when you add this server on the panel's dashboard.
+  # The AIBuilder.jar you download from the panel fills url and token in by itself on first start. To set them by
+  # hand, take them from "Restarted, but it doesn't connect?" on the server's setup page.
   token: ""
 
 limits:

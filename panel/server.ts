@@ -7,7 +7,8 @@ import next from 'next';
 import { migrate } from './lib/server/migrate';
 import { installHub, RELAY, RelayHub } from './lib/server/hub';
 import { PLUGIN_JAR_HREF } from './lib/pluginJar';
-import { handlePluginJar } from './lib/server/plugin-jar';
+import { findPluginJar, handlePluginJar } from './lib/server/plugin-jar';
+import { installJarSource } from './lib/server/jarSource';
 import { handlePluginProxy } from './lib/server/plugin-proxy';
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -21,6 +22,7 @@ if (applied.length) console.info(`database: applied ${applied.join(', ')}`);
 
 const hub = new RelayHub();
 installHub(hub);
+installJarSource(() => findPluginJar());
 
 const app = next({ dev, hostname: host, port });
 const handle = app.getRequestHandler();

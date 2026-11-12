@@ -7,6 +7,7 @@ import Dashboard from './Dashboard';
 import DiffPage from './DiffPage';
 import DraftPage from './DraftPage';
 import ServerPage from './ServerPage';
+import SetupPage from './SetupPage';
 import TokensPage from './TokensPage';
 
 type Crumb = [label: string, href?: string];
@@ -38,6 +39,9 @@ export default function Panel({ me }: { me: Me }) {
       if (!server) {
         crumbs.push([route.server]);
         page = <div className="card"><h2>Not found</h2><p>You don&apos;t have access to a server with id <code>{route.server}</code>.</p></div>;
+      } else if (route.page === 'setup') {
+        crumbs.push([name, serverHref(route.server)], ['Set up']);
+        page = <SetupPage key={route.server} server={server} />;
       } else if (route.page === 'server') {
         crumbs.push([name]);
         page = <ServerPage key={route.server} server={server} servers={servers} />;
@@ -63,7 +67,8 @@ export default function Panel({ me }: { me: Me }) {
         <nav id="crumbs">
           {crumbs.map(([label, href]) => <span key={label}>{href ? <a href={href}>{label}</a> : label}</span>)}
         </nav>
-        <span className={`live ${live ? 'on' : ''}`} title={live ? 'Live updates on' : 'Reconnecting…'} />
+        <span className={`live ${live ? 'on' : ''}`} title={live ? 'Live updates on' : 'Reconnecting…'} role="img"
+          aria-label={live ? 'Live updates on' : 'Reconnecting'} />
         <a className="button ghost small" href={tokensHref}>Access tokens</a>
         <span className="me hide-sm" title={me.email || ''}>
           {me.picture && <img src={me.picture} alt="" referrerPolicy="no-referrer" />}{me.name || me.email}

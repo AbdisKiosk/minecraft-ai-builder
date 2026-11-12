@@ -40,12 +40,11 @@ export default async function Home() {
       <section className="hero">
         <div>
           <h1>Let Claude build on your Minecraft server.</h1>
-          <p className="lead">AIBuilder connects Claude Code to WorldEdit on your Paper server. Watch builds happen live, review
-            edits before they land, and roll back anything with one click. Your server opens no port.</p>
+          <p className="lead">Tell Claude what to build and watch it appear on your Paper server. Review edits before they land
+            and undo anything with one click. Setup takes a few minutes: no ports to open, no config files to edit.</p>
           <div className="cta">
             {session ? <a className="button" href="/dashboard">Open dashboard</a>
-              : <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Create a free account</a>}
-            <a className="button ghost" href={PLUGIN_JAR_HREF}>Download the plugin</a>
+              : <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Get started free</a>}
             <a className="button ghost" href="#how">How it works</a>
           </div>
         </div>
@@ -62,13 +61,13 @@ export default async function Home() {
       </section>
 
       <ol className="steps" id="how">
-        <li><span><b>Create an account</b> and add your server. You get two lines for the plugin&apos;s config.</span></li>
-        <li><span><b><a href={PLUGIN_JAR_HREF}>Download the AIBuilder plugin</a></b> into your server&apos;s <code>plugins</code> folder
-          next to WorldEdit, paste the lines and restart. The server connects out to us.</span></li>
-        <li><span><b>Make an access token</b> and point Claude Code at your server&apos;s address. Ask it to build.</span></li>
+        <li><span><b>Create an account and name your server.</b> You get a copy of the plugin that&apos;s already set up for it.</span></li>
+        <li><span><b>Drop it into your server&apos;s <code>plugins</code> folder</b>, next to WorldEdit, and restart. The page shows
+          the moment it connects.</span></li>
+        <li><span><b>Paste one command into Claude Code</b> and ask it to build.</span></li>
       </ol>
 
-      <footer>AIBuilder · Not affiliated with Mojang or Microsoft.</footer>
+      <footer>AIBuilder · Not affiliated with Mojang or Microsoft. · <a href={PLUGIN_JAR_HREF}>Plain plugin jar</a> for setting it up by hand</footer>
     </div>
   );
 }

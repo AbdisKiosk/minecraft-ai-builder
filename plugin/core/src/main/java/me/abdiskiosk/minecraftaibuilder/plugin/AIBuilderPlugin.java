@@ -33,8 +33,9 @@ import java.util.logging.Level;
 public final class AIBuilderPlugin extends JavaPlugin {
 
     private static final Set<String> MARKER_COMMANDS = Set.of("mark", "unmark", "marks", "note");
-    private static final String NOT_CONNECTED = "Not connected to a panel, so Claude Code cannot reach this server: add it on the "
-            + "panel and put the relay.url and relay.token it shows in plugins/AIBuilder/config.yml.";
+    private static final String NOT_CONNECTED = "Not connected to a panel, so Claude cannot reach this server: add the server "
+            + "on the panel and install the AIBuilder.jar it gives you (it comes set up), or put the relay.url and relay.token "
+            + "from the server's page in plugins/AIBuilder/config.yml.";
 
     private RelayClient relay;
     private Drafts drafts;
@@ -47,6 +48,14 @@ public final class AIBuilderPlugin extends JavaPlugin {
     public void onEnable() {
         System.setProperty("java.awt.headless", "true");
         saveDefaultConfig();
+        try {
+            if (JarSetup.apply(getResource(JarSetup.ENTRY), getDataFolder().toPath())) {
+                reloadConfig();
+                getLogger().info("Wrote the panel connection that came with this jar into config.yml.");
+            }
+        } catch (java.io.IOException e) {
+            getLogger().log(Level.WARNING, "Could not apply the panel connection that came with this jar", e);
+        }
         if (getConfig().isConfigurationSection("http")) {
             getLogger().warning("config.yml still has an http: section. It is no longer used and can be deleted: "
                     + "the plugin opens no port, and Claude Code connects through the panel (relay:).");

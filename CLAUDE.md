@@ -30,7 +30,7 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 - `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
 - `python3 tools/mcp_cli.py cost|list|call <tool> '<json>'|report`: the MCP endpoint from a shell, as a client sees it. It needs `AIBUILDER_URL` and `AIBUILDER_TOKEN`; with `AIBUILDER_LOG=<file>` it logs what every call costs, which is how a change to the tools is measured.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.
-- Connect: add the server on the panel, put the `relay.url` and `relay.token` it shows in the server's `plugins/AIBuilder/config.yml`, then export `AIBUILDER_URL=https://<panel>/s/<server>` and `AIBUILDER_TOKEN` (an access token made in the panel) before starting Claude Code. `/aibuilder` in the server console shows the relay status. Players use `/aibuilder mark|unmark|marks|note`.
+- Connect: add the server on the panel and install the `AIBuilder.jar` it downloads (the relay settings are inside it; `JarSetup` writes them into `plugins/AIBuilder/config.yml` on start), then export `AIBUILDER_URL=https://<panel>/s/<server>` and `AIBUILDER_TOKEN` (an access token made in the panel) before starting Claude Code. `/aibuilder` in the server console shows the relay status. Players use `/aibuilder mark|unmark|marks|note`.
 
 ## Building in Minecraft
 When the aibuilder MCP server is connected, use the `/build` skill for the workflow and `build-style` for aesthetics.
