@@ -7,6 +7,7 @@ import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
 import MembersCard from './MembersCard';
 import ConnectClaude from './ConnectClaude';
+import CorrectionRate from './CorrectionRate';
 import { Badge, Jobs, ServerMeta, Stats } from './shared';
 
 interface HistoryPage { entries: HistorySummary[]; total: number }
@@ -45,6 +46,7 @@ export default function ServerPage({ server, servers }: { server: Server; server
           <section className="card"><h2>Drafts</h2><Drafts id={id} server={server} /></section>
           <section className="card"><h2>Jobs</h2><div><Jobs server={server} recent={10} /></div></section>
           <History id={id} server={server} />
+          <CorrectionRate server={server} />
         </>}
         <MembersCard server={server} />
         {can(server.role, 'admin') && <SettingsCard server={server} />}

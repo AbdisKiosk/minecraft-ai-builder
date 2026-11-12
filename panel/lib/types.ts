@@ -101,9 +101,19 @@ export interface Corrections {
   cells: number;
   placed: number;
   share: number;
+  /** Nearby additions are in cells, but not in the original-cell correction rate. */
+  additions?: number;
+  baseline?: boolean;
   substitutions: { from: string; to: string; count: number; at: number[][] }[];
   removed: { type: string; count: number }[];
   states: { type: string; count: number; props?: string[] }[];
+}
+
+export interface CorrectionMeasurement {
+  id: string;
+  time: number;
+  placed: number;
+  corrected?: { cells: number; share: number; time: number; additions?: number; baseline?: boolean };
 }
 
 /** A lesson Claude reads every session on a server (plugin/.../Lessons.java). */
@@ -116,6 +126,8 @@ export interface Lesson {
   by: string;
   time: number;
   seen: boolean;
+  updated?: number;
+  health?: { status: 'unavailable' | 'watching' | 'recurring'; count: number; entries: string[] };
 }
 
 /** One of the user's assets (lib/server/assets.ts). */

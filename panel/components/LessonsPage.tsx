@@ -81,7 +81,10 @@ export default function LessonsPage({ server: s }: { server: Server }) {
           as they are saved: edit or delete a wrong one here.</p>
       </div>{lessons && <span className="muted">{lessons.length} of {max}</span>}</div>
       <div className="stack">
-        <section className="card">
+          <section className="card">
+            <p className="muted">Repeat warnings compare named block substitutions in retained, checked builds in the same world.
+              They need two later builds; unchecked builds, missing source entries and rules without named substitutions cannot
+              establish whether a lesson works. Editing a lesson starts a new observation period.</p>
           {!s.online && !lessons ? <p className="empty">The server is offline. Lessons are kept on it, so they show again when it reconnects.</p>
             : error && !lessons ? <p className="error">{error}</p>
             : !lessons ? <p className="muted">Loading lessons…</p> : (
@@ -99,7 +102,13 @@ export default function LessonsPage({ server: s }: { server: Server }) {
                             <button type="button" className="ghost small" onClick={() => setEditing(null)}>Cancel</button>
                           </div>
                         </form>
-                      ) : <>{l.text}{fresh.current.has(l.id) && <> <Badge kind="running">new</Badge></>}</>}</td>
+                       ) : <>{l.text}{fresh.current.has(l.id) && <> <Badge kind="running">new</Badge></>}
+                         {l.health?.status === 'recurring' && <p className="muted" style={{ marginBottom: 0 }}>
+                           <b>May not be working:</b> the same substitution recurred in {l.health.count} later builds after this
+                           lesson was saved or edited. Review the context before changing the rule.
+                           {l.health.entries.map(e => <span key={e}> <EntryLink server={server} id={e} /></span>)}
+                         </p>}
+                       </>}</td>
                       <td><Badge>{ORIGIN[l.origin] ?? l.origin}</Badge>
                         {l.entries.map(e => <span key={e}> <EntryLink server={server} id={e} /></span>)}</td>
                       <td className="hide-sm">{l.by}</td>

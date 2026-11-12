@@ -5,6 +5,7 @@ import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
+import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import org.junit.jupiter.api.Test;
@@ -22,6 +23,82 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** {@link History#corrections} against a fake world that reads off the main thread. */
 class HistoryCorrectionsTest {
+
+    @Test
+    void snapshotShellRespectsWorldHeightAndVolumeLimit() throws Exception {
+        BuildService service = service(Files.createTempDirectory("corrections-shell"));
+        BuildService.Caller caller = new BuildService.Caller(null, "Claude", "world", at(0), 0, List.of(), 64, 319);
+        Box one = Box.of(at(0), at(0));
+        assertEquals(List.of(Box.of(new Vec3(-1, 64, -1), new Vec3(1, 65, 1))),
+                history(service).boxes(caller, List.of(new Op.Fill(one, "stone"))));
+        History small = new History(null, service, new History.Settings(true, 1, 100, 1000, 4096, 1000));
+        assertEquals(List.of(one), small.boxes(caller, List.of(new Op.Fill(one, "stone"))),
+                "when the shell would exceed the cap, keep original coverage");
+    }
+
+    @Test
+    void baselinesCountTowardQuotaAndArePrunedWithTheirEntry() throws Exception {
+        Path dir = Files.createTempDirectory("corrections-prune");
+        BuildService service = service(dir);
+        Box box = Box.of(at(0), at(3));
+        BlockDiff diff = new BlockDiff.Builder().change(at(0), "air", "stone").build();
+        world.put(at(0), "stone");
+        var after = service.readStepped("world", List.of(box), 4096);
+        long limit = diff.encode().length + after.encode().length - 1;
+        History h = new History(null, service, new History.Settings(true, 1000, 100, limit, 4096, 1000));
+        String id = h.record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world", box,
+                0, 0, 0, System.currentTimeMillis(), 1, null, null, null, null, null), diff, List.of(box), after);
+        assertEquals(0, h.list(100, null).get("total").getAsInt());
+        assertTrue(!Files.exists(dir.resolve("history/" + id + ".after.gz")));
+        assertTrue(!Files.exists(dir.resolve("history/" + id + ".diff.gz")));
+    }
+
+    @Test
+    void savedBaselineSurvivesRestartAndLaterEditsInItsShellAreExcluded() throws Exception {
+        Path dir = Files.createTempDirectory("corrections-baseline");
+        BuildService service = service(dir);
+        History h = history(service);
+        Box shell = Box.of(new Vec3(-1, 63, -1), new Vec3(4, 65, 1));
+        BlockDiff.Builder d = new BlockDiff.Builder();
+        for (int x = 0; x < 4; x++) {
+            d.change(at(x), "air", "stone"); world.put(at(x), "stone");
+        }
+        var after = service.readStepped("world", List.of(shell), 4096);
+        String id = h.record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world", shell,
+                0, 0, 0, System.currentTimeMillis(), 1, null, null, null, null, null), d.build(), List.of(shell), after);
+        assertTrue(Files.isRegularFile(dir.resolve("history/" + id + ".after.gz")));
+        for (int x = 0; x < 4; x++) world.put(new Vec3(x, 65, 0), "torch");
+        h = history(service);
+        JsonObject result = h.corrections(id);
+        assertTrue(result.get("baseline").getAsBoolean());
+        assertEquals(4, result.get("additions").getAsInt());
+        assertEquals(0, result.get("share").getAsDouble());
+        assertEquals(4, h.get(id).getAsJsonObject("corrected").get("additions").getAsInt());
+        JsonObject stats = h.correctionStats();
+        assertEquals(1, stats.getAsJsonArray("entries").size());
+        assertEquals(id, stats.getAsJsonArray("entries").get(0).getAsJsonObject().get("id").getAsString());
+
+        // This later recorded edit is outside the original diff bounds but inside its snapshot's shell.
+        record(h, new BlockDiff.Builder().change(new Vec3(0, 65, 0), "air", "torch").build(),
+                Box.of(new Vec3(0, 65, 0), new Vec3(0, 65, 0)));
+        assertEquals(0, h.corrections(id).get("cells").getAsInt(), "three additions are below the four-cell threshold");
+        Files.write(dir.resolve("history/" + id + ".after.gz"), new byte[]{1, 2, 3});
+        assertTrue(!h.corrections(id).get("baseline").getAsBoolean(), "damaged baselines fall back, never invent additions");
+    }
+
+    @Test
+    void statisticsKeepUnknownChecksDistinctFromZeroAndIgnoreScripts() throws Exception {
+        History h = history(service(Files.createTempDirectory("corrections-stats")));
+        String checked = corrected(h, 0, 4, "stone", "stone", "panel mcp");
+        String unknown = corrected(h, 1, 4, "stone", "stone", "panel mcp");
+        corrected(h, 2, 4, "stone", "stone", "panel rest");
+        h.corrections(checked);
+        JsonArray entries = h.correctionStats().getAsJsonArray("entries");
+        assertEquals(2, entries.size());
+        assertEquals(unknown, entries.get(0).getAsJsonObject().get("id").getAsString());
+        assertTrue(!entries.get(0).getAsJsonObject().has("corrected"));
+        assertEquals(0, entries.get(1).getAsJsonObject().getAsJsonObject("corrected").get("cells").getAsInt());
+    }
 
     private final Map<Vec3, String> world = new HashMap<>();
 

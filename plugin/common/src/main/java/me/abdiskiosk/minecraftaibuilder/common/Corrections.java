@@ -15,7 +15,7 @@ import java.util.function.Function;
  * The expected state of a cell is the entry's after-state, or the after-state of the newest later entry that changed
  * it, so later edits, reverts and approved drafts are not counted. Changes the world makes by itself (leaf decay,
  * grass spreading, crops growing, liquids flowing, fire, melting) are dropped, and so is a result below a threshold.
- * Only cells the entry changed are seen; blocks added beside it are not.
+ * With an after-snapshot, also considers originally empty cells directly touching blocks the entry placed.
  */
 public final class Corrections {
 
@@ -41,11 +41,12 @@ public final class Corrections {
      * @param substitutions largest first; likewise {@code removed} (now air) and {@code states} (same type, other
      *                      properties)
      */
-    public record Result(BlockDiff diff, long cells, long placed, double share, List<Substitution> substitutions,
+    public record Result(BlockDiff diff, long cells, long placed, double share, long additions, List<Substitution> substitutions,
                          List<TypeCount> removed, List<StateChange> states) {
         public boolean corrected() {
             return cells > 0;
         }
+
     }
 
     /** Sample positions listed per substitution. */
@@ -67,10 +68,30 @@ public final class Corrections {
      */
     public static Result find(BlockDiff entry, List<BlockDiff> later, List<Box> unknown, Function<Vec3, String> current,
                               Threshold threshold) {
+        return find(entry, later, unknown, current, threshold, null);
+    }
+
+    /** A baseline adds only known-air, face-adjacent cells; never guess what used to be outside its coverage. */
+    public static Result find(BlockDiff entry, List<BlockDiff> later, List<Box> unknown, Function<Vec3, String> current,
+                              Threshold threshold, RegionSnapshot baseline) {
         Map<Vec3, String> expected = new HashMap<>(entry.size() * 2);
         for (BlockDiff.Change c : entry.changes()) expected.put(c.pos(), c.after());
+        Set<Vec3> original = new HashSet<>(expected.keySet());
+        if (baseline != null) {
+            for (BlockDiff.Change c : entry.changes()) {
+                if (RegionCodec.isAir(c.after())) continue;
+                for (Vec3 offset : NEIGHBOURS) {
+                    Vec3 p = c.pos().add(offset.x(), offset.y(), offset.z());
+                    String state = baseline.get(p);
+                    if (!original.contains(p) && state != null && RegionCodec.isAir(state)) expected.putIfAbsent(p, "air");
+                }
+            }
+        }
         for (BlockDiff d : later) {
-            for (BlockDiff.Change c : d.changes()) expected.computeIfPresent(c.pos(), (p, old) -> c.after());
+            for (BlockDiff.Change c : d.changes()) {
+                if (original.contains(c.pos())) expected.computeIfPresent(c.pos(), (p, old) -> c.after());
+                else expected.remove(c.pos()); // a neighbour later edited by Claude no longer belongs to this entry
+            }
         }
 
         BlockDiff.Builder diff = new BlockDiff.Builder();
@@ -81,14 +102,20 @@ public final class Corrections {
         Map<String, Map<String, long[]>> stateProps = new HashMap<>();
         Map<List<String>, Boolean> naturalCache = new HashMap<>();
         long cells = 0;
-        for (BlockDiff.Change c : entry.changes()) {
-            Vec3 p = c.pos();
+        long correctedOriginal = 0;
+        // Stable coordinates keep sample positions independent of HashMap iteration order.
+        List<Vec3> positions = new ArrayList<>();
+        for (BlockDiff.Change c : entry.changes()) positions.add(c.pos());
+        expected.keySet().stream().filter(p -> !original.contains(p))
+                .sorted(Comparator.comparingInt(Vec3::y).thenComparingInt(Vec3::z).thenComparingInt(Vec3::x)).forEach(positions::add);
+        for (Vec3 p : positions) {
             if (inside(unknown, p)) continue;
             String want = air(expected.get(p));
             String now = air(current.apply(p));
             if (BlockDiff.same(want, now)) continue;
             if (naturalCache.computeIfAbsent(List.of(want, now), k -> natural(k.get(0), k.get(1)))) continue;
             cells++;
+            if (original.contains(p)) correctedOriginal++;
             diff.change(p, want, now);
             String from = RegionCodec.stripProperties(want), to = RegionCodec.stripProperties(now);
             if (RegionCodec.isAir(now)) {
@@ -106,9 +133,10 @@ public final class Corrections {
         }
 
         long placed = entry.size();
-        double share = placed == 0 ? 0 : (double) cells / placed;
+        // Additions are reported separately, never inflate a correction rate above 100%.
+        double share = placed == 0 ? 0 : (double) correctedOriginal / placed;
         if (cells == 0 || (cells < threshold.minCells() && share < threshold.minShare())) {
-            return new Result(BlockDiff.empty(), 0, placed, 0, List.of(), List.of(), List.of());
+            return new Result(BlockDiff.empty(), 0, placed, 0, 0, List.of(), List.of(), List.of());
         }
         List<Substitution> subList = new ArrayList<>();
         subs.forEach((k, n) -> subList.add(new Substitution(k.get(0), k.get(1), n[0], List.copyOf(subsAt.get(k)))));
@@ -122,8 +150,11 @@ public final class Corrections {
             }
             stateList.add(new StateChange(t.type(), t.count(), List.copyOf(props)));
         }
-        return new Result(diff.build(), cells, placed, share, subList, counts(removed), stateList);
+        return new Result(diff.build(), cells, placed, share, cells - correctedOriginal, subList, counts(removed), stateList);
     }
+
+    private static final List<Vec3> NEIGHBOURS = List.of(new Vec3(1, 0, 0), new Vec3(-1, 0, 0),
+            new Vec3(0, 1, 0), new Vec3(0, -1, 0), new Vec3(0, 0, 1), new Vec3(0, 0, -1));
 
     /** The properties whose values differ between two states of one type, by name. */
     private static List<String> differing(String a, String b) {

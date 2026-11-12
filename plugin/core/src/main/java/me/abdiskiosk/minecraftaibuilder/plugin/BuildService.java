@@ -553,8 +553,15 @@ public final class BuildService {
         // What the edit holds while it runs: its blocks in WorldEdit's history (or the draft), the chunks it has
         // to load, and the before and after snapshots when it is tracked.
         long blocks = ops.stream().mapToLong(Op::volume).sum();
+        List<Box> chunkBoxes = new ArrayList<>(ops.stream().map(Op::bounds).toList());
+        List<Long> touched = new ArrayList<>(ops.stream().map(Op::volume).toList());
+        if (boxes != null) {
+            // History also reads a one-block shell; estimate all its chunks, deduplicated with the edit's.
+            chunkBoxes.addAll(boxes);
+            touched.addAll(boxes.stream().map(Box::volume).toList());
+        }
         long need = blocks * MemoryGuard.BYTES_PER_EDIT_BLOCK
-                + unloadedChunks(caller.world(), ops.stream().map(Op::bounds).toList(), ops.stream().map(Op::volume).toList()) * MemoryGuard.BYTES_PER_CHUNK
+                + unloadedChunks(caller.world(), chunkBoxes, touched) * MemoryGuard.BYTES_PER_CHUNK
                 + (boxes == null ? 0 : boxes.stream().mapToLong(Box::volume).sum() * MemoryGuard.BYTES_PER_READ_BLOCK);
         MemoryGuard.Reservation held = memory.reserve(need, "edit up to " + blocks + " blocks", "Split the edit into smaller calls,"
                 + " or wait 15 seconds for chunks to unload. Large edits also stay in WorldEdit's undo history (15 per player);"

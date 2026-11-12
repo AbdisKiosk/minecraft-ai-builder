@@ -12,6 +12,41 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class CorrectionsTest {
 
+    @Test
+    void baselineFindsOnlyOriginallyEmptyFaceNeighboursAndKeepsTheRateSeparate() {
+        BlockDiff entry = placed("stone", "stone", "stone", "stone");
+        RegionSnapshotTest.FakeWorld baselineWorld = new RegionSnapshotTest.FakeWorld();
+        Box box = Box.of(new Vec3(-1, 63, -1), new Vec3(4, 65, 1));
+        for (int y = 63; y <= 65; y++) for (int z = -1; z <= 1; z++) for (int x = -1; x <= 4; x++)
+            baselineWorld.set.put(new Vec3(x, y, z), "air");
+        world(entry).forEach(baselineWorld.set::put);
+        baselineWorld.set.put(new Vec3(-1, 64, 0), "dirt"); // pre-existing, not empty
+        RegionSnapshot baseline = new RegionSnapshot(List.of(box));
+        baseline.readAll(baselineWorld, "w", 1000);
+        Map<Vec3, String> now = new HashMap<>(baselineWorld.set);
+        for (int x = 0; x < 4; x++) now.put(new Vec3(x, 65, 0), "torch");
+        now.put(new Vec3(-1, 64, 0), "gold_block");
+        now.put(new Vec3(4, 65, 1), "gold_block"); // diagonal/distant
+        now.put(new Vec3(0, 66, 0), "gold_block"); // outside the read
+        Corrections.Result r = Corrections.find(entry, List.of(), List.of(), now::get, Corrections.Threshold.DEFAULT, baseline);
+        assertEquals(4, r.cells());
+        assertEquals(4, r.additions());
+        assertEquals(0, r.share());
+        assertEquals("air", r.substitutions().get(0).from());
+        assertEquals("torch", r.substitutions().get(0).to());
+        assertEquals(0, Corrections.find(entry, List.of(), now::get).cells(), "old entries cannot guess their surroundings");
+
+        BlockDiff later = new BlockDiff.Builder().change(new Vec3(0, 65, 0), "air", "torch").build();
+        Corrections.Result excluded = Corrections.find(entry, List.of(later), List.of(), now::get, new Corrections.Threshold(1, 0), baseline);
+        assertEquals(3, excluded.additions());
+        now.put(new Vec3(0, 65, 0), "gold_block");
+        assertEquals(3, Corrections.find(entry, List.of(later), List.of(), now::get, new Corrections.Threshold(1, 0), baseline).cells(),
+                "later edits own their neighbours even if changed again");
+        assertEquals(0, Corrections.find(entry, List.of(), List.of(box), now::get, new Corrections.Threshold(1, 0), baseline).cells());
+        for (int x = 0; x < 4; x++) now.put(new Vec3(x, 65, 0), "snow");
+        assertEquals(0, Corrections.find(entry, List.of(), List.of(), now::get, Corrections.Threshold.DEFAULT, baseline).cells());
+    }
+
     /** An entry that placed {@code after} in a row of cells along x at y=64, where there was air. */
     private static BlockDiff placed(String... after) {
         BlockDiff.Builder b = new BlockDiff.Builder();

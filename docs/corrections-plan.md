@@ -3,6 +3,25 @@
 When a person fixes what Claude built, the fix becomes a short lesson that Claude reads at the start of the next
 session on that server. The aim is a falling correction rate, not a growing rule book.
 
+## Implementation status
+
+Phases 1–4 are implemented. Phase 4 deliberately uses bounded, conservative evidence:
+- New tracked edits save a compressed local after-snapshot, including a one-block shell when it fits under
+  `history.max-volume`. Snapshot bytes count toward history's byte quota and are pruned with the entry.
+- Nearby additions must have been air in that snapshot and directly touch a non-air block the entry placed.
+  Later recorded edits, unknown overlapping edits and natural changes are excluded. Older entries without a
+  baseline retain original-cell detection; no historical baseline is guessed from the world now.
+- The server page charts the latest 200 retained tracked Claude builds, distinguishing unchecked builds from
+  checked zeroes. The rate uses corrected original cells / original changed cells; nearby additions are separate.
+  Measurements are live plugin metadata, not the archive's edit-time metadata, and need the server online.
+- Lessons naming both block types of a source substitution get a review warning after it recurs in two distinct
+  later checked Claude builds in the same world, created after the lesson was saved or edited. This is a warning,
+  not an automatic verdict or deletion. Missing sources and free-text rules without named substitutions cannot
+  be evaluated. Editing resets the observation period; marking seen does not.
+
+Scope is one list per server. Every member may read lessons and mark them seen; admins and owners may change
+them. Only panel rejects/reverts prompt for feedback. These decisions supersede the open questions below.
+
 ## What counts as a correction
 
 Three signals, strongest first:

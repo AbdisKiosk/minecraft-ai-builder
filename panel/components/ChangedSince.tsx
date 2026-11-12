@@ -32,8 +32,12 @@ export default function ChangedSince({ server: s, entry: e, base }: { server: Se
   return (
     <>
       <section className="card"><h2>Changed since</h2>
-        <p>People changed <b>{num(c.cells)}</b> of the {num(c.placed)} blocks this edit placed ({Math.round(c.share * 100)}%).
-          Changes the world makes by itself (leaves, grass, crops, water) are left out.</p>
+        <p>People changed <b>{num(c.cells - (c.additions ?? 0))}</b> of the {num(c.placed)} blocks this edit placed ({Math.round(c.share * 100)}%).
+          {!!c.additions && <> They also added <b>{num(c.additions)}</b> nearby blocks.</>}
+          {' '}Changes the world makes by itself (leaves, grass, crops, water) are left out.</p>
+        <p className="muted">{c.baseline
+          ? 'Nearby additions are originally empty cells directly touching this build, within its saved snapshot. They may belong to another project; review before saving a lesson.'
+          : 'No saved after-snapshot is available. Only the blocks this edit changed can be compared.'}</p>
         <div className="table-wrap"><table>
           <thead><tr><th>Change</th><th className="right">Blocks</th><th className="hide-sm">For example at</th></tr></thead>
           <tbody>

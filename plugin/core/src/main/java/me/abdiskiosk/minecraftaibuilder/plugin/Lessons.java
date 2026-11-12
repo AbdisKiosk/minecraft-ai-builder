@@ -41,7 +41,7 @@ public final class Lessons {
     private static final Pattern ID = Pattern.compile("[A-Za-z0-9_-]{1,40}");
 
     /** @param entries the history or draft ids the lesson came from; may be empty */
-    public record Lesson(String id, String text, String origin, List<String> entries, String by, long time, boolean seen) {
+    public record Lesson(String id, String text, String origin, List<String> entries, String by, long time, boolean seen, long updated) {
     }
 
     /** What a person said about a rejected draft or reverted entry, waiting to reach Claude. */
@@ -96,7 +96,7 @@ public final class Lessons {
             if (!l.text().equalsIgnoreCase(text)) continue;
             List<String> merged = new ArrayList<>(l.entries());
             for (String e : from) if (merged.size() < MAX_ENTRIES && !merged.contains(e)) merged.add(e);
-            Lesson same = new Lesson(l.id(), l.text(), l.origin(), List.copyOf(merged), l.by(), l.time(), l.seen());
+            Lesson same = new Lesson(l.id(), l.text(), l.origin(), List.copyOf(merged), l.by(), l.time(), l.seen(), l.updated());
             lessons.set(i, same);
             save();
             return new Saved(same, null);
@@ -116,7 +116,7 @@ public final class Lessons {
             lessons.remove(replaced);
         }
         long now = System.currentTimeMillis();
-        Lesson lesson = new Lesson(nextId(now), text, origin, List.copyOf(from), clean(by, MAX_BY), now, false);
+        Lesson lesson = new Lesson(nextId(now), text, origin, List.copyOf(from), clean(by, MAX_BY), now, false, now);
         lessons.add(lesson);
         save();
         return new Saved(lesson, replaced);
@@ -129,7 +129,7 @@ public final class Lessons {
         for (int i = 0; i < lessons.size(); i++) {
             Lesson l = lessons.get(i);
             if (!l.id().equals(id)) continue;
-            Lesson edited = new Lesson(l.id(), text, l.origin(), l.entries(), l.by(), l.time(), true);
+            Lesson edited = new Lesson(l.id(), text, l.origin(), l.entries(), l.by(), l.time(), true, System.currentTimeMillis());
             lessons.set(i, edited);
             save();
             return edited;
@@ -149,7 +149,7 @@ public final class Lessons {
         for (int i = 0; i < lessons.size(); i++) {
             Lesson l = lessons.get(i);
             if (l.seen()) continue;
-            lessons.set(i, new Lesson(l.id(), l.text(), l.origin(), l.entries(), l.by(), l.time(), true));
+            lessons.set(i, new Lesson(l.id(), l.text(), l.origin(), l.entries(), l.by(), l.time(), true, l.updated()));
             n++;
         }
         if (n > 0) save();
@@ -249,6 +249,7 @@ public final class Lessons {
         o.addProperty("by", l.by());
         o.addProperty("time", l.time());
         o.addProperty("seen", l.seen());
+        o.addProperty("updated", l.updated());
         return o;
     }
 
@@ -281,7 +282,7 @@ public final class Lessons {
                     long time = o.has("time") ? o.get("time").getAsLong() : 0;
                     lastId = Math.max(lastId, time);
                     lessons.add(new Lesson(id, text, origin, List.copyOf(entries), clean(str(o, "by"), MAX_BY), time,
-                            o.has("seen") && o.get("seen").getAsBoolean()));
+                            o.has("seen") && o.get("seen").getAsBoolean(), o.has("updated") ? o.get("updated").getAsLong() : time));
                 }
             }
             if (root.has("feedback") && root.get("feedback").isJsonArray()) {

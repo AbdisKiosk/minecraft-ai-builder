@@ -245,6 +245,19 @@ on a server. Lessons apply as soon as they are saved; there is no approval step.
 - **Lessons** on a server's page lists them with where they came from (feedback, Claude or written there), who wrote
   them and the build they came from. Every member sees them, and lessons nobody has seen yet are marked new until
   someone opens the page. Admins and the owner add, edit and delete them.
+- New tracked builds keep a compressed after-snapshot locally, including a one-block shell when it fits under
+  `history.max-volume`. **Changed since** also finds blocks added into originally empty cells directly touching
+  the build. Later recorded edits and natural changes are excluded. These are candidates, not proof of intent;
+  review them before making a rule. Older builds without snapshots still compare their original changed cells.
+  Snapshot bytes count toward `history.max-bytes` and are deleted when their entry is pruned.
+- **Correction rate** on the server page charts up to 200 retained tracked Claude builds, oldest to newest.
+  Unchecked builds are distinct from checked zeroes. The overall rate is weighted by the number of original
+  changed cells; nearby additions are separate and cannot push the rate above 100%. Viewing the chart reads
+  stored measurements only, never world chunks. The server must be online; archive metadata is not a live check.
+- A lesson naming both block types in a source substitution shows **May not be working** when that substitution
+  recurs in two distinct later checked Claude builds in the same world. Builds must have started after the lesson
+  was saved or edited; marking it seen does not reset this period. The warning links to up to five builds for
+  review, never edits or deletes a lesson automatically, and cannot assess missing source entries or arbitrary prose.
 - A server keeps at most 12. A new lesson then replaces the oldest one Claude wrote; when people wrote every one,
   Claude's is refused and a person's replaces the oldest.
 

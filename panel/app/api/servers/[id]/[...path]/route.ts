@@ -45,6 +45,7 @@ function resolveGet(req: NextRequest, path: string[]): Op | null {
     if (before) args.before = before;
     return op(t, 'list', args);
   }
+  if (t === 'history' && id === 'correctionStats' && !sub) return op(t, 'correctionStats', {});
   if (!sub) return op(t, 'get', { id });
   if (sub === 'render') return op(t, 'render', viewArgs(req, id));
   if (sub === 'blocks') return op(t, 'blocks', { id });
@@ -70,6 +71,8 @@ const OFFLINE_VIEW = 'The server is offline. Only the default picture (isometric
 /** The archive's answer to a history request, or null to ask the plugin. */
 async function fromArchive(serverId: string, frame: Json): Promise<Response | null> {
   const args = frame.args as Json;
+  // Measurements are live plugin metadata, not the edit-time copy in the R2 archive.
+  if (frame.op === 'correctionStats') return null;
   if (frame.op === 'list') {
     // A plugin that never archived (an old one) still lists its own history.
     if (!(await archive.hasArchive(serverId)) && hub().online(serverId)) return null;

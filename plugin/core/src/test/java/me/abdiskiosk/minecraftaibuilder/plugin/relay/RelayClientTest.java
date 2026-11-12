@@ -160,6 +160,8 @@ class RelayClientTest {
         JsonObject list = panel.request(frame("{\"t\":\"lessons\",\"op\":\"list\"}")).getAsJsonObject("body");
         assertEquals(2, list.getAsJsonArray("lessons").size());
         assertEquals(12, list.get("max").getAsInt());
+        assertEquals("unavailable", list.getAsJsonArray("lessons").get(0).getAsJsonObject()
+                .getAsJsonObject("health").get("status").getAsString());
         assertEquals(2, panel.request(frame("{\"t\":\"lessons\",\"op\":\"seen\"}")).getAsJsonObject("body").get("seen").getAsInt());
 
         JsonObject edited = panel.request(frame("{\"t\":\"lessons\",\"op\":\"edit\",\"args\":{\"id\":\"" + id + "\",\"text\":\"Roofs are spruce\"}}"));
@@ -174,6 +176,21 @@ class RelayClientTest {
         service.lessons().addTo(context);
         assertEquals("[\"d1: Too dark\"]", context.get("feedback").toString());
         assertEquals("[\"Too dark\"]", context.get("lessons").toString());
+    }
+
+    @Test
+    void servesCorrectionMeasurementsThroughTheExistingHistoryFrame() throws Exception {
+        panel.hello();
+        Box box = Box.of(new Vec3(0, 64, 0), new Vec3(0, 64, 0));
+        BlockDiff diff = new BlockDiff.Builder().change(box.min(), "air", "stone").build();
+        String id = history.record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world", box,
+                1, 1, 1, System.currentTimeMillis(), 1, null, null, null, null, null), diff, List.of(box), null);
+        JsonObject reply = panel.request(frame("{\"t\":\"history\",\"op\":\"correctionStats\",\"args\":{}}"));
+        assertEquals(200, reply.get("status").getAsInt());
+        JsonObject row = reply.getAsJsonObject("body").getAsJsonArray("entries").get(0).getAsJsonObject();
+        assertEquals(id, row.get("id").getAsString());
+        assertEquals(1, row.get("placed").getAsInt());
+        assertTrue(!row.has("corrected"), "listing statistics needs no world read and does not turn unknown into zero");
     }
 
     @Test

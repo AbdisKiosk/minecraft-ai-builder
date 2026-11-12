@@ -445,6 +445,7 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("limit") ? Math.max(1, Math.min(500, args.get("limit").getAsInt())) : 50,
                     args.has("before") ? args.get("before").getAsString() : null));
             case "get" -> new RestApi.Response(200, history.get(str(args, "id")));
+            case "correctionStats" -> new RestApi.Response(200, history.correctionStats());
             case "render" -> new RestApi.Response(200, history.render(str(args, "id"),
                     args.has("view") ? args.get("view").getAsString() : null,
                     args.has("corner") ? args.get("corner").getAsString() : null));
@@ -517,7 +518,7 @@ public final class RelayClient implements BuildService.JobListener {
         String op = frame.has("op") ? frame.get("op").getAsString() : "";
         Lessons lessons = service.lessons();
         return switch (op) {
-            case "list" -> new RestApi.Response(200, lessons.listJson());
+            case "list" -> new RestApi.Response(200, history == null ? lessons.listJson() : history.lessonReport(lessons.list()));
             case "add" -> {
                 java.util.List<String> from = args.has("entry") ? java.util.List.of(str(args, "entry")) : java.util.List.of();
                 Lessons.Saved saved = lessons.add(str(args, "text"), Lessons.MANUAL, from, by(args));

@@ -1,5 +1,12 @@
 package me.abdiskiosk.minecraftaibuilder.common;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.IOException;
+import java.util.zip.GZIPInputStream;
+import java.util.zip.GZIPOutputStream;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -129,6 +136,80 @@ public final class RegionSnapshot {
             if (contains(b, p)) return palette.get(data[i][RegionCodec.index(b, p.x(), p.y(), p.z())]);
         }
         return null;
+    }
+
+    /** Local history baseline, palette/RLE compressed; includes air and the exact coverage of the read. */
+    public byte[] encode() throws IOException {
+        if (!done()) throw new IOException("snapshot is incomplete");
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream out = new DataOutputStream(new GZIPOutputStream(bytes))) {
+            out.writeInt(1);
+            out.writeInt(boxes.size());
+            for (Box b : boxes) {
+                for (Vec3 p : List.of(b.min(), b.max())) {
+                    out.writeInt(p.x()); out.writeInt(p.y()); out.writeInt(p.z());
+                }
+            }
+            out.writeInt(palette.size());
+            for (String state : palette) out.writeUTF(state);
+            for (int[] cells : data) {
+                for (int i = 0; i < cells.length;) {
+                    int start = i, value = cells[i++];
+                    while (i < cells.length && cells[i] == value) i++;
+                    out.writeInt(value); out.writeInt(i - start);
+                }
+            }
+        }
+        return bytes.toByteArray();
+    }
+
+    /** Reject corrupt or oversized baselines before allocating their cell arrays. */
+    public static RegionSnapshot decode(byte[] bytes, long maxVolume) throws IOException {
+        try (DataInputStream in = new DataInputStream(new GZIPInputStream(new ByteArrayInputStream(bytes)))) {
+            if (in.readInt() != 1) throw new IOException("unknown snapshot format");
+            int count = in.readInt();
+            if (count < 1 || count > Math.min(maxVolume, 4096)) throw new IOException("bad snapshot box count");
+            List<Box> boxes = new ArrayList<>();
+            long volume = 0;
+            for (int i = 0; i < count; i++) {
+                Vec3 min = new Vec3(in.readInt(), in.readInt(), in.readInt());
+                Vec3 max = new Vec3(in.readInt(), in.readInt(), in.readInt());
+                long sx = (long) max.x() - min.x() + 1, sy = (long) max.y() - min.y() + 1, sz = (long) max.z() - min.z() + 1;
+                if (sx < 1 || sy < 1 || sz < 1 || sx > maxVolume || sy > maxVolume / sx || sz > maxVolume / sx / sy)
+                    throw new IOException("snapshot exceeds volume limit");
+                volume += sx * sy * sz;
+                if (volume > maxVolume || volume > Integer.MAX_VALUE) throw new IOException("snapshot exceeds volume limit");
+                Box b = new Box(min, max);
+                for (Box previous : boxes) {
+                    if (min.x() <= previous.max().x() && max.x() >= previous.min().x()
+                            && min.y() <= previous.max().y() && max.y() >= previous.min().y()
+                            && min.z() <= previous.max().z() && max.z() >= previous.min().z()) throw new IOException("overlapping snapshot boxes");
+                }
+                boxes.add(b);
+            }
+            int states = in.readInt();
+            if (states < 1 || states > volume) throw new IOException("bad snapshot palette size");
+            RegionSnapshot snapshot = new RegionSnapshot(boxes);
+            long characters = 0;
+            for (int i = 0; i < states; i++) {
+                String state = in.readUTF();
+                characters += state.length();
+                if (state.isEmpty() || state.length() > 4096 || characters > 16 * 1024 * 1024)
+                    throw new IOException("snapshot palette too large");
+                snapshot.palette.add(state);
+            }
+            for (int[] cells : snapshot.data) {
+                for (int i = 0; i < cells.length;) {
+                    int value = in.readInt(), run = in.readInt();
+                    if (value < 0 || value >= states || run < 1 || run > cells.length - i) throw new IOException("bad snapshot run");
+                    java.util.Arrays.fill(cells, i, i + run, value);
+                    i += run;
+                }
+            }
+            if (in.read() != -1) throw new IOException("trailing snapshot data");
+            snapshot.box = boxes.size();
+            return snapshot;
+        }
     }
 
     /** Before/after reads of the same boxes as a diff. */

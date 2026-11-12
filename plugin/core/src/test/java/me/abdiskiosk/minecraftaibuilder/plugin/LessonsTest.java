@@ -137,4 +137,18 @@ class LessonsTest {
         Files.writeString(dir.resolve("lessons.json"), "{not json");
         assertTrue(new Lessons(dir).list().isEmpty());
     }
+
+    @Test
+    void editingRestartsHealthObservationAndOldFilesRemainReadable() throws Exception {
+        Files.writeString(dir.resolve("lessons.json"), "{\"lessons\":[{\"id\":\"l1\",\"text\":\"Use spruce_planks, not oak_planks.\","
+                + "\"origin\":\"manual\",\"entries\":[\"h1\"],\"by\":\"Ann\",\"time\":100,\"seen\":false}]}");
+        Lessons lessons = new Lessons(dir);
+        assertEquals(100, lessons.list().get(0).updated());
+        lessons.markSeen();
+        assertEquals(100, lessons.list().get(0).updated());
+        Lessons.Lesson edited = lessons.edit("l1", "Use birch_planks, not oak_planks.");
+        assertTrue(edited.updated() > 100);
+        assertEquals(100, edited.time());
+        assertEquals(edited, new Lessons(dir).list().get(0));
+    }
 }

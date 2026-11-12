@@ -18,6 +18,47 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class RegionSnapshotTest {
 
+    @Test
+    void baselineRoundTripsExactCoverageAirAndStates() throws Exception {
+        FakeWorld world = new FakeWorld();
+        world.set.put(new Vec3(0, 0, 0), "cave_air");
+        world.set.put(new Vec3(1, 0, 0), "oak_stairs[facing=east]");
+        RegionSnapshot original = new RegionSnapshot(List.of(A, B));
+        original.readAll(world, "w", 10);
+        byte[] bytes = original.encode();
+        RegionSnapshot restored = RegionSnapshot.decode(bytes, original.volume());
+        assertTrue(restored.done());
+        assertEquals(original.boxes(), restored.boxes());
+        assertArrayEquals(original.array(0), restored.array(0));
+        assertArrayEquals(original.array(1), restored.array(1));
+        assertEquals("air", restored.get(new Vec3(0, 0, 0)));
+        assertNull(restored.get(new Vec3(5, 0, 0)));
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> RegionSnapshot.decode(bytes, original.volume() - 1));
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> RegionSnapshot.decode(java.util.Arrays.copyOf(bytes, bytes.length / 2), 100));
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> new RegionSnapshot(List.of(A)).encode());
+    }
+
+    @Test
+    void corruptBaselineRunsAndHugeDimensionsAreRefused() throws Exception {
+        for (int run : new int[]{0, -1, 2}) {
+            byte[] bytes = baselineBytes(0, run, false);
+            org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> RegionSnapshot.decode(bytes, 100));
+        }
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> RegionSnapshot.decode(baselineBytes(1, 1, false), 100));
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException.class, () -> RegionSnapshot.decode(baselineBytes(0, 1, true), 100));
+    }
+
+    private static byte[] baselineBytes(int paletteIndex, int run, boolean huge) throws Exception {
+        java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+        try (java.io.DataOutputStream out = new java.io.DataOutputStream(new java.util.zip.GZIPOutputStream(bytes))) {
+            out.writeInt(1); out.writeInt(1);
+            for (int i = 0; i < 3; i++) out.writeInt(huge ? Integer.MIN_VALUE : 0);
+            for (int i = 0; i < 3; i++) out.writeInt(huge ? Integer.MAX_VALUE : 0);
+            out.writeInt(1); out.writeUTF("air"); out.writeInt(paletteIndex); out.writeInt(run);
+        }
+        return bytes.toByteArray();
+    }
+
     /** A world where every block is named after its coordinates, and reads are recorded. */
     static final class FakeWorld implements WorldEditBridge {
         final Map<Vec3, String> set = new HashMap<>();

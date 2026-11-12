@@ -107,6 +107,13 @@ public final class History implements BuildService.Recorder {
         }
         boxes = RegionSnapshot.merge(boxes);
         if (boxes.isEmpty() || RegionSnapshot.volume(boxes) > settings.maxVolume()) return null;
+        // Capture a one-block shell while the edit already owns its memory reservation. The same before/after
+        // coverage keeps the diff accurate, and the saved after-read can later prove a neighbour used to be air.
+        List<Box> surroundings = new ArrayList<>();
+        for (Box b : boxes) surroundings.add(RegionSnapshot.clipY(
+                Box.of(b.min().add(-1, -1, -1), b.max().add(1, 1, 1)), caller.minY(), caller.maxY()));
+        surroundings = RegionSnapshot.merge(surroundings);
+        if (RegionSnapshot.volume(surroundings) <= settings.maxVolume()) return surroundings;
         return boxes;
     }
 
@@ -123,12 +130,23 @@ public final class History implements BuildService.Recorder {
         }
         // Built outside the lock: the 3D blocks need the server thread, which may be waiting on this history.
         boolean archived = archiving && diff != null && after != null && writeArchive(id, diff, after);
+        long baselineBytes = 0;
+        if (diff != null && !diff.isEmpty() && after != null && after.done() && after.volume() <= settings.maxVolume()) {
+            try {
+                byte[] bytes = after.encode();
+                Files.createDirectories(dir);
+                Files.write(dir.resolve(id + ".after.gz"), bytes);
+                baselineBytes = bytes.length;
+            } catch (IOException ex) {
+                if (plugin != null) plugin.getLogger().log(Level.WARNING, "Could not save correction baseline for " + id, ex);
+            }
+        }
         synchronized (this) {
-            return store(id, job, diff, boxes, archived);
+            return store(id, job, diff, boxes, archived, baselineBytes);
         }
     }
 
-    private String store(String id, BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, boolean archiveFiles) {
+    private String store(String id, BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, boolean archiveFiles, long baselineBytes) {
         JsonObject e = new JsonObject();
         e.addProperty("id", id);
         e.addProperty("job", job.id());
@@ -143,6 +161,7 @@ public final class History implements BuildService.Recorder {
         if (job.revertOf() != null) e.addProperty("revertOf", job.revertOf());
         if (job.draftOf() != null) e.addProperty("draftOf", job.draftOf());
         e.addProperty("tracked", diff != null);
+        if (baselineBytes > 0) e.addProperty("baselineBytes", baselineBytes);
         if (diff != null) {
             BlockDiff.Stats stats = diff.stats();
             e.addProperty("added", stats.added());
@@ -289,14 +308,15 @@ public final class History implements BuildService.Recorder {
 
     private void prune() {
         long bytes = 0;
-        for (JsonObject e : entries.values()) bytes += e.has("bytes") ? e.get("bytes").getAsLong() : 0;
+        for (JsonObject e : entries.values()) bytes += storedBytes(e);
         boolean removed = false;
         while (!entries.isEmpty() && (entries.size() > settings.keep() || bytes > settings.maxBytes())) {
             String oldest = entries.keySet().iterator().next();
             JsonObject e = entries.remove(oldest);
-            bytes -= e.has("bytes") ? e.get("bytes").getAsLong() : 0;
+            bytes -= storedBytes(e);
             try {
                 Files.deleteIfExists(dir.resolve(oldest + ".diff.gz"));
+                Files.deleteIfExists(dir.resolve(oldest + ".after.gz"));
             } catch (IOException ex) {
                 plugin.getLogger().log(Level.WARNING, "Could not delete history " + oldest, ex);
             }
@@ -304,6 +324,11 @@ public final class History implements BuildService.Recorder {
             removed = true;
         }
         if (removed) rewriteIndex();
+    }
+
+    private static long storedBytes(JsonObject e) {
+        return (e.has("bytes") ? e.get("bytes").getAsLong() : 0)
+                + (e.has("baselineBytes") ? e.get("baselineBytes").getAsLong() : 0);
     }
 
     private void rewriteIndex() {
@@ -412,11 +437,14 @@ public final class History implements BuildService.Recorder {
      * after-state.
      */
     public JsonObject corrections(String id) {
-        Corrections.Result r = compute(id).result();
+        Computed computed = compute(id);
+        Corrections.Result r = computed.result();
         JsonObject o = new JsonObject();
         o.addProperty("cells", r.cells());
         o.addProperty("placed", r.placed());
         o.addProperty("share", share(r));
+        o.addProperty("additions", r.additions());
+        o.addProperty("baseline", computed.baseline());
         o.add("substitutions", substitutions(r.substitutions(), LISTED_CORRECTIONS, Corrections.MAX_AT));
         o.add("removed", typeCounts(r.removed()));
         o.add("states", stateChanges(r.states(), LISTED_CORRECTIONS));
@@ -437,7 +465,7 @@ public final class History implements BuildService.Recorder {
                 settings.maxRenderVolume(), settings.readsPerTick());
     }
 
-    private record Computed(String world, Corrections.Result result) {
+    private record Computed(String world, Corrections.Result result, boolean baseline) {
     }
 
     private static double share(Corrections.Result r) {
@@ -464,7 +492,17 @@ public final class History implements BuildService.Recorder {
         if (diff == null) throw new EditException("the diff of entry " + id + " is gone from the history folder");
         if (diff.isEmpty()) throw new EditException("entry " + id + " changed no blocks, so nothing of it can have been corrected");
         String world = e.get("world").getAsString();
-        Box bounds = diff.bounds();
+        RegionSnapshot baseline = null;
+        if (e.has("baselineBytes")) {
+            try {
+                baseline = RegionSnapshot.decode(Files.readAllBytes(dir.resolve(id + ".after.gz")), settings.maxVolume());
+            } catch (IOException | RuntimeException ex) {
+                // Older, pruned or damaged baselines must never turn unknown surroundings into apparent additions.
+                baseline = null;
+            }
+        }
+        List<Box> readBoxes = baseline == null ? boxes(e, diff) : baseline.boxes();
+        Box bounds = readBoxes.stream().reduce((a, b) -> Box.of(Vec3.min(a.min(), b.min()), Vec3.max(a.max(), b.max()))).orElse(diff.bounds());
 
         List<BlockDiff> laterDiffs = new ArrayList<>();
         List<Box> unknown = new ArrayList<>();
@@ -490,15 +528,18 @@ public final class History implements BuildService.Recorder {
             laterDiffs.add(part.build());
         }
 
-        RegionSnapshot now = service.readStepped(world, boxes(e, diff), settings.readsPerTick());
+        if (RegionSnapshot.volume(readBoxes) > settings.maxVolume()) throw new EditException("correction read exceeds history.max-volume");
+        RegionSnapshot now = service.readStepped(world, readBoxes, settings.readsPerTick());
         Corrections.Result r = Corrections.find(diff, laterDiffs, unknown, p -> {
             String s = now.get(p);
             return s == null ? "air" : s;
-        }, Corrections.Threshold.DEFAULT);
+        }, Corrections.Threshold.DEFAULT, baseline);
 
         JsonObject stamp = new JsonObject();
         stamp.addProperty("cells", r.cells());
         stamp.addProperty("share", share(r));
+        stamp.addProperty("additions", r.additions());
+        stamp.addProperty("baseline", baseline != null);
         stamp.addProperty("time", System.currentTimeMillis());
         if (r.corrected()) {
             if (!r.substitutions().isEmpty()) stamp.add("substitutions", substitutions(r.substitutions(), STAMPED_ROWS, STAMPED_AT));
@@ -515,12 +556,48 @@ public final class History implements BuildService.Recorder {
                 rewriteIndex();
             }
         }
-        return new Computed(world, r);
+        return new Computed(world, r, baseline != null);
     }
 
     /** The entries a background check looks at now; see {@link CorrectionCheck#pick}. */
     public synchronized List<String> correctionCandidates(long now) {
         return CorrectionCheck.pick(entries.values(), now);
+    }
+
+    /** Bounded measurements for the panel; unchecked entries are not silently presented as zero corrections. */
+    public synchronized JsonObject correctionStats() {
+        JsonArray rows = new JsonArray();
+        List<JsonObject> all = new ArrayList<>(entries.values());
+        for (int i = all.size() - 1; i >= 0 && rows.size() < 200; i--) {
+            JsonObject e = all.get(i);
+            if (!CorrectionCheck.CLAUDE_SOURCE.equals(e.get("source").getAsString()) || !e.get("tracked").getAsBoolean()
+                    || e.has("revertOf")) continue;
+            long placed = e.get("added").getAsLong() + e.get("removed").getAsLong() + e.get("changed").getAsLong();
+            if (placed == 0) continue;
+            JsonObject row = new JsonObject();
+            row.add("id", e.get("id"));
+            row.add("time", e.get("time"));
+            row.addProperty("placed", placed);
+            if (e.has("corrected")) row.add("corrected", e.get("corrected").deepCopy());
+            rows.add(row);
+        }
+        JsonObject out = new JsonObject();
+        out.add("entries", rows);
+        return out;
+    }
+
+    /** Only metadata is inspected here: no world reads or new background jobs. */
+    public synchronized JsonObject lessonReport(List<Lessons.Lesson> lessons) {
+        JsonObject out = new JsonObject();
+        JsonArray rows = new JsonArray();
+        for (Lessons.Lesson lesson : lessons) {
+            JsonObject row = Lessons.json(lesson);
+            row.add("health", LessonHealth.assess(lesson, entries.values()));
+            rows.add(row);
+        }
+        out.add("lessons", rows);
+        out.addProperty("max", Lessons.MAX);
+        return out;
     }
 
     /** True when the entry's last check found corrections above the noise threshold. */
