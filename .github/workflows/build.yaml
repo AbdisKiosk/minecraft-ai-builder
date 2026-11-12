@@ -41,7 +41,11 @@ jobs:
           push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
+      # COOLIFY_WEBHOOK is the resource's Deploy Webhook (Webhooks tab: .../api/v1/deploy?uuid=...), not the GitHub
+      # webhook, which answers 200 "Nothing to do" to anything that is not a GitHub event.
       - name: Trigger Coolify deployment
         run: |
-          curl --fail --request POST '${{ secrets.COOLIFY_WEBHOOK }}' \
-            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}'
+          response=$(curl --fail --silent --show-error '${{ secrets.COOLIFY_WEBHOOK }}' \
+            --header 'Authorization: Bearer ${{ secrets.COOLIFY_TOKEN }}')
+          echo "$response"
+          grep -q '"deployments"' <<< "$response"
