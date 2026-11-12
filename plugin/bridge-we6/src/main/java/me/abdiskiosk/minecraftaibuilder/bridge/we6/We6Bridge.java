@@ -21,7 +21,6 @@ import com.sk89q.worldedit.extent.clipboard.io.ClipboardFormat;
 import com.sk89q.worldedit.extent.transform.BlockTransformExtent;
 import com.sk89q.worldedit.function.mask.Mask;
 import com.sk89q.worldedit.function.pattern.Patterns;
-import com.sk89q.worldedit.math.convolution.GaussianKernel;
 import com.sk89q.worldedit.math.convolution.HeightMap;
 import com.sk89q.worldedit.math.convolution.HeightMapFilter;
 import com.sk89q.worldedit.math.transform.AffineTransform;
@@ -388,8 +387,7 @@ public final class We6Bridge implements WorldEditBridge {
                 }
                 if (op instanceof Op.Smooth o) {
                     // As //smooth without -n.
-                    HeightMap map = new HeightMap(edit, region(world, o.box()));
-                    return map.applyFilter(new HeightMapFilter(new GaussianKernel(5, 1.0)), o.iterations());
+                    return smooth(new HeightMap(edit, region(world, o.box())), o.iterations());
                 }
                 if (op instanceof Op.Paste o) return paste(o.blueprint(), o.origin(), o.rotation());
                 if (op instanceof Op.Tree o) {
@@ -402,6 +400,26 @@ public final class We6Bridge implements WorldEditBridge {
             } catch (MaxChangedBlocksException e) {
                 throw new EditException("WorldEdit block limit reached: " + e.getMessage());
             }
+        }
+
+        /**
+         * The Gaussian kernel is built reflectively: some WorldEdit 6 builds do not derive it from
+         * java.awt.image.Kernel, and a direct constructor call then fails the verification of this whole
+         * class, so that no op could run at all.
+         */
+        private int smooth(HeightMap map, int iterations) throws MaxChangedBlocksException {
+            try {
+                Object kernel = Class.forName("com.sk89q.worldedit.math.convolution.GaussianKernel", true,
+                        HeightMap.class.getClassLoader()).getConstructor(int.class, double.class).newInstance(5, 1.0);
+                for (Constructor<?> c : HeightMapFilter.class.getConstructors()) {
+                    if (c.getParameterCount() == 1 && c.getParameterTypes()[0].isInstance(kernel)) {
+                        return map.applyFilter((HeightMapFilter) c.newInstance(kernel), iterations);
+                    }
+                }
+            } catch (ReflectiveOperationException | LinkageError e) {
+                throw new EditException("smooth is not supported by this WorldEdit: " + e);
+            }
+            throw new EditException("smooth is not supported by this WorldEdit");
         }
 
         @Override
