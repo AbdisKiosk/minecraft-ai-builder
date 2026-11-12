@@ -303,9 +303,10 @@ that account's library on every server where it is a builder.
   checks the file's SHA-256. There is no per-user download rate limit.
 - Cache: `plugins/AIBuilder/asset-cache/<user>/`, at most 128 MB per server in all (oldest files go first), not
   configurable. Every paste asks the panel again before using a cached file, so a deleted asset cannot be pasted.
-- Without R2 the relay `welcome` frame carries `assets: false`. Through the panel, `save_blueprint` and pasting a
-  name that is not saved on the server are then refused with a message that the library is unavailable, and
-  `get_context` shows `assets_error`; every other tool works.
+- Without R2 there is no library: the relay `welcome` frame carries `assets: false` and calls carry no grant. Calls
+  then work as they do without the panel: `save_blueprint` saves on the server, `paste` with `name=` looks only in the
+  server's saved blueprints, and `get_context` has neither `assets` nor `assets_error`. A library that exists but
+  fails (quota, taken name, storage error, expired grant) still fails the call and is never replaced by a server save.
 - Compatibility: the new frame fields are additive and the protocol version is unchanged. A new plugin with an older
   panel gets no account, so it behaves as before (server blueprints only). An older plugin with a new panel ignores
   the grant and never uses the library.
