@@ -75,7 +75,7 @@ export async function handlePluginProxy(req: IncomingMessage, res: ServerRespons
   }
 
   try {
-    const reply = await hub().request(serverId, frame, TOOL_TIMEOUT_MS);
+    const reply = await hub().requestAsUser(serverId, frame, access.userId, TOOL_TIMEOUT_MS);
     send(res, reply.status, reply.body);
   } catch (e) {
     send(res, ...relayError(e));

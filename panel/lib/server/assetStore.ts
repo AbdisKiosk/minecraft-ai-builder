@@ -33,7 +33,7 @@ const taken = (e: unknown, name: string) => (e as { code?: string })?.code === '
 
 export const store: AssetStore = {
   async list(owner) {
-    return (await query<Db>(`SELECT ${COLUMNS} FROM assets WHERE user_id = ? ORDER BY updated_at DESC, id`, [owner])).map(row);
+    return (await query<Db>(`SELECT ${COLUMNS} FROM assets WHERE user_id = ? ORDER BY COALESCE(last_used_at, created_at) DESC, id`, [owner])).map(row);
   },
   async get(id) {
     const r = await one<Db>(`SELECT ${COLUMNS} FROM assets WHERE id = ?`, [id]);
@@ -79,11 +79,14 @@ export const store: AssetStore = {
   async remove(owner, id) {
     await exec('DELETE FROM assets WHERE id = ? AND user_id = ?', [id, owner]);
   },
+  async touch(owner, id) {
+    await exec('UPDATE assets SET last_used_at = NOW(), updated_at = updated_at WHERE id = ? AND user_id = ?', [id, owner]);
+  },
 };
 
 export const files: AssetFiles = {
   write: (owner, id, name, bytes) => write(fileKey(owner, id, name), bytes, name === 'region' ? 'application/octet-stream' : 'application/gzip'),
-  read: (owner, id, name) => readBytes(fileKey(owner, id, name)),
+  read: (owner, id, name, maxBytes) => readBytes(fileKey(owner, id, name), maxBytes),
   removeAll: async (owner, id) => { await removePrefix(assetPrefix(owner, id)); },
 };
 
