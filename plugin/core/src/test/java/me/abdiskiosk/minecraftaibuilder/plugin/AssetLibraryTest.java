@@ -198,19 +198,19 @@ class AssetLibraryTest {
 
         // User 2 pastes owner 1's 'window', shared with this server; the file is named by asset id and checksum.
         answer.set(asset.apply("abcdefgh2345", oak));
-        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("oak_stairs[facing=east]"));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("oak_stairs[facing=east]"));
         assertEquals(1, downloads.get());
         String oakSha = answer.get().get("sha256").getAsString();
         assertTrue(Files.isRegularFile(dir.resolve("asset-cache/2/abcdefgh2345-" + oakSha + ".bin")));
 
         // The owner replaces it under the same name (a new asset id): the old bytes are never used.
         answer.set(asset.apply("zyxwvuts2345", spruce));
-        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("spruce_planks"));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("spruce_planks"));
         assertEquals(2, downloads.get());
 
         // Same id with changed content (another checksum): downloaded again, not served from the cache.
         answer.set(asset.apply("abcdefgh2345", spruce));
-        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("spruce_planks"));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("spruce_planks"));
         assertEquals(3, downloads.get());
 
         // Unshared or deleted: the panel refuses, and the cached file is not used.
