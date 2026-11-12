@@ -7,6 +7,7 @@ import { useFetched } from '../lib/useFetched';
 import type { Servers } from '../lib/usePanel';
 import { can, type Server } from '../lib/types';
 import Pictures from './Pictures';
+import ChangedSince from './ChangedSince';
 import FeedbackDialog from './FeedbackDialog';
 import PromoteDialog from './PromoteDialog';
 import { Badge, ChangesCard, Conflicts, Pills, ServerPageLink, TypesCard } from './shared';
@@ -82,6 +83,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
             </>
           )}
         </section>
+        <ChangedSince server={s} entry={e} base={base} />
         <TypesCard of={e} />
         <ChangesCard of={e} />
       </div>

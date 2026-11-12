@@ -450,6 +450,10 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("corner") ? args.get("corner").getAsString() : null));
             case "blocks" -> new RestApi.Response(200, history.blocks(str(args, "id")));
             case "corrections" -> new RestApi.Response(200, history.corrections(str(args, "id")));
+            case "correctionRender" -> new RestApi.Response(200, history.correctionRender(str(args, "id"),
+                    args.has("view") ? args.get("view").getAsString() : null,
+                    args.has("corner") ? args.get("corner").getAsString() : null));
+            case "correctionBlocks" -> new RestApi.Response(200, history.correctionBlocks(str(args, "id")));
             case "revert" -> {
                 JsonObject done = args.has("diff")
                         ? history.revertArchived(str(args, "id"), args.getAsJsonObject("entry"),
@@ -515,7 +519,8 @@ public final class RelayClient implements BuildService.JobListener {
         return switch (op) {
             case "list" -> new RestApi.Response(200, lessons.listJson());
             case "add" -> {
-                Lessons.Saved saved = lessons.add(str(args, "text"), Lessons.MANUAL, java.util.List.of(), by(args));
+                java.util.List<String> from = args.has("entry") ? java.util.List.of(str(args, "entry")) : java.util.List.of();
+                Lessons.Saved saved = lessons.add(str(args, "text"), Lessons.MANUAL, from, by(args));
                 JsonObject o = new JsonObject();
                 o.add("lesson", Lessons.json(saved.lesson()));
                 if (saved.replaced() != null) o.add("replaced", Lessons.json(saved.replaced()));

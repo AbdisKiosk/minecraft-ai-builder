@@ -30,6 +30,8 @@ public final class Lessons {
     public static final int MAX_FEEDBACK = 300;
     /** Pending feedback kept for Claude; more drops the oldest. */
     public static final int MAX_PENDING = 10;
+    /** Delivered feedback ids remembered for the lesson tool. */
+    public static final int MAX_DELIVERED = 10;
     public static final String FEEDBACK = "feedback";
     public static final String CLAUDE = "claude";
     public static final String MANUAL = "manual";
@@ -53,6 +55,8 @@ public final class Lessons {
     private final Path file;
     private final List<Lesson> lessons = new ArrayList<>();
     private final List<Feedback> pending = new ArrayList<>();
+    /** Ids whose feedback reached Claude, oldest first: a lesson from Claude must come from one or a correction. */
+    private final List<String> delivered = new ArrayList<>();
     private long lastId;
 
     /** @param dir where {@code lessons.json} lives; null keeps everything in memory only */
@@ -186,13 +190,27 @@ public final class Lessons {
         if (pending.isEmpty()) return List.of();
         List<Feedback> out = List.copyOf(pending);
         pending.clear();
+        for (Feedback f : out) {
+            delivered.remove(f.entry());
+            delivered.add(f.entry());
+        }
+        while (delivered.size() > MAX_DELIVERED) delivered.remove(0);
         save();
         return out;
     }
 
+    /** True when feedback on this draft or history id reached Claude (one of the last {@value #MAX_DELIVERED}). */
+    public synchronized boolean feedbackDelivered(String entry) {
+        return delivered.contains(entry);
+    }
+
+    /** Said once when get_context carries {@code corrections} or {@code feedback}. */
+    static final String HINT = "If one of these is a rule for later builds, save it: lesson {\"text\",\"entry\"}.";
+
     /**
      * Adds what Claude reads in {@code get_context}: {@code lessons} (the texts) when there are any, and
-     * {@code feedback} ("<id>: <text>") when some is waiting, which this takes.
+     * {@code feedback} ("<id>: <text>") when some is waiting, which this takes. When the context then has
+     * {@code corrections} or {@code feedback}, a {@code hint} says how to save a lesson.
      */
     public void addTo(JsonObject context) {
         List<Lesson> all = list();
@@ -207,6 +225,7 @@ public final class Lessons {
             feedback.forEach(x -> f.add(x.entry() + ": " + x.text()));
             context.add("feedback", f);
         }
+        if (context.has("corrections") || context.has("feedback")) context.addProperty("hint", HINT);
     }
 
     /** The list for the panel: {"lessons":[...],"max":12}. */
@@ -275,9 +294,17 @@ public final class Lessons {
                     pending.add(new Feedback(entry, text, clean(str(o, "by"), MAX_BY), o.has("time") ? o.get("time").getAsLong() : 0));
                 }
             }
+            if (root.has("delivered") && root.get("delivered").isJsonArray()) {
+                for (JsonElement el : root.getAsJsonArray("delivered")) {
+                    String id = el.isJsonPrimitive() ? el.getAsString() : "";
+                    if (ID.matcher(id).matches() && !delivered.contains(id)) delivered.add(id);
+                }
+                while (delivered.size() > MAX_DELIVERED) delivered.remove(0);
+            }
         } catch (IOException | RuntimeException e) {
             lessons.clear();
             pending.clear();
+            delivered.clear();
         }
     }
 
@@ -302,6 +329,9 @@ public final class Lessons {
             f.add(o);
         }
         root.add("feedback", f);
+        JsonArray d = new JsonArray();
+        delivered.forEach(d::add);
+        root.add("delivered", d);
         try {
             Files.createDirectories(file.getParent());
             Path tmp = file.resolveSibling(file.getFileName() + ".tmp");

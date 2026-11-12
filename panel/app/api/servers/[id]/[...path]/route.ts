@@ -27,9 +27,15 @@ function viewArgs(req: NextRequest, id: string): Json {
 }
 
 function resolveGet(req: NextRequest, path: string[]): Op | null {
-  const [kind, id, sub] = path;
+  const [kind, id, sub, part] = path;
   const t = kind === 'history' ? 'history' : kind === 'drafts' ? 'draft' : null;
-  if (!t || path.length > 3) return null;
+  if (!t || path.length > 3) {
+    // history/<id>/corrections/render|blocks: what people changed since, drawn like the entry itself
+    if (t !== 'history' || sub !== 'corrections' || path.length !== 4) return null;
+    if (part === 'render') return op(t, 'correctionRender', viewArgs(req, id));
+    if (part === 'blocks') return op(t, 'correctionBlocks', { id });
+    return null;
+  }
   if (!id) {
     if (t === 'draft') return op(t, 'list', {});
     const args: Json = {};

@@ -14,6 +14,8 @@ import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.History;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
@@ -83,7 +85,7 @@ class ToolsTest {
     /** Blocks the fake world holds; everything else reads as air. */
     private final Map<Vec3, String> world = new HashMap<>();
 
-    private final class FakeBridge implements WorldEditBridge {
+    private class FakeBridge implements WorldEditBridge {
         public String name() { return "fake"; }
         public boolean async() { return false; }
         public BlockCatalog catalog() { return new FakeCatalog(); }
@@ -477,14 +479,80 @@ class ToolsTest {
         JsonObject first = registry.call("get_context", new JsonObject()).data();
         assertEquals("[\"Floors are spruce_planks\"]", first.get("lessons").toString(), first.toString());
         assertEquals("[\"d1: The tower is too tall\"]", first.get("feedback").toString());
+        assertTrue(first.get("hint").getAsString().contains("lesson"));
         JsonObject second = registry.call("get_context", new JsonObject()).data();
         assertTrue(second.has("lessons"));
         assertFalse(second.has("feedback"), second.toString());
+        assertFalse(second.has("hint"), second.toString());
+    }
+
+    /** A service whose history reads the fake world at once, as with FastAsyncWorldEdit. */
+    private BuildService withHistory() {
+        BuildService s = new BuildService(null, new FakeBridge() {
+            @Override
+            public boolean async() { return true; }
+        }, config, tempDir());
+        s.setRecorder(new History(null, s, new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000)));
+        return s;
+    }
+
+    /** Claude placed 6 oak_planks at y=64 from x=0, and a person changed {@code changed} of them to spruce_planks. */
+    private String placedAndCorrected(BuildService s, int z, int changed) {
+        BlockDiff.Builder d = new BlockDiff.Builder();
+        for (int x = 0; x < 6; x++) {
+            d.change(new Vec3(x, 64, z), "air", "oak_planks");
+            world.put(new Vec3(x, 64, z), x < changed ? "spruce_planks" : "oak_planks");
+        }
+        Box box = Box.of(new Vec3(0, 64, z), new Vec3(5, 64, z));
+        String id = s.history().record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world",
+                box, 0, 0, 0, System.currentTimeMillis(), 1, null, null, null, null, null), d.build(), List.of(box), null);
+        s.history().corrections(id);
+        return id;
+    }
+
+    @Test
+    void getContextTellsCorrectionsOnceWithTheHint() {
+        BuildService s = withHistory();
+        ToolRegistry r = new ToolRegistry(s, Logger.getAnonymousLogger());
+        Tools.registerAll(r, s);
+        String id = placedAndCorrected(s, 0, 4);
+        JsonObject first = r.call("get_context", new JsonObject()).data();
+        assertEquals("[{\"entry\":\"" + id + "\",\"share\":0.667,\"substitutions\":[\"oak_planks -> spruce_planks x4 at [0,64,0] [1,64,0]\"]}]",
+                first.get("corrections").toString(), first.toString());
+        assertTrue(first.has("hint"));
+        JsonObject second = r.call("get_context", new JsonObject()).data();
+        assertFalse(second.has("corrections") || second.has("hint"), second.toString());
+    }
+
+    @Test
+    void theLessonToolNeedsACorrectionOrDeliveredFeedback() {
+        BuildService s = withHistory();
+        ToolRegistry r = new ToolRegistry(s, Logger.getAnonymousLogger());
+        Tools.registerAll(r, s);
+        String fixed = placedAndCorrected(s, 0, 4);
+        String untouched = placedAndCorrected(s, 1, 0);
+        s.lessons().feedback("d7", "Too tall", false, "panel: Ann");
+
+        for (String refused : new String[]{"{\"text\":\"Use spruce\"}", "{\"text\":\"Use spruce\",\"entry\":\"" + untouched + "\"}",
+                "{\"text\":\"Use spruce\",\"entry\":\"hnope\"}", "{\"text\":\"Keep it low\",\"entry\":\"d7\"}"}) {
+            ToolResult res = r.call("lesson", JsonParser.parseString(refused).getAsJsonObject());
+            assertTrue(res.error(), refused);
+            assertTrue(res.data().toString().contains("must come from a correction or feedback"), res.data().toString());
+        }
+        assertTrue(s.lessons().list().isEmpty());
+
+        assertFalse(r.call("lesson", JsonParser.parseString("{\"text\":\"Use spruce_planks, not oak_planks\",\"entry\":\"" + fixed + "\"}")
+                .getAsJsonObject()).error());
+        r.call("get_context", new JsonObject()); // delivers the feedback on d7
+        assertFalse(r.call("lesson", JsonParser.parseString("{\"text\":\"Keep towers low\",\"entry\":\"d7\"}").getAsJsonObject()).error());
+        assertEquals(List.of(List.of(fixed), List.of("d7")), s.lessons().list().stream().map(Lessons.Lesson::entries).toList());
     }
 
     /** The lesson tool is left out of tools/list, yet Claude can call it over MCP. */
     @Test
     void theUnlistedLessonToolIsCallableOverMcp() {
+        service.lessons().feedback("h1", "Torches look cheap", false, "panel: Ann");
+        service.lessons().takeFeedback();
         McpEndpoint mcp = new McpEndpoint(registry, "test");
         String list = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}")).toString();
         assertFalse(list.contains("\"lesson\""), list);

@@ -31,6 +31,10 @@ public final class Corrections {
     public record TypeCount(String type, long count) {
     }
 
+    /** Cells of {@code type} whose properties changed; {@code props} names those that differ, most frequent first. */
+    public record StateChange(String type, long count, List<String> props) {
+    }
+
     /**
      * @param diff          expected state to state now, for each corrected cell
      * @param placed        cells the entry changed
@@ -38,7 +42,7 @@ public final class Corrections {
      *                      properties)
      */
     public record Result(BlockDiff diff, long cells, long placed, double share, List<Substitution> substitutions,
-                         List<TypeCount> removed, List<TypeCount> states) {
+                         List<TypeCount> removed, List<StateChange> states) {
         public boolean corrected() {
             return cells > 0;
         }
@@ -46,6 +50,8 @@ public final class Corrections {
 
     /** Sample positions listed per substitution. */
     public static final int MAX_AT = 5;
+    /** Properties named per state row. */
+    public static final int MAX_PROPS = 3;
 
     private Corrections() {
     }
@@ -72,6 +78,7 @@ public final class Corrections {
         Map<List<String>, List<Vec3>> subsAt = new HashMap<>();
         Map<String, long[]> removed = new HashMap<>();
         Map<String, long[]> states = new HashMap<>();
+        Map<String, Map<String, long[]>> stateProps = new HashMap<>();
         Map<List<String>, Boolean> naturalCache = new HashMap<>();
         long cells = 0;
         for (BlockDiff.Change c : entry.changes()) {
@@ -88,6 +95,8 @@ public final class Corrections {
                 removed.computeIfAbsent(from, k -> new long[1])[0]++;
             } else if (from.equals(to)) {
                 states.computeIfAbsent(from, k -> new long[1])[0]++;
+                Map<String, long[]> byProp = stateProps.computeIfAbsent(from, k -> new HashMap<>());
+                for (String prop : differing(want, now)) byProp.computeIfAbsent(prop, k -> new long[1])[0]++;
             } else {
                 List<String> key = List.of(from, to);
                 subs.computeIfAbsent(key, k -> new long[1])[0]++;
@@ -105,7 +114,25 @@ public final class Corrections {
         subs.forEach((k, n) -> subList.add(new Substitution(k.get(0), k.get(1), n[0], List.copyOf(subsAt.get(k)))));
         subList.sort(Comparator.comparingLong((Substitution s) -> -s.count()).thenComparing(Substitution::from)
                 .thenComparing(Substitution::to));
-        return new Result(diff.build(), cells, placed, share, subList, counts(removed), counts(states));
+        List<StateChange> stateList = new ArrayList<>();
+        for (TypeCount t : counts(states)) {
+            List<String> props = new ArrayList<>();
+            for (TypeCount p : counts(stateProps.getOrDefault(t.type(), Map.of()))) {
+                if (props.size() < MAX_PROPS) props.add(p.type());
+            }
+            stateList.add(new StateChange(t.type(), t.count(), List.copyOf(props)));
+        }
+        return new Result(diff.build(), cells, placed, share, subList, counts(removed), stateList);
+    }
+
+    /** The properties whose values differ between two states of one type, by name. */
+    private static List<String> differing(String a, String b) {
+        Map<String, String> pa = props(a), pb = props(b);
+        Set<String> keys = new java.util.TreeSet<>(pa.keySet());
+        keys.addAll(pb.keySet());
+        List<String> out = new ArrayList<>();
+        for (String k : keys) if (!Objects.equals(pa.get(k), pb.get(k))) out.add(k);
+        return out;
     }
 
     private static List<TypeCount> counts(Map<String, long[]> map) {

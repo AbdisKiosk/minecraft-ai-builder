@@ -6,7 +6,7 @@ import type { Role } from './roles.ts';
  * role each one needs. Every member sees lessons and marks them seen by opening the page; admins and owners add, edit
  * and delete them, and give feedback after a reject or revert (which only they can do).
  *   GET    lessons                         list
- *   POST   lessons            {text}       add (origin manual)
+ *   POST   lessons            {text, entry?}   add (origin manual), from a history or draft id if given
  *   PATCH  lessons/<lesson>   {text}       edit
  *   DELETE lessons/<lesson>                delete
  *   POST   lessons/seen                    mark all seen
@@ -44,7 +44,11 @@ export function lessonOp(method: string, path: string[], body: Json, by: string)
   const [first, ...rest] = path;
   if (rest.length) throw new LessonError(404, 'not found');
   if (method === 'GET' && !first) return { op: 'list', args: {}, needs: 'viewer' };
-  if (method === 'POST' && !first) return { op: 'add', args: { text: text(body, 'text', 'the lesson'), by }, needs: 'admin' };
+  if (method === 'POST' && !first) {
+    const args: Json = { text: text(body, 'text', 'the lesson'), by };
+    if (body.entry !== undefined) args.entry = id(body.entry, 'a draft or history id');
+    return { op: 'add', args, needs: 'admin' };
+  }
   if (method === 'POST' && first === 'seen') return { op: 'seen', args: {}, needs: 'viewer' };
   if (method === 'POST' && first === 'feedback') {
     return {

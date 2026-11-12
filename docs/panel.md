@@ -233,7 +233,15 @@ on a server. Lessons apply as soon as they are saved; there is no approval step.
   build?". The text (at most 300 characters) reaches Claude once, in `get_context` as `feedback`, with the draft or
   entry id. With **Remember this for future builds** (ticked by default) it is also saved as a lesson. Skip asks
   nothing more; rejects and reverts in the game or by Claude never ask.
-- Claude saves its own lessons with the `lesson` tool, which is not in the tool list Claude gets every session.
+- **Changed since** on a history entry shows what people changed in the blocks it placed since (substitutions,
+  removals and changed block states, with pictures and the 3D view on request), while the server is online and still
+  keeps the entry. Admins and the owner can save it as a lesson linked to the entry, starting from a sentence made
+  from the largest change.
+- In the background, when a Claude Code session starts (at most every ten minutes), the plugin checks up to five of
+  Claude's builds from the last seven days that were not checked in the last day, one at a time, and stops when the
+  server is short of memory. Claude hears of what people changed once, in `get_context` as `corrections`.
+- Claude saves its own lessons with the `lesson` tool, which is not in the tool list Claude gets every session. It
+  may only save one from a correction or from feedback it was given: `entry` names that history entry or draft.
 - **Lessons** on a server's page lists them with where they came from (feedback, Claude or written there), who wrote
   them and the build they came from. Every member sees them, and lessons nobody has seen yet are marked new until
   someone opens the page. Admins and the owner add, edit and delete them.

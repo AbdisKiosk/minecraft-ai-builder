@@ -75,9 +75,23 @@ class CorrectionsTest {
         Map<Vec3, String> w = world(entry);
         for (int x = 0; x < 5; x++) w.put(at(x), "oak_stairs[facing=west]");
         Corrections.Result r = Corrections.find(entry, List.of(), w::get);
-        assertEquals(List.of(new Corrections.TypeCount("oak_stairs", 5)), r.states());
+        assertEquals(List.of(new Corrections.StateChange("oak_stairs", 5, List.of("facing"))), r.states());
         assertTrue(r.substitutions().isEmpty());
         assertTrue(r.removed().isEmpty());
+    }
+
+    @Test
+    void stateRowsNameTheChangedPropertiesMostFrequentFirst() {
+        BlockDiff entry = placed(repeat("oak_stairs[facing=east,half=bottom,shape=straight,waterlogged=false]", 6));
+        Map<Vec3, String> w = world(entry);
+        for (int x = 0; x < 6; x++) {
+            // half changes in all six, facing in four, shape and waterlogged in one each: the top three are named.
+            String facing = x < 4 ? "west" : "east";
+            String shape = x == 0 ? "outer_left" : "straight";
+            w.put(at(x), "oak_stairs[facing=" + facing + ",half=top,shape=" + shape + ",waterlogged=" + (x == 1) + "]");
+        }
+        Corrections.Result r = Corrections.find(entry, List.of(), w::get);
+        assertEquals(List.of(new Corrections.StateChange("oak_stairs", 6, List.of("half", "facing", "shape"))), r.states());
     }
 
     @Test

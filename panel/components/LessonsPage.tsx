@@ -3,9 +3,8 @@ import { api, message, serverApi } from '../lib/api';
 import { ago, dateTime } from '../lib/format';
 import { diffHref, draftHref } from '../lib/routes';
 import { can, type Lesson, type Server } from '../lib/types';
+import AddLesson, { MAX_LESSON as MAX_TEXT } from './AddLesson';
 import { Badge } from './shared';
-
-const MAX_TEXT = 160;
 const ORIGIN: Record<Lesson['origin'], string> = { feedback: 'feedback', claude: 'Claude', manual: 'written here' };
 
 /** Where a lesson came from: a history entry (h…) or a draft (d…). */
@@ -25,7 +24,6 @@ export default function LessonsPage({ server: s }: { server: Server }) {
   const [lessons, setLessons] = useState<Lesson[] | null>(null);
   const [max, setMax] = useState(12);
   const [error, setError] = useState('');
-  const [draft, setDraft] = useState('');
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   // The "new" marks stay for this visit, though opening the page has marked them seen.
@@ -64,13 +62,6 @@ export default function LessonsPage({ server: s }: { server: Server }) {
     }
   };
 
-  const add = async (ev: FormEvent) => {
-    ev.preventDefault();
-    if (!draft.trim()) return;
-    const full = (lessons?.length ?? 0) >= max;
-    if (full && !confirm(`There are already ${max} lessons. Saving this one replaces Claude's oldest, or the oldest of all when people wrote every one. Save it?`)) return;
-    if (await act(() => api(base, { method: 'POST', body: JSON.stringify({ text: draft }) }))) setDraft('');
-  };
   const save = async (ev: FormEvent) => {
     ev.preventDefault();
     if (!editing || !editing.text.trim()) return;
@@ -128,14 +119,7 @@ export default function LessonsPage({ server: s }: { server: Server }) {
         </section>
         {admin && lessons && (
           <section className="card"><h2>Add a lesson</h2>
-            <form onSubmit={add} className="lesson-edit">
-              <textarea value={draft} maxLength={MAX_TEXT} rows={2} onChange={ev => setDraft(ev.target.value)}
-                placeholder="Use spruce_planks, not oak_planks, for floors." />
-              <div className="toolbar" style={{ margin: 0 }}>
-                <button type="submit" disabled={busy || !draft.trim()}>Add lesson</button>
-                <span className="muted">{draft.length}/{MAX_TEXT}</span>
-              </div>
-            </form>
+            <AddLesson server={server} max={max} full={lessons.length >= max} onSaved={load} />
             <p className="muted">One short rule per lesson. The list holds {max}: when it is full, a new lesson replaces the oldest one Claude
               wrote, or the oldest of all when people wrote every one.</p>
           </section>

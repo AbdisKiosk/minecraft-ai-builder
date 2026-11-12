@@ -96,6 +96,16 @@ export interface Placed {
 
 export type Renders = Record<'before' | 'after' | 'changes', string>;
 
+/** What people changed in the blocks a history entry placed (plugin/.../History.java#corrections). */
+export interface Corrections {
+  cells: number;
+  placed: number;
+  share: number;
+  substitutions: { from: string; to: string; count: number; at: number[][] }[];
+  removed: { type: string; count: number }[];
+  states: { type: string; count: number; props?: string[] }[];
+}
+
 /** A lesson Claude reads every session on a server (plugin/.../Lessons.java). */
 export interface Lesson {
   id: string;

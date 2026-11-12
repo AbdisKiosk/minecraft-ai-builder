@@ -213,6 +213,11 @@ public final class BuildService {
         this.recorder = recorder;
     }
 
+    /** The history, or null when it is turned off. */
+    public History history() {
+        return recorder instanceof History h ? h : null;
+    }
+
     private void fire(String event, Job job) {
         if (listeners.isEmpty()) return;
         JobInfo info = job.info();

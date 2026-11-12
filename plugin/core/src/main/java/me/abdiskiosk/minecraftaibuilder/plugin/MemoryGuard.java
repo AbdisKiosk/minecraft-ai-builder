@@ -50,6 +50,13 @@ public final class MemoryGuard {
         this.waitMs = waitMs;
     }
 
+    /** The heap has no room for the work: background work stops on this instead of trying again. */
+    public static final class Refused extends EditException {
+        Refused(String message) {
+            super(message);
+        }
+    }
+
     /** Memory held for work that is running; closing it gives the memory back. */
     public final class Reservation implements AutoCloseable {
         private long bytes;
@@ -70,7 +77,7 @@ public final class MemoryGuard {
      * the heap is short it first waits a while: a server under load frees memory by itself as chunks unload.
      *
      * @param advice what the caller can do about a refusal, ending the message
-     * @throws EditException when the heap cannot take it
+     * @throws Refused when the heap cannot take it
      */
     public Reservation reserve(long need, String what, String advice) {
         await(need, what, advice, true);
@@ -92,7 +99,7 @@ public final class MemoryGuard {
                 continue;
             }
             if (System.currentTimeMillis() >= deadline) {
-                throw new EditException("not enough free server memory to " + what + ": it needs about " + mb(need) + " MB and "
+                throw new Refused("not enough free server memory to " + what + ": it needs about " + mb(need) + " MB and "
                         + mb(room()) + " MB can be used right now. " + advice);
             }
             try {

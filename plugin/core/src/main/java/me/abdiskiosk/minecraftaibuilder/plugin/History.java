@@ -3,6 +3,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
@@ -46,6 +47,12 @@ public final class History implements BuildService.Recorder {
     private static final int LISTED_CONFLICTS = 50;
     /** Rows per list in {@link #corrections}. */
     private static final int LISTED_CORRECTIONS = 10;
+    /** Rows per list, and positions per row, kept on the stamp for {@link #addCorrectionsTo}. */
+    private static final int STAMPED_ROWS = 3;
+    private static final int STAMPED_AT = 2;
+    /** Entries, and characters, {@link #addCorrectionsTo} gives Claude at a time. */
+    static final int TOLD_ENTRIES = 3;
+    static final int TOLD_CHARS = 1500;
 
     public record Settings(boolean enabled, long maxVolume, int keep, long maxBytes, long readsPerTick, long maxRenderVolume) {
     }
@@ -400,10 +407,45 @@ public final class History implements BuildService.Recorder {
 
     /**
      * What people changed in the blocks an entry placed, as counts and a few coordinates, and stamps the entry with
-     * {@code corrected: {cells, share, time}} ({@code cells: 0} when nothing above the noise threshold changed).
-     * Cells a later entry changed are measured against that entry's after-state.
+     * {@code corrected: {cells, share, time}} ({@code cells: 0} when nothing above the noise threshold changed), plus
+     * the top rows for {@link #addCorrectionsTo}. Cells a later entry changed are measured against that entry's
+     * after-state.
      */
     public JsonObject corrections(String id) {
+        Corrections.Result r = compute(id).result();
+        JsonObject o = new JsonObject();
+        o.addProperty("cells", r.cells());
+        o.addProperty("placed", r.placed());
+        o.addProperty("share", share(r));
+        o.add("substitutions", substitutions(r.substitutions(), LISTED_CORRECTIONS, Corrections.MAX_AT));
+        o.add("removed", typeCounts(r.removed()));
+        o.add("states", stateChanges(r.states(), LISTED_CORRECTIONS));
+        return o;
+    }
+
+    /** Before (as the entry left it), after (now) and changes pictures of what people changed; see {@link #render}. */
+    public JsonObject correctionRender(String id, String viewName, String cornerName) {
+        Computed c = compute(id);
+        return DiffImages.render(service, c.world(), c.result().diff(), "the corrections of entry " + id, viewName, cornerName,
+                settings.maxRenderVolume(), settings.readsPerTick());
+    }
+
+    /** {@link #correctionRender}'s region as blocks for the panel's 3D view. */
+    public JsonObject correctionBlocks(String id) {
+        Computed c = compute(id);
+        return DiffImages.blocks(service, c.world(), c.result().diff(), "the corrections of entry " + id,
+                settings.maxRenderVolume(), settings.readsPerTick());
+    }
+
+    private record Computed(String world, Corrections.Result result) {
+    }
+
+    private static double share(Corrections.Result r) {
+        return Math.round(r.share() * 1000) / 1000.0;
+    }
+
+    /** Reads the entry's boxes, finds the corrections and stamps the entry. */
+    private Computed compute(String id) {
         JsonObject e;
         List<JsonObject> later = new ArrayList<>();
         synchronized (this) {
@@ -454,31 +496,116 @@ public final class History implements BuildService.Recorder {
             return s == null ? "air" : s;
         }, Corrections.Threshold.DEFAULT);
 
-        double share = Math.round(r.share() * 1000) / 1000.0;
         JsonObject stamp = new JsonObject();
         stamp.addProperty("cells", r.cells());
-        stamp.addProperty("share", share);
+        stamp.addProperty("share", share(r));
         stamp.addProperty("time", System.currentTimeMillis());
+        if (r.corrected()) {
+            if (!r.substitutions().isEmpty()) stamp.add("substitutions", substitutions(r.substitutions(), STAMPED_ROWS, STAMPED_AT));
+            if (!r.removed().isEmpty()) stamp.add("removed", typeCounts(r.removed().subList(0, Math.min(STAMPED_ROWS, r.removed().size()))));
+            if (!r.states().isEmpty()) stamp.add("states", stateChanges(r.states(), STAMPED_ROWS));
+        }
         synchronized (this) {
             JsonObject live = entries.get(id);
             if (live != null) { // not pruned meanwhile
+                // Claude is told about an entry once, also when it is checked again later.
+                JsonElement old = live.get("corrected");
+                if (old != null && old.isJsonObject() && old.getAsJsonObject().has("told")) stamp.addProperty("told", true);
                 live.add("corrected", stamp);
                 rewriteIndex();
             }
         }
+        return new Computed(world, r);
+    }
 
+    /** The entries a background check looks at now; see {@link CorrectionCheck#pick}. */
+    public synchronized List<String> correctionCandidates(long now) {
+        return CorrectionCheck.pick(entries.values(), now);
+    }
+
+    /** True when the entry's last check found corrections above the noise threshold. */
+    public synchronized boolean corrected(String id) {
+        JsonObject e = entries.get(id);
+        JsonElement stamp = e == null ? null : e.get("corrected");
+        return stamp != null && stamp.isJsonObject() && stamp.getAsJsonObject().has("cells")
+                && stamp.getAsJsonObject().get("cells").getAsLong() > 0;
+    }
+
+    /**
+     * Adds {@code corrections} to {@code get_context}: Claude's corrected entries it has not been told about, newest
+     * first, at most {@link #TOLD_ENTRIES} and {@link #TOLD_CHARS} characters. Each is told once; the rest wait for a
+     * later session.
+     */
+    public synchronized void addCorrectionsTo(JsonObject context) {
+        JsonArray told = new JsonArray();
+        int chars = 2;
+        List<JsonObject> all = new ArrayList<>(entries.values());
+        for (int i = all.size() - 1; i >= 0 && told.size() < TOLD_ENTRIES; i--) {
+            JsonObject e = all.get(i);
+            JsonElement el = e.get("corrected");
+            if (el == null || !el.isJsonObject() || !CorrectionCheck.CLAUDE_SOURCE.equals(e.get("source").getAsString())) continue;
+            JsonObject stamp = el.getAsJsonObject();
+            if (stamp.has("told") || !stamp.has("cells") || stamp.get("cells").getAsLong() <= 0) continue;
+            JsonObject row = toldJson(e.get("id").getAsString(), stamp);
+            int size = gson.toJson(row).length() + 1;
+            if (chars + size > TOLD_CHARS) continue; // waits for a session with room
+            chars += size;
+            told.add(row);
+            stamp.addProperty("told", true);
+        }
+        if (told.isEmpty()) return;
+        context.add("corrections", told);
+        rewriteIndex();
+    }
+
+    /** One corrected entry as Claude reads it: {"entry","share","substitutions":["a -> b x3 at [x,y,z]"],...}. */
+    static JsonObject toldJson(String id, JsonObject stamp) {
         JsonObject o = new JsonObject();
-        o.addProperty("cells", r.cells());
-        o.addProperty("placed", r.placed());
-        o.addProperty("share", share);
+        o.addProperty("entry", id);
+        if (stamp.has("share")) o.addProperty("share", stamp.get("share").getAsDouble());
         JsonArray subs = new JsonArray();
-        for (Corrections.Substitution s : r.substitutions().subList(0, Math.min(LISTED_CORRECTIONS, r.substitutions().size()))) {
+        if (stamp.has("substitutions")) {
+            for (JsonElement el : stamp.getAsJsonArray("substitutions")) {
+                JsonObject s = el.getAsJsonObject();
+                StringBuilder sb = new StringBuilder(s.get("from").getAsString()).append(" -> ")
+                        .append(s.get("to").getAsString()).append(" x").append(s.get("count").getAsLong());
+                JsonArray at = s.getAsJsonArray("at");
+                for (int i = 0; i < at.size(); i++) sb.append(i == 0 ? " at " : " ").append(at.get(i).toString());
+                subs.add(sb.toString());
+            }
+        }
+        if (!subs.isEmpty()) o.add("substitutions", subs);
+        JsonArray removed = new JsonArray();
+        if (stamp.has("removed")) {
+            for (JsonElement el : stamp.getAsJsonArray("removed")) {
+                JsonObject t = el.getAsJsonObject();
+                removed.add(t.get("type").getAsString() + " x" + t.get("count").getAsLong());
+            }
+        }
+        if (!removed.isEmpty()) o.add("removed", removed);
+        JsonArray states = new JsonArray();
+        if (stamp.has("states")) {
+            for (JsonElement el : stamp.getAsJsonArray("states")) {
+                JsonObject t = el.getAsJsonObject();
+                List<String> props = new ArrayList<>();
+                if (t.has("props")) t.getAsJsonArray("props").forEach(p -> props.add(p.getAsString()));
+                states.add(t.get("type").getAsString() + (props.isEmpty() ? "" : " " + String.join(",", props))
+                        + " x" + t.get("count").getAsLong());
+            }
+        }
+        if (!states.isEmpty()) o.add("states", states);
+        return o;
+    }
+
+    private static JsonArray substitutions(List<Corrections.Substitution> list, int rows, int positions) {
+        JsonArray subs = new JsonArray();
+        for (Corrections.Substitution s : list.subList(0, Math.min(rows, list.size()))) {
             JsonObject row = new JsonObject();
             row.addProperty("from", s.from());
             row.addProperty("to", s.to());
             row.addProperty("count", s.count());
             JsonArray at = new JsonArray();
-            for (Vec3 p : s.at()) {
+            for (Vec3 p : s.at().subList(0, Math.min(positions, s.at().size()))) {
                 JsonArray xyz = new JsonArray();
                 xyz.add(p.x());
                 xyz.add(p.y());
@@ -488,10 +615,21 @@ public final class History implements BuildService.Recorder {
             row.add("at", at);
             subs.add(row);
         }
-        o.add("substitutions", subs);
-        o.add("removed", typeCounts(r.removed()));
-        o.add("states", typeCounts(r.states()));
-        return o;
+        return subs;
+    }
+
+    private static JsonArray stateChanges(List<Corrections.StateChange> list, int rows) {
+        JsonArray out = new JsonArray();
+        for (Corrections.StateChange t : list.subList(0, Math.min(rows, list.size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("type", t.type());
+            row.addProperty("count", t.count());
+            JsonArray props = new JsonArray();
+            t.props().forEach(props::add);
+            row.add("props", props);
+            out.add(row);
+        }
+        return out;
     }
 
     private static JsonArray typeCounts(List<Corrections.TypeCount> counts) {
