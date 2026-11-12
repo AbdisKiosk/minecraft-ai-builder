@@ -7,24 +7,27 @@
     "build": "next build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
     "start": "NODE_ENV=production node dist/server.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "node --test test/*.test.ts test/*.test.mjs"
   },
   "dependencies": {
     "@auth0/nextjs-auth0": "^4.33.0",
     "@aws-sdk/client-s3": "^3.1167.0",
     "@aws-sdk/s3-request-presigner": "^3.1167.0",
+    "@babylonjs/core": "^8.56.2",
+    "@enginehub/nbt-ts": "^1.4.1",
+    "@enginehub/schematicwebviewer": "^5.0.1",
+    "buffer": "^6.0.3",
+    "jszip": "^3.10.1",
     "mysql2": "^3.24.6",
     "next": "^16.4.6",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
-    "three": "^0.187.0",
     "ws": "^8.22.2"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@types/three": "^0.187.0",
     "@types/ws": "^8.18.1",
     "esbuild": "^0.28.2",
     "tsx": "^4.23.15",

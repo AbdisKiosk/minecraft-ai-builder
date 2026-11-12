@@ -58,7 +58,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
       </div>
         <Pills of={e} /></div>
       <div className="stack">
-        <Pictures base={base} whose="this edit's"
+        <Pictures base={base} whose="this edit's" mc={s.info?.mc}
           none={e.tracked && total > 0 ? undefined : 'No pictures: this edit has no recorded block changes.'} />
         <section className="card"><h2>Revert</h2>
           <p className="muted">Puts back the old blocks as a new job. Blocks changed again since this edit are left alone and listed, unless you force it.</p>
