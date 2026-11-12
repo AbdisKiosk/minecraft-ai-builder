@@ -284,6 +284,7 @@ public final class RelayClient implements BuildService.JobListener {
             case "render" -> new RestApi.Response(200, history.render(str(args, "id"),
                     args.has("view") ? args.get("view").getAsString() : null,
                     args.has("corner") ? args.get("corner").getAsString() : null));
+            case "blocks" -> new RestApi.Response(200, history.blocks(str(args, "id")));
             case "revert" -> new RestApi.Response(200, history.revert(str(args, "id"),
                     args.has("force") && args.get("force").getAsBoolean()));
             default -> RestApi.error(400, "unknown history op '" + op + "'");
@@ -301,6 +302,7 @@ public final class RelayClient implements BuildService.JobListener {
             case "render" -> new RestApi.Response(200, drafts.render(str(args, "id"),
                     args.has("view") ? args.get("view").getAsString() : null,
                     args.has("corner") ? args.get("corner").getAsString() : null));
+            case "blocks" -> new RestApi.Response(200, drafts.blocks(str(args, "id")));
             case "approve" -> new RestApi.Response(200, drafts.approve(str(args, "id"), bool(args, "force"), by));
             case "reject" -> new RestApi.Response(200, drafts.reject(str(args, "id"), by));
             case "export" -> new RestApi.Response(200, drafts.export(str(args, "world"), box(args.getAsJsonArray("box"))));

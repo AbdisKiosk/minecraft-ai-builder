@@ -218,6 +218,16 @@ public final class Drafts {
         return DiffImages.render(service, d.world(), diff, "draft " + id, view, corner, history.maxRenderVolume(), history.readsPerTick());
     }
 
+    public JsonObject blocks(String id) {
+        Draft d;
+        BlockDiff diff;
+        synchronized (this) {
+            d = draft(id);
+            diff = d.diff();
+        }
+        return DiffImages.blocks(service, d.world(), diff, "draft " + id, history.maxRenderVolume(), history.readsPerTick());
+    }
+
     /**
      * Places the draft: cells the world still holds as the draft found them get the draft's blocks, as one job that
      * the history records (so it can be reverted). Cells changed in the world since are conflicts, left alone

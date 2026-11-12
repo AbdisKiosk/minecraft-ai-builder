@@ -2,7 +2,9 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
+import me.abdiskiosk.minecraftaibuilder.common.BlockColors;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
+import me.abdiskiosk.minecraftaibuilder.common.BlockShape;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
@@ -10,21 +12,27 @@ import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
 
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
+import java.util.TreeMap;
 
-/** Before, after and changes pictures of a diff, drawn on the world around it as it is now. For the panel. */
+/** Before, after and changes of a diff, as pictures or as blocks, on the world around it as it is now. For the panel. */
 final class DiffImages {
 
     private DiffImages() {
     }
 
+    /** The box a diff is shown in, with the world's blocks in it before and after the diff. */
+    private record Region(Box box, String[] before, String[] after) {
+    }
+
     /**
      * @param what      names the diff in errors, e.g. "entry h1" or "draft d1"
-     * @param maxVolume largest region to read and draw
+     * @param maxVolume largest region to read
      */
-    static JsonObject render(BuildService service, String world, BlockDiff diff, String what, String viewName,
-                             String cornerName, long maxVolume, long perTick) {
+    private static Region region(BuildService service, String world, BlockDiff diff, String what, long maxVolume, long perTick) {
         if (diff.isEmpty()) throw new EditException(what + " changes no blocks");
         Box bounds = diff.bounds();
         BuildService.Caller caller = service.resolve(null, world);
@@ -36,8 +44,16 @@ final class DiffImages {
                     + " (history.max-render-volume)");
         }
         String[] now = service.readStepped(world, List.of(box), perTick).array(0);
-        String[] before = diff.overlay(box, now, false);
-        String[] after = diff.overlay(box, now, true);
+        return new Region(box, diff.overlay(box, now, false), diff.overlay(box, now, true));
+    }
+
+    /** Before, after and changes pictures as base64 PNGs. See {@link #region} for the parameters. */
+    static JsonObject render(BuildService service, String world, BlockDiff diff, String what, String viewName,
+                             String cornerName, long maxVolume, long perTick) {
+        Region r = region(service, world, diff, what, maxVolume, perTick);
+        Box box = r.box();
+        String[] before = r.before();
+        String[] after = r.after();
         // Removed blocks are drawn where they were, tinted red.
         String[] marked = after.clone();
         for (BlockDiff.Change c : diff.changes()) {
@@ -54,6 +70,75 @@ final class DiffImages {
         o.addProperty("after", png(IsoRenderer.render(box, after, view, corner, size).png()));
         o.addProperty("changes", png(IsoRenderer.render(box, marked, view, corner, size, diff.highlight(box)).png()));
         return o;
+    }
+
+    /** The same region as {@link #render}, as blocks for the panel's 3D view. */
+    static JsonObject blocks(BuildService service, String world, BlockDiff diff, String what, long maxVolume, long perTick) {
+        Region r = region(service, world, diff, what, maxVolume, perTick);
+        return encode(r.box(), r.before(), r.after(), diff);
+    }
+
+    /**
+     * {@code palette} lists each distinct state with the renderer's colour and shape, {@code before} and {@code after}
+     * are run-length lists of {@code [paletteIndex, count]} in {@link RegionCodec#index} order, and {@code changes}
+     * lists {@code [index, kind]} in index order.
+     */
+    static JsonObject encode(Box box, String[] before, String[] after, BlockDiff diff) {
+        Map<String, Integer> palette = new LinkedHashMap<>();
+        JsonObject o = new JsonObject();
+        o.add("box", box(box));
+        JsonArray beforeRuns = runs(before, palette);
+        JsonArray afterRuns = runs(after, palette);
+        JsonArray entries = new JsonArray();
+        for (String state : palette.keySet()) {
+            JsonObject e = new JsonObject();
+            e.addProperty("state", state);
+            e.addProperty("rgb", BlockColors.rgb(state));
+            e.addProperty("transparent", BlockColors.isTransparent(state));
+            // Left out for a full cube, which most blocks are.
+            if (!BlockShape.isFullCube(state)) {
+                JsonArray boxes = new JsonArray();
+                for (double[] b : BlockShape.boxes(state)) {
+                    JsonArray one = new JsonArray();
+                    for (double v : b) one.add(v);
+                    boxes.add(one);
+                }
+                e.add("boxes", boxes);
+            }
+            entries.add(e);
+        }
+        o.add("palette", entries);
+        o.add("before", beforeRuns);
+        o.add("after", afterRuns);
+        JsonArray changes = new JsonArray();
+        for (Map.Entry<Integer, BlockDiff.Kind> c : new TreeMap<>(diff.highlight(box)).entrySet()) {
+            JsonArray one = new JsonArray();
+            one.add(c.getKey());
+            one.add(c.getValue().name());
+            changes.add(one);
+        }
+        o.add("changes", changes);
+        return o;
+    }
+
+    private static JsonArray runs(String[] states, Map<String, Integer> palette) {
+        JsonArray out = new JsonArray();
+        int i = 0;
+        while (i < states.length) {
+            int start = i;
+            String state = states[i];
+            while (i < states.length && states[i].equals(state)) i++;
+            Integer index = palette.get(state);
+            if (index == null) {
+                index = palette.size();
+                palette.put(state, index);
+            }
+            JsonArray run = new JsonArray();
+            run.add(index);
+            run.add(i - start);
+            out.add(run);
+        }
+        return out;
     }
 
     /** Stats, block types and the first {@code listed} changes of a diff, for the panel's detail pages. */

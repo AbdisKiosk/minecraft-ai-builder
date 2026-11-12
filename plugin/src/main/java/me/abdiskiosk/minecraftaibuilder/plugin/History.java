@@ -239,6 +239,13 @@ public final class History implements BuildService.Recorder {
                 settings.maxRenderVolume(), settings.readsPerTick());
     }
 
+    /** The region {@link #render} draws, as blocks for the panel's 3D view. */
+    public JsonObject blocks(String id) {
+        JsonObject e = entry(id);
+        return DiffImages.blocks(service, e.get("world").getAsString(), diff(id, e), "entry " + id,
+                settings.maxRenderVolume(), settings.readsPerTick());
+    }
+
     /**
      * Puts back the blocks an entry changed, as a new job. Cells changed again since are conflicts and are left
      * alone unless {@code force}.

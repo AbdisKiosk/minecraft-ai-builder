@@ -289,4 +289,20 @@ class PanelServerTest {
                 .header("Cookie", cookie).header("Origin", "https://evil.example").POST(HttpRequest.BodyPublishers.ofString("{}")).build();
         assertEquals(403, http.send(cross, HttpResponse.BodyHandlers.ofString()).statusCode());
     }
+
+    @Test
+    void blocksForThe3dViewAreForwarded() throws Exception {
+        FakePlugin plugin = new FakePlugin(f -> reply(200, "{\"t\":\"" + f.get("t").getAsString() + "\",\"op\":\"" + f.get("op").getAsString()
+                + "\",\"id\":" + f.getAsJsonObject("args").get("id") + ",\"before\":[[0,8]]}")).connect(serverToken, RelayProtocol.VERSION);
+        waitOnline();
+        String cookie = login();
+        HttpResponse<String> entry = get("/api/servers/survival/history/habc/blocks", cookie);
+        assertEquals(200, entry.statusCode());
+        assertEquals("{\"t\":\"" + RelayProtocol.HISTORY + "\",\"op\":\"blocks\",\"id\":\"habc\",\"before\":[[0,8]]}", entry.body());
+        HttpResponse<String> draft = get("/api/servers/survival/drafts/d1/blocks", cookie);
+        assertEquals(200, draft.statusCode());
+        assertEquals("{\"t\":\"" + RelayProtocol.DRAFT + "\",\"op\":\"blocks\",\"id\":\"d1\",\"before\":[[0,8]]}", draft.body());
+        assertEquals(401, get("/api/servers/survival/history/habc/blocks", null).statusCode());
+        plugin.ws.abort();
+    }
 }

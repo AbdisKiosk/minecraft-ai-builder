@@ -156,6 +156,8 @@ public final class PanelServer {
             if (ctx.queryParam("corner") != null) args.addProperty("corner", ctx.queryParam("corner"));
             forward(ctx, history("render", args), HISTORY_TIMEOUT);
         });
+        app.get("/api/servers/{server}/history/{id}/blocks", ctx ->
+                forward(ctx, history("blocks", idArgs(ctx)), HISTORY_TIMEOUT));
         app.post("/api/servers/{server}/history/{id}/revert", ctx -> {
             JsonObject args = idArgs(ctx);
             JsonElement body = json(ctx);
@@ -171,6 +173,8 @@ public final class PanelServer {
             if (ctx.queryParam("corner") != null) args.addProperty("corner", ctx.queryParam("corner"));
             forward(ctx, draft("render", args), HISTORY_TIMEOUT);
         });
+        app.get("/api/servers/{server}/drafts/{id}/blocks", ctx ->
+                forward(ctx, draft("blocks", idArgs(ctx)), HISTORY_TIMEOUT));
         app.post("/api/servers/{server}/drafts/{id}/approve", ctx -> {
             JsonObject args = idArgs(ctx);
             JsonElement body = json(ctx);
