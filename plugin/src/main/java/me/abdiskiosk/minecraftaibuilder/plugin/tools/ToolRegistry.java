@@ -4,6 +4,7 @@ import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -43,7 +44,7 @@ public final class ToolRegistry {
         try {
             Args bare = new Args(json, null, service);
             BuildService.Caller caller = service.resolve(bare.str("player", null), bare.str("world", null));
-            return tool.handler().call(new Args(json, caller, service));
+            return CallContext.withTool(name, () -> tool.handler().call(new Args(json, caller, service)));
         } catch (EditException e) {
             return ToolResult.error(e.getMessage());
         } catch (JsonParseException | IllegalStateException | UnsupportedOperationException | ClassCastException

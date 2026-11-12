@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AIBuilder Panel</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1 15 4.5v7L8 15 1 11.5v-7z' fill='%2350b37a'/%3E%3Cpath d='M8 8v7L1 11.5v-7z' fill='%23367a54'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <a class="brand" href="#/">
+    <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1 15 4.5v7L8 15 1 11.5v-7z" class="c1"/><path d="M8 8v7L1 11.5v-7z" class="c2"/><path d="M8 8 15 4.5v7L8 15z" class="c3"/></svg>
+    AIBuilder Panel
+  </a>
+  <nav id="crumbs"></nav>
+  <span id="live" class="live" title="Live updates"></span>
+  <button id="logout" class="ghost" hidden>Log out</button>
+</header>
+<main id="app"><p class="muted">Loading…</p></main>
+<template id="login-tpl">
+  <form class="login card" id="login-form">
+    <h1>Log in</h1>
+    <label>Password <input type="password" name="password" autocomplete="current-password" required autofocus></label>
+    <button type="submit">Log in</button>
+    <p class="error" id="login-error"></p>
+  </form>
+</template>
+<script src="/app.js"></script>
+</body>
+</html>

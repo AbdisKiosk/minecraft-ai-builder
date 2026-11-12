@@ -8,6 +8,9 @@ import com.sk89q.worldedit.MaxChangedBlocksException;
 import com.sk89q.worldedit.Vector;
 import com.sk89q.worldedit.WorldEdit;
 import com.sk89q.worldedit.blocks.BaseBlock;
+import com.sk89q.worldedit.event.extent.EditSessionEvent;
+import com.sk89q.worldedit.extent.inventory.BlockBag;
+import com.sk89q.worldedit.util.eventbus.EventBus;
 import com.sk89q.worldedit.bukkit.BukkitUtil;
 import com.sk89q.worldedit.bukkit.WorldEditPlugin;
 import com.sk89q.worldedit.extension.input.InputParseException;
@@ -32,11 +35,14 @@ import com.sk89q.worldedit.world.World;
 import com.sk89q.worldedit.world.registry.BlockRegistry;
 import com.sk89q.worldedit.world.registry.LegacyWorldData;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
+import me.abdiskiosk.minecraftaibuilder.common.DryRunStore;
 import me.abdiskiosk.minecraftaibuilder.common.EditHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
+import me.abdiskiosk.minecraftaibuilder.common.PreviewHandle;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
@@ -46,6 +52,7 @@ import org.bukkit.entity.Player;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.lang.reflect.Constructor;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -54,6 +61,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 /** WorldEdit 6.x (Minecraft 1.8 - 1.12). Block names are translated with {@link LegacyNames}. */
@@ -133,7 +141,50 @@ public final class We6Bridge implements WorldEditBridge {
                 ? WorldEdit.getInstance().getEditSessionFactory().getEditSession(world, -1, owner.player())
                 : WorldEdit.getInstance().getEditSessionFactory().getEditSession(world, -1);
         edit.enableQueue();
-        return new Handle(world, owner, edit);
+        return new Handle(world, owner, edit, false);
+    }
+
+    @Override
+    public PreviewHandle preview(UUID actorId, String worldName, Function<Vec3, String> overlay, long maxBlocks) {
+        if (fawe) throw new EditException("drafts need WorldEdit: FastAsyncWorldEdit writes around the world API, so a dry run cannot be guaranteed");
+        World world = world(worldName);
+        Owner owner = owner(actorId);
+        ParserContext ctx = new ParserContext();
+        ctx.setActor(owner.actor());
+        ctx.setWorld(world);
+        ctx.setSession(owner.session());
+        ctx.setRestricted(false);
+        DryRunStore<BaseBlock> store = new DryRunStore<>(overlay, state -> {
+            try {
+                return WorldEdit.getInstance().getBlockFactory().parseFromInput(LegacyNames.translate(state, false), ctx);
+            } catch (InputParseException | EditException e) {
+                throw new EditException("draft holds a block this server does not know: " + state);
+            }
+        }, b -> LegacyNames.modern(b.getId(), b.getData()), maxBlocks);
+        World dry = DryWorld.wrap(world, store);
+        EditSession edit = privateSession(dry);
+        edit.enableQueue();
+        Handle handle = new Handle(world, owner, edit, true);
+        return new PreviewHandle() {
+            @Override public void prepare(Op op) { handle.prepare(op); }
+            @Override public int apply(Op op) { return handle.apply(op); }
+            @Override public int paste(Blueprint blueprint, Vec3 origin, int rotation) { return handle.paste(blueprint, origin, rotation); }
+            @Override public void flush() { handle.flush(); }
+            @Override public void close() { handle.close(); }
+            @Override public BlockDiff changes() { return store.diff(); }
+        };
+    }
+
+    /** An edit session on a private event bus, so other plugins never see a dry run. */
+    private static EditSession privateSession(World dry) {
+        try {
+            Constructor<EditSession> c = EditSession.class.getDeclaredConstructor(EventBus.class, World.class, int.class,
+                    BlockBag.class, EditSessionEvent.class);
+            c.setAccessible(true);
+            return c.newInstance(new EventBus(), dry, -1, null, new EditSessionEvent(dry, null, -1, null));
+        } catch (ReflectiveOperationException | RuntimeException e) {
+            return WorldEdit.getInstance().getEditSessionFactory().getEditSession(dry, -1);
+        }
     }
 
     @Override
@@ -226,13 +277,16 @@ public final class We6Bridge implements WorldEditBridge {
         private final World world;
         private final Owner owner;
         private final EditSession edit;
+        /** Built on a {@link DryWorld}: close must not remember the session for undo. */
+        private final boolean dryRun;
         private final Map<String, com.sk89q.worldedit.function.pattern.Pattern> patterns = new HashMap<>();
         private final Map<String, BaseBlock> blocks = new HashMap<>();
 
-        Handle(World world, Owner owner, EditSession edit) {
+        Handle(World world, Owner owner, EditSession edit, boolean dryRun) {
             this.world = world;
             this.owner = owner;
             this.edit = edit;
+            this.dryRun = dryRun;
         }
 
         private ParserContext context() {
@@ -379,7 +433,7 @@ public final class We6Bridge implements WorldEditBridge {
         @Override
         public void close() {
             edit.flushQueue();
-            owner.session().remember(edit);
+            if (!dryRun) owner.session().remember(edit);
         }
     }
 }

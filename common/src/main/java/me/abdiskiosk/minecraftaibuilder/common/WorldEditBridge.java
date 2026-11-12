@@ -23,6 +23,17 @@ public interface WorldEditBridge {
 
     EditHandle begin(UUID actor, String world);
 
+    /**
+     * A dry-run edit session for drafts: nothing reaches the world.
+     *
+     * @param overlay   the open draft's state at a position, or null; the session reads it as if it were placed
+     * @param maxBlocks the most positions the preview may change
+     * @throws EditException when this WorldEdit cannot preview (FastAsyncWorldEdit writes around the world API)
+     */
+    default PreviewHandle preview(UUID actor, String world, java.util.function.Function<Vec3, String> overlay, long maxBlocks) {
+        throw new EditException("drafts are not supported with " + name());
+    }
+
     /** @return number of steps actually undone */
     int undo(UUID actor, int steps);
 

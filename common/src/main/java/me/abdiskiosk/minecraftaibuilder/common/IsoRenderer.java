@@ -10,6 +10,7 @@ import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Renders a region to PNG: a top-down map (north up, east right), an isometric view, or an elevation of one face.
@@ -74,20 +75,73 @@ public final class IsoRenderer {
 
     /** @param corner where the isometric camera stands; ignored by {@code TOP} and the elevations */
     public static Rendered render(Box box, String[] states, View view, Corner corner, Size size) {
+        return render(box, states, view, corner, size, null);
+    }
+
+    /**
+     * Like {@link #render(Box, String[], View, Corner, Size)}, but tints the cells in {@code highlight} (by
+     * {@link RegionCodec#index}) green, red or yellow for added, removed and changed, and dims everything else.
+     * Removed cells are only visible when {@code states} holds the old block there.
+     */
+    public static Rendered render(Box box, String[] states, View view, Corner corner, Size size,
+                                  Map<Integer, BlockDiff.Kind> highlight) {
+        int[] colors = colors(states, highlight);
         Box drawn = crop(box, states);
         if (!drawn.equals(box)) {
             states = RegionCodec.crop(box, states, drawn);
+            colors = cropColors(box, colors, drawn);
             box = drawn;
         }
         BufferedImage out = switch (view) {
-            case TOP -> renderTop(box, states, size.maxWidth, size.maxHeight, size.maxCell);
-            case ISO -> renderIso(box, states, corner, size.maxWidth, size.maxHeight, size.maxTile);
+            case TOP -> renderTop(box, states, colors, size.maxWidth, size.maxHeight, size.maxCell);
+            case ISO -> renderIso(box, states, colors, corner, size.maxWidth, size.maxHeight, size.maxTile);
             // Two views share the width.
-            case BOTH -> combine(renderTop(box, states, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxCell),
-                    renderIso(box, states, corner, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxTile), size);
-            default -> renderElevation(box, states, view, size.maxWidth, size.maxHeight, size.maxCell);
+            case BOTH -> combine(renderTop(box, states, colors, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxCell),
+                    renderIso(box, states, colors, corner, (size.maxWidth - GAP) / 2, size.maxHeight, size.maxTile), size);
+            default -> renderElevation(box, states, colors, view, size.maxWidth, size.maxHeight, size.maxCell);
         };
         return new Rendered(toPng(out), box, out.getWidth(), out.getHeight());
+    }
+
+    private static final int ADDED = 0x3FD16B, REMOVED = 0xE5484D, CHANGED = 0xF2C94C;
+
+    /** The colour each cell is drawn in, or -1 for cells that are not drawn. */
+    private static int[] colors(String[] states, Map<Integer, BlockDiff.Kind> highlight) {
+        int[] out = new int[states.length];
+        for (int i = 0; i < states.length; i++) {
+            int rgb = BlockColors.rgb(states[i]);
+            if (rgb < 0 || highlight == null) {
+                out[i] = rgb;
+                continue;
+            }
+            BlockDiff.Kind kind = highlight.get(i);
+            out[i] = kind == null ? mix(rgb, BACKGROUND.getRGB() & 0xFFFFFF, 0.6) : mix(rgb, switch (kind) {
+                case ADDED -> ADDED;
+                case REMOVED -> REMOVED;
+                case CHANGED -> CHANGED;
+            }, 0.65);
+        }
+        return out;
+    }
+
+    private static int mix(int rgb, int toward, double f) {
+        int r = (int) (((rgb >> 16) & 0xFF) * (1 - f) + ((toward >> 16) & 0xFF) * f);
+        int g = (int) (((rgb >> 8) & 0xFF) * (1 - f) + ((toward >> 8) & 0xFF) * f);
+        int b = (int) ((rgb & 0xFF) * (1 - f) + (toward & 0xFF) * f);
+        return (r << 16) | (g << 8) | b;
+    }
+
+    private static int[] cropColors(Box box, int[] colors, Box inner) {
+        int[] out = new int[(int) inner.volume()];
+        int i = 0;
+        for (int y = inner.min().y(); y <= inner.max().y(); y++) {
+            for (int z = inner.min().z(); z <= inner.max().z(); z++) {
+                for (int x = inner.min().x(); x <= inner.max().x(); x++) {
+                    out[i++] = colors[RegionCodec.index(box, x, y, z)];
+                }
+            }
+        }
+        return out;
     }
 
     /** Side by side or stacked, whichever canvas is smaller. */
@@ -123,6 +177,10 @@ public final class IsoRenderer {
     }
 
     static BufferedImage renderTop(Box box, String[] states, int maxWidth, int maxHeight, int maxCell) {
+        return renderTop(box, states, colors(states, null), maxWidth, maxHeight, maxCell);
+    }
+
+    private static BufferedImage renderTop(Box box, String[] states, int[] colors, int maxWidth, int maxHeight, int maxCell) {
         int cell = Math.max(1, Math.min(maxCell, Math.min(maxWidth / box.sizeX(), maxHeight / box.sizeZ())));
         BufferedImage img = new BufferedImage(box.sizeX() * cell, box.sizeZ() * cell, BufferedImage.TYPE_INT_RGB);
         Graphics2D g = img.createGraphics();
@@ -131,7 +189,7 @@ public final class IsoRenderer {
         for (int z = box.min().z(); z <= box.max().z(); z++) {
             for (int x = box.min().x(); x <= box.max().x(); x++) {
                 for (int y = box.max().y(); y >= box.min().y(); y--) {
-                    int rgb = BlockColors.rgb(states[RegionCodec.index(box, x, y, z)]);
+                    int rgb = colors[RegionCodec.index(box, x, y, z)];
                     if (rgb < 0) continue;
                     // Lower surfaces are darker so height differences read clearly.
                     double depth = box.sizeY() <= 1 ? 0 : (box.max().y() - y) / (double) (box.sizeY() - 1);
@@ -158,6 +216,11 @@ public final class IsoRenderer {
      * depth. A block that does not fill its cell (a slab) shows what is behind it.
      */
     static BufferedImage renderElevation(Box box, String[] states, View view, int maxWidth, int maxHeight, int maxCell) {
+        return renderElevation(box, states, colors(states, null), view, maxWidth, maxHeight, maxCell);
+    }
+
+    private static BufferedImage renderElevation(Box box, String[] states, int[] colors, View view, int maxWidth, int maxHeight,
+                                                 int maxCell) {
         int sx = box.sizeX(), sy = box.sizeY(), sz = box.sizeZ();
         boolean alongX = view == View.EAST || view == View.WEST;
         int columns = alongX ? sz : sx, depths = alongX ? sx : sz;
@@ -174,16 +237,18 @@ public final class IsoRenderer {
                 int px = col * cell, found = 0;
                 // Nearest first, until a block fills the cell; then paint them back to front.
                 for (int d = 0; d < depths; d++) {
-                    String state = states[elevationIndex(box, view, col, ly, d)];
-                    if (BlockColors.rgb(state) < 0) continue;
+                    int index = elevationIndex(box, view, col, ly, d);
+                    String state = states[index];
+                    if (colors[index] < 0) continue;
                     stack[found++] = d;
                     if (!shapes || BlockShape.isFullCube(state)) break;
                 }
                 for (int i = found - 1; i >= 0; i--) {
                     int d = stack[i];
-                    String state = states[elevationIndex(box, view, col, ly, d)];
+                    int index = elevationIndex(box, view, col, ly, d);
+                    String state = states[index];
                     double depth = depths <= 1 ? 0 : d / (double) (depths - 1);
-                    g.setColor(shade(BlockColors.rgb(state), 1.0 - 0.55 * depth));
+                    g.setColor(shade(colors[index], 1.0 - 0.55 * depth));
                     if (!shapes) {
                         g.fillRect(px, py, cell, cell);
                         continue;
@@ -228,6 +293,11 @@ public final class IsoRenderer {
     }
 
     static BufferedImage renderIso(Box box, String[] states, Corner corner, int maxWidth, int maxHeight, int maxTile) {
+        return renderIso(box, states, colors(states, null), corner, maxWidth, maxHeight, maxTile);
+    }
+
+    private static BufferedImage renderIso(Box box, String[] states, int[] colors, Corner corner, int maxWidth, int maxHeight,
+                                           int maxTile) {
         int sy = box.sizeY();
         boolean turned = corner == Corner.SW || corner == Corner.NE;
         // View space: u, y, v with the camera at +u +y +v, a quarter-turn rotation of world x, y, z.
@@ -252,8 +322,9 @@ public final class IsoRenderer {
             for (int ly = Math.max(0, d - su - sv + 2); ly <= Math.min(sy - 1, d); ly++) {
                 for (int lu = Math.max(0, d - ly - sv + 1); lu <= Math.min(su - 1, d - ly); lu++) {
                     int lv = d - ly - lu;
-                    String state = states[viewIndex(box, corner, lu, ly, lv)];
-                    int rgb = BlockColors.rgb(state);
+                    int index = viewIndex(box, corner, lu, ly, lv);
+                    String state = states[index];
+                    int rgb = colors[index];
                     if (rgb < 0 || hidden(box, states, corner, su, sv, lu, ly, lv)) continue;
                     int px = originX + (lu - lv) * a;
                     int py = originY + (lu + lv) * a / 2 - ly * a;

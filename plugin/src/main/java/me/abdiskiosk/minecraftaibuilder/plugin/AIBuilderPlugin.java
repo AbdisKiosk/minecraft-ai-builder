@@ -1,11 +1,15 @@
 package me.abdiskiosk.minecraftaibuilder.plugin;
 
+import com.google.gson.JsonArray;
+import com.google.gson.JsonObject;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.plugin.http.HttpApi;
+import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.ToolStats;
+import me.abdiskiosk.minecraftaibuilder.plugin.relay.RelayClient;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.ToolRegistry;
 import me.abdiskiosk.minecraftaibuilder.plugin.tools.Tools;
 import org.bukkit.Location;
@@ -32,6 +36,8 @@ public final class AIBuilderPlugin extends JavaPlugin {
     private static final Set<String> MARKER_COMMANDS = Set.of("mark", "unmark", "marks", "note");
 
     private HttpApi http;
+    private RelayClient relay;
+    private Drafts drafts;
     private WorldEditBridge bridge;
     private PluginConfig config;
     private McpEndpoint mcp;
@@ -59,23 +65,63 @@ public final class AIBuilderPlugin extends JavaPlugin {
         }
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
+        History history = config.history().enabled() ? new History(this, service, config.history()) : null;
+        if (history != null) service.setRecorder(history);
+        drafts = new Drafts(service, config.drafts(), config.history(), getLogger());
+        service.setDrafts(drafts);
+        if (config.drafts().review()) {
+            getLogger().info("Review is on: Claude's edits go into drafts that are placed only once approved.");
+            if (bridge.async()) getLogger().warning("Review needs WorldEdit; with FastAsyncWorldEdit every edit will be refused.");
+        }
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, getDescription().getVersion());
-        http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
-        try {
-            http.start();
-        } catch (IOException e) {
-            getLogger().log(Level.SEVERE, "Could not listen on " + config.bind() + ":" + config.port(), e);
-            getServer().getPluginManager().disablePlugin(this);
-            return;
+        if (config.httpEnabled()) {
+            http = new HttpApi(config.bind(), config.port(), config.token(), mcp, registry, getLogger());
+            try {
+                http.start();
+            } catch (IOException e) {
+                getLogger().log(Level.SEVERE, "Could not listen on " + config.bind() + ":" + config.port(), e);
+                getServer().getPluginManager().disablePlugin(this);
+                return;
+            }
+            getLogger().info("Using " + bridge.name() + ". MCP: " + url() + "/mcp  REST: " + url() + "/api/<tool>");
+        } else {
+            getLogger().info("Using " + bridge.name() + ". Local HTTP is off (http.enabled: false).");
         }
-        getLogger().info("Using " + bridge.name() + ". MCP: " + url() + "/mcp  REST: " + url() + "/api/<tool>");
+        if (!config.relayUrl().isEmpty()) {
+            if (config.relayToken().isEmpty()) {
+                getLogger().warning("relay.url is set but relay.token is empty; not connecting to the panel.");
+            } else {
+                try {
+                    relay = new RelayClient(config.relayUrl(), config.relayToken(), mcp, new RestApi(registry), history, drafts,
+                            service, this::relayHello, getLogger());
+                    relay.start();
+                    getLogger().info("Connecting to the panel at " + relay.uri());
+                } catch (IllegalArgumentException e) {
+                    getLogger().warning("relay.url: " + e.getMessage());
+                }
+            }
+        }
     }
 
     @Override
     public void onDisable() {
+        if (relay != null) relay.stop();
         if (http != null) http.stop();
+        if (drafts != null) drafts.close();
+    }
+
+    /** What the panel shows about this server. */
+    private JsonObject relayHello() {
+        JsonObject o = new JsonObject();
+        o.addProperty("plugin", getDescription().getVersion());
+        o.addProperty("mc", BuildService.minecraftVersion());
+        o.addProperty("bridge", bridge.name());
+        JsonArray worlds = new JsonArray();
+        service.worlds().forEach(worlds::add);
+        o.add("worlds", worlds);
+        return o;
     }
 
     private String url() {
@@ -115,6 +161,10 @@ public final class AIBuilderPlugin extends JavaPlugin {
             }
             return true;
         }
+        if (args.length > 0 && args[0].equalsIgnoreCase("draft")) {
+            draftCommand(sender, args);
+            return true;
+        }
         if (args.length > 0 && MARKER_COMMANDS.contains(args[0].toLowerCase(Locale.ROOT))) {
             try {
                 markerCommand(sender, args);
@@ -124,6 +174,11 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return true;
         }
         sender.sendMessage("AIBuilder " + getDescription().getVersion() + " using " + bridge.name());
+        if (relay != null) sender.sendMessage("Panel relay: " + relay.status());
+        if (http == null) {
+            sender.sendMessage("Local HTTP is off (http.enabled: false); connect through the panel.");
+            return true;
+        }
         sender.sendMessage("MCP endpoint: " + url() + "/mcp");
         if (sender instanceof ConsoleCommandSender) {
             sender.sendMessage("export AIBUILDER_URL=" + url() + " AIBUILDER_TOKEN=" + config.token());
@@ -188,6 +243,65 @@ public final class AIBuilderPlugin extends JavaPlugin {
             }
             default -> throw new IllegalStateException(sub);
         }
+    }
+
+    /**
+     * {@code /aibuilder draft} lists open drafts; {@code approve [world] [force]} and {@code reject [world]} decide
+     * one. Approving reads the region over several ticks, so it runs off the main thread.
+     */
+    private void draftCommand(CommandSender sender, String[] args) {
+        if (!sender.hasPermission("aibuilder.approve")) {
+            sender.sendMessage("You need aibuilder.approve to see or decide drafts.");
+            return;
+        }
+        List<com.google.gson.JsonObject> open = drafts.openSummaries();
+        String action = args.length > 1 ? args[1].toLowerCase(Locale.ROOT) : "list";
+        if (action.equals("list")) {
+            if (open.isEmpty()) {
+                sender.sendMessage("No drafts waiting." + (config.drafts().review() ? "" : " Review is off (review.enabled)."));
+                return;
+            }
+            for (com.google.gson.JsonObject d : open) {
+                sender.sendMessage(d.get("id").getAsString() + " in " + d.get("world").getAsString() + ": "
+                        + d.get("edits").getAsInt() + " edits, +" + d.get("added").getAsLong() + " -" + d.get("removed").getAsLong()
+                        + " ~" + d.get("changed").getAsLong());
+            }
+            sender.sendMessage("/aibuilder draft approve|reject [world] [force]");
+            return;
+        }
+        if (!action.equals("approve") && !action.equals("reject")) {
+            sender.sendMessage("Usage: /aibuilder draft [approve|reject] [world] [force]");
+            return;
+        }
+        boolean force = Arrays.asList(args).subList(2, args.length).stream().anyMatch(a -> a.equalsIgnoreCase("force"));
+        String world = Arrays.asList(args).subList(2, args.length).stream().filter(a -> !a.equalsIgnoreCase("force")).findFirst()
+                .orElse(sender instanceof Player p ? p.getWorld().getName() : null);
+        com.google.gson.JsonObject target = open.stream()
+                .filter(d -> world == null ? open.size() == 1 : d.get("world").getAsString().equals(world)).findFirst().orElse(null);
+        if (target == null) {
+            sender.sendMessage(open.isEmpty() ? "No drafts waiting." : "Name the world: /aibuilder draft " + action + " <world>");
+            return;
+        }
+        String id = target.get("id").getAsString();
+        String by = sender.getName();
+        getServer().getScheduler().runTaskAsynchronously(this, () -> {
+            String message;
+            try {
+                if (action.equals("reject")) {
+                    drafts.reject(id, by);
+                    message = "Draft " + id + " rejected.";
+                } else {
+                    com.google.gson.JsonObject r = drafts.approve(id, force, by);
+                    message = "Draft " + id + " approved: placing " + r.get("blocks").getAsInt() + " blocks"
+                            + (r.get("conflicts").getAsInt() > 0 ? "; " + r.get("conflicts").getAsInt()
+                            + " changed since were left alone (add force to overwrite them)" : "") + ".";
+                }
+            } catch (EditException e) {
+                message = e.getMessage();
+            }
+            String m = message;
+            getServer().getScheduler().runTask(this, () -> sender.sendMessage(m));
+        });
     }
 
     /** MCP traffic per tool since the last reset; token figures are estimates. */
