@@ -89,7 +89,7 @@ class McpEndpointTest {
         assertEquals(java.util.Set.of("get_context", "block_info", "read_region", "check_region", "render_region", "build",
                 "decorate", "save_blueprint", "undo", "job_status", "tell"), names);
         for (String hidden : java.util.List.of("batch", "fill", "set_blocks", "place_blueprint", "cylinder", "walls", "replace",
-                "get_selection", "clone")) {
+                "get_selection", "clone", "lesson")) {
             assertTrue(registry.has(hidden), hidden + " should still be callable");
         }
         assertEquals(ToolStats.SESSION, real.stats().rows().get(0).tool());

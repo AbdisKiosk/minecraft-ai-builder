@@ -3,11 +3,13 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParseException;
 import com.google.gson.JsonParser;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
+import me.abdiskiosk.minecraftaibuilder.common.Corrections;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.Op;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
@@ -43,6 +45,14 @@ public final class History implements BuildService.Recorder {
     /** Changes listed by {@link #get}; the rest are only in the stats. */
     private static final int LISTED_CHANGES = 200;
     private static final int LISTED_CONFLICTS = 50;
+    /** Rows per list in {@link #corrections}. */
+    private static final int LISTED_CORRECTIONS = 10;
+    /** Rows per list, and positions per row, kept on the stamp for {@link #addCorrectionsTo}. */
+    private static final int STAMPED_ROWS = 3;
+    private static final int STAMPED_AT = 2;
+    /** Entries, and characters, {@link #addCorrectionsTo} gives Claude at a time. */
+    static final int TOLD_ENTRIES = 3;
+    static final int TOLD_CHARS = 1500;
 
     public record Settings(boolean enabled, long maxVolume, int keep, long maxBytes, long readsPerTick, long maxRenderVolume) {
     }
@@ -97,6 +107,13 @@ public final class History implements BuildService.Recorder {
         }
         boxes = RegionSnapshot.merge(boxes);
         if (boxes.isEmpty() || RegionSnapshot.volume(boxes) > settings.maxVolume()) return null;
+        // Capture a one-block shell while the edit already owns its memory reservation. The same before/after
+        // coverage keeps the diff accurate, and the saved after-read can later prove a neighbour used to be air.
+        List<Box> surroundings = new ArrayList<>();
+        for (Box b : boxes) surroundings.add(RegionSnapshot.clipY(
+                Box.of(b.min().add(-1, -1, -1), b.max().add(1, 1, 1)), caller.minY(), caller.maxY()));
+        surroundings = RegionSnapshot.merge(surroundings);
+        if (RegionSnapshot.volume(surroundings) <= settings.maxVolume()) return surroundings;
         return boxes;
     }
 
@@ -113,12 +130,23 @@ public final class History implements BuildService.Recorder {
         }
         // Built outside the lock: the 3D blocks need the server thread, which may be waiting on this history.
         boolean archived = archiving && diff != null && after != null && writeArchive(id, diff, after);
+        long baselineBytes = 0;
+        if (diff != null && !diff.isEmpty() && after != null && after.done() && after.volume() <= settings.maxVolume()) {
+            try {
+                byte[] bytes = after.encode();
+                Files.createDirectories(dir);
+                Files.write(dir.resolve(id + ".after.gz"), bytes);
+                baselineBytes = bytes.length;
+            } catch (IOException ex) {
+                if (plugin != null) plugin.getLogger().log(Level.WARNING, "Could not save correction baseline for " + id, ex);
+            }
+        }
         synchronized (this) {
-            return store(id, job, diff, boxes, archived);
+            return store(id, job, diff, boxes, archived, baselineBytes);
         }
     }
 
-    private String store(String id, BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, boolean archiveFiles) {
+    private String store(String id, BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, boolean archiveFiles, long baselineBytes) {
         JsonObject e = new JsonObject();
         e.addProperty("id", id);
         e.addProperty("job", job.id());
@@ -133,6 +161,7 @@ public final class History implements BuildService.Recorder {
         if (job.revertOf() != null) e.addProperty("revertOf", job.revertOf());
         if (job.draftOf() != null) e.addProperty("draftOf", job.draftOf());
         e.addProperty("tracked", diff != null);
+        if (baselineBytes > 0) e.addProperty("baselineBytes", baselineBytes);
         if (diff != null) {
             BlockDiff.Stats stats = diff.stats();
             e.addProperty("added", stats.added());
@@ -279,14 +308,15 @@ public final class History implements BuildService.Recorder {
 
     private void prune() {
         long bytes = 0;
-        for (JsonObject e : entries.values()) bytes += e.has("bytes") ? e.get("bytes").getAsLong() : 0;
+        for (JsonObject e : entries.values()) bytes += storedBytes(e);
         boolean removed = false;
         while (!entries.isEmpty() && (entries.size() > settings.keep() || bytes > settings.maxBytes())) {
             String oldest = entries.keySet().iterator().next();
             JsonObject e = entries.remove(oldest);
-            bytes -= e.has("bytes") ? e.get("bytes").getAsLong() : 0;
+            bytes -= storedBytes(e);
             try {
                 Files.deleteIfExists(dir.resolve(oldest + ".diff.gz"));
+                Files.deleteIfExists(dir.resolve(oldest + ".after.gz"));
             } catch (IOException ex) {
                 plugin.getLogger().log(Level.WARNING, "Could not delete history " + oldest, ex);
             }
@@ -294,6 +324,11 @@ public final class History implements BuildService.Recorder {
             removed = true;
         }
         if (removed) rewriteIndex();
+    }
+
+    private static long storedBytes(JsonObject e) {
+        return (e.has("bytes") ? e.get("bytes").getAsLong() : 0)
+                + (e.has("baselineBytes") ? e.get("baselineBytes").getAsLong() : 0);
     }
 
     private void rewriteIndex() {
@@ -370,9 +405,7 @@ public final class History implements BuildService.Recorder {
 
     private JsonObject revert(String id, JsonObject e, BlockDiff diff, boolean force) {
         String world = e.get("world").getAsString();
-        List<Box> boxes = new ArrayList<>();
-        if (e.has("boxes")) e.getAsJsonArray("boxes").forEach(b -> boxes.add(box(b.getAsJsonArray())));
-        if (boxes.isEmpty() && diff.bounds() != null) boxes.add(diff.bounds());
+        List<Box> boxes = boxes(e, diff);
         JsonObject o = new JsonObject();
         if (diff.isEmpty()) {
             o.addProperty("blocks", 0);
@@ -395,6 +428,329 @@ public final class History implements BuildService.Recorder {
             o.addProperty("job", job.id());
         }
         return o;
+    }
+
+    /**
+     * What people changed in the blocks an entry placed, as counts and a few coordinates, and stamps the entry with
+     * {@code corrected: {cells, share, time}} ({@code cells: 0} when nothing above the noise threshold changed), plus
+     * the top rows for {@link #addCorrectionsTo}. Cells a later entry changed are measured against that entry's
+     * after-state.
+     */
+    public JsonObject corrections(String id) {
+        Computed computed = compute(id);
+        Corrections.Result r = computed.result();
+        JsonObject o = new JsonObject();
+        o.addProperty("cells", r.cells());
+        o.addProperty("placed", r.placed());
+        o.addProperty("share", share(r));
+        o.addProperty("additions", r.additions());
+        o.addProperty("baseline", computed.baseline());
+        o.add("substitutions", substitutions(r.substitutions(), LISTED_CORRECTIONS, Corrections.MAX_AT));
+        o.add("removed", typeCounts(r.removed()));
+        o.add("states", stateChanges(r.states(), LISTED_CORRECTIONS));
+        return o;
+    }
+
+    /** Before (as the entry left it), after (now) and changes pictures of what people changed; see {@link #render}. */
+    public JsonObject correctionRender(String id, String viewName, String cornerName) {
+        Computed c = compute(id);
+        return DiffImages.render(service, c.world(), c.result().diff(), "the corrections of entry " + id, viewName, cornerName,
+                settings.maxRenderVolume(), settings.readsPerTick());
+    }
+
+    /** {@link #correctionRender}'s region as blocks for the panel's 3D view. */
+    public JsonObject correctionBlocks(String id) {
+        Computed c = compute(id);
+        return DiffImages.blocks(service, c.world(), c.result().diff(), "the corrections of entry " + id,
+                settings.maxRenderVolume(), settings.readsPerTick());
+    }
+
+    private record Computed(String world, Corrections.Result result, boolean baseline) {
+    }
+
+    private static double share(Corrections.Result r) {
+        return Math.round(r.share() * 1000) / 1000.0;
+    }
+
+    /** Reads the entry's boxes, finds the corrections and stamps the entry. */
+    private Computed compute(String id) {
+        JsonObject e;
+        List<JsonObject> later = new ArrayList<>();
+        synchronized (this) {
+            JsonObject live = entry(id);
+            e = live.deepCopy();
+            boolean after = false;
+            for (JsonObject other : entries.values()) {
+                if (after) later.add(other.deepCopy());
+                else after = other == live;
+            }
+        }
+        if (!e.get("tracked").getAsBoolean()) {
+            throw new EditException("entry " + id + " has no diff (the job was larger than history.max-volume or failed early)");
+        }
+        BlockDiff diff = storedDiff(id, e);
+        if (diff == null) throw new EditException("the diff of entry " + id + " is gone from the history folder");
+        if (diff.isEmpty()) throw new EditException("entry " + id + " changed no blocks, so nothing of it can have been corrected");
+        String world = e.get("world").getAsString();
+        RegionSnapshot baseline = null;
+        if (e.has("baselineBytes")) {
+            try {
+                baseline = RegionSnapshot.decode(Files.readAllBytes(dir.resolve(id + ".after.gz")), settings.maxVolume());
+            } catch (IOException | RuntimeException ex) {
+                // Older, pruned or damaged baselines must never turn unknown surroundings into apparent additions.
+                baseline = null;
+            }
+        }
+        List<Box> readBoxes = baseline == null ? boxes(e, diff) : baseline.boxes();
+        Box bounds = readBoxes.stream().reduce((a, b) -> Box.of(Vec3.min(a.min(), b.min()), Vec3.max(a.max(), b.max()))).orElse(diff.bounds());
+
+        List<BlockDiff> laterDiffs = new ArrayList<>();
+        List<Box> unknown = new ArrayList<>();
+        for (JsonObject l : later) {
+            if (!world.equals(l.get("world").getAsString()) || !l.has("bounds")) continue;
+            Box b = box(l.getAsJsonArray("bounds"));
+            if (!overlaps(b, bounds)) continue;
+            BlockDiff d = null;
+            if (l.get("tracked").getAsBoolean()) {
+                try {
+                    d = storedDiff(l.get("id").getAsString(), l);
+                } catch (RuntimeException ex) {
+                    // unreadable: treated like an untracked edit below
+                }
+            }
+            if (d == null) {
+                unknown.add(b); // a later edit whose cells are unknown: its whole box is left out
+                continue;
+            }
+            // Only the part over this entry is kept, so one later diff at a time is held in full.
+            BlockDiff.Builder part = new BlockDiff.Builder();
+            for (BlockDiff.Change c : d.changes()) if (inside(bounds, c.pos())) part.change(c.pos(), c.before(), c.after());
+            laterDiffs.add(part.build());
+        }
+
+        if (RegionSnapshot.volume(readBoxes) > settings.maxVolume()) throw new EditException("correction read exceeds history.max-volume");
+        RegionSnapshot now = service.readStepped(world, readBoxes, settings.readsPerTick());
+        Corrections.Result r = Corrections.find(diff, laterDiffs, unknown, p -> {
+            String s = now.get(p);
+            return s == null ? "air" : s;
+        }, Corrections.Threshold.DEFAULT, baseline);
+
+        JsonObject stamp = new JsonObject();
+        stamp.addProperty("cells", r.cells());
+        stamp.addProperty("share", share(r));
+        stamp.addProperty("additions", r.additions());
+        stamp.addProperty("baseline", baseline != null);
+        stamp.addProperty("time", System.currentTimeMillis());
+        if (r.corrected()) {
+            if (!r.substitutions().isEmpty()) stamp.add("substitutions", substitutions(r.substitutions(), STAMPED_ROWS, STAMPED_AT));
+            if (!r.removed().isEmpty()) stamp.add("removed", typeCounts(r.removed().subList(0, Math.min(STAMPED_ROWS, r.removed().size()))));
+            if (!r.states().isEmpty()) stamp.add("states", stateChanges(r.states(), STAMPED_ROWS));
+        }
+        synchronized (this) {
+            JsonObject live = entries.get(id);
+            if (live != null) { // not pruned meanwhile
+                // Claude is told about an entry once, also when it is checked again later.
+                JsonElement old = live.get("corrected");
+                if (old != null && old.isJsonObject() && old.getAsJsonObject().has("told")) stamp.addProperty("told", true);
+                live.add("corrected", stamp);
+                rewriteIndex();
+            }
+        }
+        return new Computed(world, r, baseline != null);
+    }
+
+    /** The entries a background check looks at now; see {@link CorrectionCheck#pick}. */
+    public synchronized List<String> correctionCandidates(long now) {
+        return CorrectionCheck.pick(entries.values(), now);
+    }
+
+    /** Bounded measurements for the panel; unchecked entries are not silently presented as zero corrections. */
+    public synchronized JsonObject correctionStats() {
+        JsonArray rows = new JsonArray();
+        List<JsonObject> all = new ArrayList<>(entries.values());
+        for (int i = all.size() - 1; i >= 0 && rows.size() < 200; i--) {
+            JsonObject e = all.get(i);
+            if (!CorrectionCheck.CLAUDE_SOURCE.equals(e.get("source").getAsString()) || !e.get("tracked").getAsBoolean()
+                    || e.has("revertOf")) continue;
+            long placed = e.get("added").getAsLong() + e.get("removed").getAsLong() + e.get("changed").getAsLong();
+            if (placed == 0) continue;
+            JsonObject row = new JsonObject();
+            row.add("id", e.get("id"));
+            row.add("time", e.get("time"));
+            row.addProperty("placed", placed);
+            if (e.has("corrected")) row.add("corrected", e.get("corrected").deepCopy());
+            rows.add(row);
+        }
+        JsonObject out = new JsonObject();
+        out.add("entries", rows);
+        return out;
+    }
+
+    /** Only metadata is inspected here: no world reads or new background jobs. */
+    public synchronized JsonObject lessonReport(List<Lessons.Lesson> lessons) {
+        JsonObject out = new JsonObject();
+        JsonArray rows = new JsonArray();
+        for (Lessons.Lesson lesson : lessons) {
+            JsonObject row = Lessons.json(lesson);
+            row.add("health", LessonHealth.assess(lesson, entries.values()));
+            rows.add(row);
+        }
+        out.add("lessons", rows);
+        out.addProperty("max", Lessons.MAX);
+        return out;
+    }
+
+    /** True when the entry's last check found corrections above the noise threshold. */
+    public synchronized boolean corrected(String id) {
+        JsonObject e = entries.get(id);
+        JsonElement stamp = e == null ? null : e.get("corrected");
+        return stamp != null && stamp.isJsonObject() && stamp.getAsJsonObject().has("cells")
+                && stamp.getAsJsonObject().get("cells").getAsLong() > 0;
+    }
+
+    /**
+     * Adds {@code corrections} to {@code get_context}: Claude's corrected entries it has not been told about, newest
+     * first, at most {@link #TOLD_ENTRIES} and {@link #TOLD_CHARS} characters. Each is told once; the rest wait for a
+     * later session.
+     */
+    public synchronized void addCorrectionsTo(JsonObject context) {
+        JsonArray told = new JsonArray();
+        int chars = 2;
+        List<JsonObject> all = new ArrayList<>(entries.values());
+        for (int i = all.size() - 1; i >= 0 && told.size() < TOLD_ENTRIES; i--) {
+            JsonObject e = all.get(i);
+            JsonElement el = e.get("corrected");
+            if (el == null || !el.isJsonObject() || !CorrectionCheck.CLAUDE_SOURCE.equals(e.get("source").getAsString())) continue;
+            JsonObject stamp = el.getAsJsonObject();
+            if (stamp.has("told") || !stamp.has("cells") || stamp.get("cells").getAsLong() <= 0) continue;
+            JsonObject row = toldJson(e.get("id").getAsString(), stamp);
+            int size = gson.toJson(row).length() + 1;
+            if (chars + size > TOLD_CHARS) continue; // waits for a session with room
+            chars += size;
+            told.add(row);
+            stamp.addProperty("told", true);
+        }
+        if (told.isEmpty()) return;
+        context.add("corrections", told);
+        rewriteIndex();
+    }
+
+    /** One corrected entry as Claude reads it: {"entry","share","substitutions":["a -> b x3 at [x,y,z]"],...}. */
+    static JsonObject toldJson(String id, JsonObject stamp) {
+        JsonObject o = new JsonObject();
+        o.addProperty("entry", id);
+        if (stamp.has("share")) o.addProperty("share", stamp.get("share").getAsDouble());
+        JsonArray subs = new JsonArray();
+        if (stamp.has("substitutions")) {
+            for (JsonElement el : stamp.getAsJsonArray("substitutions")) {
+                JsonObject s = el.getAsJsonObject();
+                StringBuilder sb = new StringBuilder(s.get("from").getAsString()).append(" -> ")
+                        .append(s.get("to").getAsString()).append(" x").append(s.get("count").getAsLong());
+                JsonArray at = s.getAsJsonArray("at");
+                for (int i = 0; i < at.size(); i++) sb.append(i == 0 ? " at " : " ").append(at.get(i).toString());
+                subs.add(sb.toString());
+            }
+        }
+        if (!subs.isEmpty()) o.add("substitutions", subs);
+        JsonArray removed = new JsonArray();
+        if (stamp.has("removed")) {
+            for (JsonElement el : stamp.getAsJsonArray("removed")) {
+                JsonObject t = el.getAsJsonObject();
+                removed.add(t.get("type").getAsString() + " x" + t.get("count").getAsLong());
+            }
+        }
+        if (!removed.isEmpty()) o.add("removed", removed);
+        JsonArray states = new JsonArray();
+        if (stamp.has("states")) {
+            for (JsonElement el : stamp.getAsJsonArray("states")) {
+                JsonObject t = el.getAsJsonObject();
+                List<String> props = new ArrayList<>();
+                if (t.has("props")) t.getAsJsonArray("props").forEach(p -> props.add(p.getAsString()));
+                states.add(t.get("type").getAsString() + (props.isEmpty() ? "" : " " + String.join(",", props))
+                        + " x" + t.get("count").getAsLong());
+            }
+        }
+        if (!states.isEmpty()) o.add("states", states);
+        return o;
+    }
+
+    private static JsonArray substitutions(List<Corrections.Substitution> list, int rows, int positions) {
+        JsonArray subs = new JsonArray();
+        for (Corrections.Substitution s : list.subList(0, Math.min(rows, list.size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("from", s.from());
+            row.addProperty("to", s.to());
+            row.addProperty("count", s.count());
+            JsonArray at = new JsonArray();
+            for (Vec3 p : s.at().subList(0, Math.min(positions, s.at().size()))) {
+                JsonArray xyz = new JsonArray();
+                xyz.add(p.x());
+                xyz.add(p.y());
+                xyz.add(p.z());
+                at.add(xyz);
+            }
+            row.add("at", at);
+            subs.add(row);
+        }
+        return subs;
+    }
+
+    private static JsonArray stateChanges(List<Corrections.StateChange> list, int rows) {
+        JsonArray out = new JsonArray();
+        for (Corrections.StateChange t : list.subList(0, Math.min(rows, list.size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("type", t.type());
+            row.addProperty("count", t.count());
+            JsonArray props = new JsonArray();
+            t.props().forEach(props::add);
+            row.add("props", props);
+            out.add(row);
+        }
+        return out;
+    }
+
+    private static JsonArray typeCounts(List<Corrections.TypeCount> counts) {
+        JsonArray out = new JsonArray();
+        for (Corrections.TypeCount t : counts.subList(0, Math.min(LISTED_CORRECTIONS, counts.size()))) {
+            JsonObject row = new JsonObject();
+            row.addProperty("type", t.type());
+            row.addProperty("count", t.count());
+            out.add(row);
+        }
+        return out;
+    }
+
+    /** The boxes an entry was recorded in, to read them again. */
+    private static List<Box> boxes(JsonObject e, BlockDiff diff) {
+        List<Box> boxes = new ArrayList<>();
+        if (e.has("boxes")) e.getAsJsonArray("boxes").forEach(b -> boxes.add(box(b.getAsJsonArray())));
+        if (boxes.isEmpty() && diff.bounds() != null) boxes.add(diff.bounds());
+        return boxes;
+    }
+
+    private static boolean overlaps(Box a, Box b) {
+        return a.min().x() <= b.max().x() && b.min().x() <= a.max().x() && a.min().y() <= b.max().y()
+                && b.min().y() <= a.max().y() && a.min().z() <= b.max().z() && b.min().z() <= a.max().z();
+    }
+
+    private static boolean inside(Box b, Vec3 p) {
+        return p.x() >= b.min().x() && p.x() <= b.max().x() && p.y() >= b.min().y() && p.y() <= b.max().y()
+                && p.z() >= b.min().z() && p.z() <= b.max().z();
+    }
+
+    /** A tracked entry's diff; null when it changed blocks but its file is gone. */
+    private BlockDiff storedDiff(String id, JsonObject e) {
+        Path file = dir.resolve(id + ".diff.gz");
+        if (!Files.exists(file)) {
+            long changed = 0;
+            for (String k : new String[]{"added", "removed", "changed"}) changed += e.has(k) ? e.get(k).getAsLong() : 0;
+            return changed == 0 ? BlockDiff.empty() : null;
+        }
+        try {
+            return BlockDiff.decode(Files.readAllBytes(file));
+        } catch (IOException ex) {
+            throw new UncheckedIOException(ex);
+        }
     }
 
     private synchronized JsonObject entry(String id) {

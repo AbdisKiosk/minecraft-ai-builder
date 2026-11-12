@@ -15,9 +15,14 @@ import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.RegionGuard;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.History;
+import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
+import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
+import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.bukkit.World;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -54,12 +59,21 @@ class ToolsTest {
     static {
         if (Bukkit.getServer() == null) {
             Logger logger = Logger.getAnonymousLogger();
+            World world = (World) Proxy.newProxyInstance(World.class.getClassLoader(), new Class<?>[]{World.class},
+                    (proxy, method, params) -> switch (method.getName()) {
+                        case "getName" -> "world";
+                        case "getMaxHeight" -> 256;
+                        default -> method.getReturnType() == boolean.class ? Boolean.FALSE : method.getReturnType() == int.class ? 0 : null;
+                    });
             Bukkit.setServer((Server) Proxy.newProxyInstance(Server.class.getClassLoader(), new Class<?>[]{Server.class},
                     (proxy, method, params) -> {
                         Object answer = switch (method.getName()) {
                             case "isPrimaryThread" -> Boolean.TRUE;
                             case "getLogger" -> logger;
                             case "getName", "getVersion", "getBukkitVersion", "toString" -> "test";
+                            case "getOnlinePlayers" -> List.of();
+                            case "getWorlds" -> List.of(world);
+                            case "getWorld" -> "world".equals(params[0]) ? world : null;
                             default -> null;
                         };
                         if (answer == null && method.getReturnType() == boolean.class) return Boolean.FALSE;
@@ -72,7 +86,7 @@ class ToolsTest {
     /** Blocks the fake world holds; everything else reads as air. */
     private final Map<Vec3, String> world = new HashMap<>();
 
-    private final class FakeBridge implements WorldEditBridge {
+    private class FakeBridge implements WorldEditBridge {
         public String name() { return "fake"; }
         public boolean async() { return false; }
         public BlockCatalog catalog() { return new FakeCatalog(); }
@@ -455,6 +469,108 @@ class ToolsTest {
         Tool tell = other.all().stream().filter(x -> x.name().equals("tell")).findFirst().orElseThrow();
         assertEquals("teleport is off; set players.allow-teleport: true in config.yml", assertThrows(EditException.class,
                 () -> tell.handler().call(args("{\"message\":\"hi\",\"teleport\":[0,64,0]}"))).getMessage());
+    }
+
+    @Test
+    void getContextListsLessonsAndDeliversFeedbackOnce() {
+        assertFalse(registry.call("get_context", new JsonObject()).data().has("lessons"));
+        service.lessons().add("Floors are spruce_planks", Lessons.MANUAL, List.of(), "Ann");
+        service.lessons().feedback("d1", "The tower is too tall", false, "panel: Ann");
+
+        JsonObject first = registry.call("get_context", new JsonObject()).data();
+        assertEquals("[\"Floors are spruce_planks\"]", first.get("lessons").toString(), first.toString());
+        assertEquals("[\"d1: The tower is too tall\"]", first.get("feedback").toString());
+        assertTrue(first.get("hint").getAsString().contains("lesson"));
+        JsonObject second = registry.call("get_context", new JsonObject()).data();
+        assertTrue(second.has("lessons"));
+        assertFalse(second.has("feedback"), second.toString());
+        assertFalse(second.has("hint"), second.toString());
+    }
+
+    /** A service whose history reads the fake world at once, as with FastAsyncWorldEdit. */
+    private BuildService withHistory() {
+        BuildService s = new BuildService(null, new FakeBridge() {
+            @Override
+            public boolean async() { return true; }
+        }, config, tempDir());
+        s.setRecorder(new History(null, s, new History.Settings(true, 1000, 100, 1 << 20, 4096, 1000)));
+        return s;
+    }
+
+    /** Claude placed 6 oak_planks at y=64 from x=0, and a person changed {@code changed} of them to spruce_planks. */
+    private String placedAndCorrected(BuildService s, int z, int changed) {
+        BlockDiff.Builder d = new BlockDiff.Builder();
+        for (int x = 0; x < 6; x++) {
+            d.change(new Vec3(x, 64, z), "air", "oak_planks");
+            world.put(new Vec3(x, 64, z), x < changed ? "spruce_planks" : "oak_planks");
+        }
+        Box box = Box.of(new Vec3(0, 64, z), new Vec3(5, 64, z));
+        String id = s.history().record(new BuildService.JobInfo("j", "done", "done", "build", "panel mcp", "Claude", "world",
+                box, 0, 0, 0, System.currentTimeMillis(), 1, null, null, null, null, null), d.build(), List.of(box), null);
+        s.history().corrections(id);
+        return id;
+    }
+
+    @Test
+    void getContextTellsCorrectionsOnceWithTheHint() {
+        BuildService s = withHistory();
+        ToolRegistry r = new ToolRegistry(s, Logger.getAnonymousLogger());
+        Tools.registerAll(r, s);
+        String id = placedAndCorrected(s, 0, 4);
+        JsonObject first = r.call("get_context", new JsonObject()).data();
+        assertEquals("[{\"entry\":\"" + id + "\",\"share\":0.667,\"substitutions\":[\"oak_planks -> spruce_planks x4 at [0,64,0] [1,64,0]\"]}]",
+                first.get("corrections").toString(), first.toString());
+        assertTrue(first.has("hint"));
+        JsonObject second = r.call("get_context", new JsonObject()).data();
+        assertFalse(second.has("corrections") || second.has("hint"), second.toString());
+    }
+
+    @Test
+    void theLessonToolNeedsACorrectionOrDeliveredFeedback() {
+        BuildService s = withHistory();
+        ToolRegistry r = new ToolRegistry(s, Logger.getAnonymousLogger());
+        Tools.registerAll(r, s);
+        String fixed = placedAndCorrected(s, 0, 4);
+        String untouched = placedAndCorrected(s, 1, 0);
+        s.lessons().feedback("d7", "Too tall", false, "panel: Ann");
+
+        for (String refused : new String[]{"{\"text\":\"Use spruce\"}", "{\"text\":\"Use spruce\",\"entry\":\"" + untouched + "\"}",
+                "{\"text\":\"Use spruce\",\"entry\":\"hnope\"}", "{\"text\":\"Keep it low\",\"entry\":\"d7\"}"}) {
+            ToolResult res = r.call("lesson", JsonParser.parseString(refused).getAsJsonObject());
+            assertTrue(res.error(), refused);
+            assertTrue(res.data().toString().contains("must come from a correction or feedback"), res.data().toString());
+        }
+        assertTrue(s.lessons().list().isEmpty());
+
+        assertFalse(r.call("lesson", JsonParser.parseString("{\"text\":\"Use spruce_planks, not oak_planks\",\"entry\":\"" + fixed + "\"}")
+                .getAsJsonObject()).error());
+        r.call("get_context", new JsonObject()); // delivers the feedback on d7
+        assertFalse(r.call("lesson", JsonParser.parseString("{\"text\":\"Keep towers low\",\"entry\":\"d7\"}").getAsJsonObject()).error());
+        assertEquals(List.of(List.of(fixed), List.of("d7")), s.lessons().list().stream().map(Lessons.Lesson::entries).toList());
+    }
+
+    /** The lesson tool is left out of tools/list, yet Claude can call it over MCP. */
+    @Test
+    void theUnlistedLessonToolIsCallableOverMcp() {
+        service.lessons().feedback("h1", "Torches look cheap", false, "panel: Ann");
+        service.lessons().takeFeedback();
+        McpEndpoint mcp = new McpEndpoint(registry, "test");
+        String list = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}")).toString();
+        assertFalse(list.contains("\"lesson\""), list);
+
+        JsonObject r = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"lesson\",\"arguments\":{\"text\":\"Use lanterns, not torches\",\"entry\":\"h1\"}}}")).getAsJsonObject();
+        JsonObject result = r.getAsJsonObject("result");
+        assertFalse(result.get("isError").getAsBoolean(), r.toString());
+        Lessons.Lesson saved = service.lessons().list().get(0);
+        assertEquals("Use lanterns, not torches", saved.text());
+        assertEquals(Lessons.CLAUDE, saved.origin());
+        assertEquals(List.of("h1"), saved.entries());
+        assertFalse(saved.seen());
+
+        JsonObject typo = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"lesson\",\"arguments\":{\"lesson\":\"x\"}}}")).getAsJsonObject().getAsJsonObject("result");
+        assertTrue(typo.get("isError").getAsBoolean());
     }
 
     /** WorldGuard with a spawn and a shop; it would refuse every edit if protection were on. */

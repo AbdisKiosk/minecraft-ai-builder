@@ -366,3 +366,6 @@ details.more ul { padding-left: 20px; display: grid; gap: 6px; }
 }
 button.link { background: none; border: 0; padding: 0; color: var(--accent); font: inherit; font-weight: 550; cursor: pointer; }
 button.link:hover { text-decoration: underline; }
+.lesson-edit { display: grid; gap: 8px; }
+.lesson-edit textarea { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 6px 10px; resize: vertical; }

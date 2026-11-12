@@ -36,7 +36,7 @@ export interface DraftSummary extends Counts {
   created: number;
 }
 
-export interface ServerInfo { mc?: string; bridge?: string; plugin?: string; review?: boolean; worlds?: string[] }
+export interface ServerInfo { mc?: string; bridge?: string; plugin?: string; review?: boolean; worlds?: string[]; lessons?: boolean }
 
 export interface Server {
   id: string;
@@ -95,3 +95,59 @@ export interface Placed {
 }
 
 export type Renders = Record<'before' | 'after' | 'changes', string>;
+
+/** What people changed in the blocks a history entry placed (plugin/.../History.java#corrections). */
+export interface Corrections {
+  cells: number;
+  placed: number;
+  share: number;
+  /** Nearby additions are in cells, but not in the original-cell correction rate. */
+  additions?: number;
+  baseline?: boolean;
+  substitutions: { from: string; to: string; count: number; at: number[][] }[];
+  removed: { type: string; count: number }[];
+  states: { type: string; count: number; props?: string[] }[];
+}
+
+export interface CorrectionMeasurement {
+  id: string;
+  time: number;
+  placed: number;
+  corrected?: { cells: number; share: number; time: number; additions?: number; baseline?: boolean };
+}
+
+/** A lesson Claude reads every session on a server (plugin/.../Lessons.java). */
+export interface Lesson {
+  id: string;
+  text: string;
+  origin: 'feedback' | 'claude' | 'manual';
+  /** The history (h…) or draft (d…) ids it came from. */
+  entries: string[];
+  by: string;
+  time: number;
+  seen: boolean;
+  updated?: number;
+  health?: { status: 'unavailable' | 'watching' | 'recurring'; count: number; entries: string[] };
+}
+
+/** One of the user's assets (lib/server/assets.ts). */
+export interface Asset {
+  id: string;
+  name: string;
+  description: string;
+  tags: string[];
+  /** Width (x), height (y) and length (z). */
+  size: [number, number, number];
+  /** Blocks that are not air. */
+  blocks: number;
+  /** The Minecraft version it was saved on. */
+  mc: string | null;
+  bytes: number;
+  created: number;
+  updated: number;
+}
+
+export interface AssetList {
+  assets: Asset[];
+  quota: { count: number; bytes: number; maxCount: number; maxBytes: number };
+}

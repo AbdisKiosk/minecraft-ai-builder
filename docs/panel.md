@@ -225,6 +225,65 @@ their names with markers.
 
 Settings under `map:` in the plugin's `config.yml`: `enabled` (default true) and `threads` (default 2).
 
+## Lessons
+
+A lesson is a short rule (at most 160 characters) that Claude reads in `get_context` at the start of every session
+on a server. Lessons apply as soon as they are saved; there is no approval step.
+
+- After an admin rejects a draft or reverts an edit on the panel, the panel asks "Do you want to give feedback on this
+  build?". The text (at most 300 characters) reaches Claude once, in `get_context` as `feedback`, with the draft or
+  entry id. With **Remember this for future builds** (ticked by default) it is also saved as a lesson. Skip asks
+  nothing more; rejects and reverts in the game or by Claude never ask.
+- **Changed since** on a history entry shows what people changed in the blocks it placed since (substitutions,
+  removals and changed block states, with pictures and the 3D view on request), while the server is online and still
+  keeps the entry. Admins and the owner can save it as a lesson linked to the entry, starting from a sentence made
+  from the largest change.
+- In the background, when a Claude Code session starts (at most every ten minutes), the plugin checks up to five of
+  Claude's builds from the last seven days that were not checked in the last day, one at a time, and stops when the
+  server is short of memory. Claude hears of what people changed once, in `get_context` as `corrections`.
+- Claude saves its own lessons with the `lesson` tool, which is not in the tool list Claude gets every session. It
+  may only save one from a correction or from feedback it was given: `entry` names that history entry or draft.
+- **Lessons** on a server's page lists them with where they came from (feedback, Claude or written there), who wrote
+  them and the build they came from. Every member sees them, and lessons nobody has seen yet are marked new until
+  someone opens the page. Admins and the owner add, edit and delete them.
+- New tracked builds keep a compressed after-snapshot locally, including a one-block shell when it fits under
+  `history.max-volume`. **Changed since** also finds blocks added into originally empty cells directly touching
+  the build. Later recorded edits and natural changes are excluded. These are candidates, not proof of intent;
+  review them before making a rule. Older builds without snapshots still compare their original changed cells.
+  Snapshot bytes count toward `history.max-bytes` and are deleted when their entry is pruned.
+- **Correction rate** on the server page charts up to 200 retained tracked Claude builds, oldest to newest.
+  Unchecked builds are distinct from checked zeroes. The overall rate is weighted by the number of original
+  changed cells; nearby additions are separate and cannot push the rate above 100%. Viewing the chart reads
+  stored measurements only, never world chunks. The server must be online; archive metadata is not a live check.
+- A lesson naming both block types in a source substitution shows **May not be working** when that substitution
+  recurs in two distinct later checked Claude builds in the same world. Builds must have started after the lesson
+  was saved or edited; marking it seen does not reset this period. The warning links to up to five builds for
+  review, never edits or deletes a lesson automatically, and cannot assess missing source entries or arbitrary prose.
+- A server keeps at most 12. A new lesson then replaces the oldest one Claude wrote; when people wrote every one,
+  Claude's is refused and a person's replaces the oldest.
+
+Lessons and pending feedback live in the plugin's `lessons.json`, beside `areas.json`. A plugin from before lessons
+answers the Lessons page with "too old"; update it with the jar from the panel.
+
+## Assets
+
+**Assets** (top bar) is a user's own library of saved pieces: a window, a pillar, a tree. Assets belong to the account,
+not to a server, so they can be placed on every server where the user is a builder.
+
+- **Save as asset** on a server's map (builders): click two corners, then give a name (a-z, 0-9, `_`, `-`, as for
+  saved blueprints), a description, tags and the height. The height starts from the area the box lies in, if any. The
+  panel reads the blocks through the same `draft export` frame as promote, so `promote.max-volume` limits it, and it
+  saves the world as it is, not an open draft. A region that is only air is refused.
+- The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
+  the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
+  and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+- Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Nobody can see, change or place another user's
+  asset; saving and placing need the builder role on the server, as promote does.
+- Storage: one MySQL row per asset (`assets`), and in R2 under `users/<user>/assets/<id>/` the export frame's data
+  (`region.bin`, which the import frame takes back) and the 3D view's blocks (`blocks.json.gz`). The export leaves out
+  properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
+  view; a wrong guess changes only how the preview draws a block, never what is placed.
+
 ## Drafts: approve edits before they are placed
 
 Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone

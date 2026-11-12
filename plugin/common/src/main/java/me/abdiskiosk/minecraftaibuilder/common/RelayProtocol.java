@@ -11,6 +11,7 @@ package me.abdiskiosk.minecraftaibuilder.common;
  *                 {"t":"history","id":7,"op":"list|get|render|revert","args":{...}}
  *                 {"t":"draft","id":7,"op":"list|get|render|approve|reject|export|import","args":{...}}
  *                 {"t":"map","id":7,"op":"index|tile|area|unarea","args":{...}}   (only when hello said "map":true)
+ *                 {"t":"lessons","id":7,"op":"list|add|edit|delete|seen|feedback","args":{...}}   (only when hello said "lessons":true)
  * plugin → panel  {"t":"reply","id":7,"status":200,"body":{...}}   (body null with status 202: nothing to send)
  *                 {"t":"event","event":"job.start|job.progress|job.end","job":{...}}
  *                 {"t":"event","event":"draft.update","draft":{...summary...}}
@@ -44,6 +45,7 @@ public final class RelayProtocol {
     public static final String HISTORY = "history";
     public static final String DRAFT = "draft";
     public static final String MAP = "map";
+    public static final String LESSONS = "lessons";
     public static final String REPLY = "reply";
     public static final String EVENT = "event";
     public static final String WELCOME = "welcome";

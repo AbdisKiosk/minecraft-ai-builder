@@ -45,6 +45,8 @@ public final class AIBuilderPlugin extends JavaPlugin {
     private WorldEditBridge bridge;
     private PluginConfig config;
     private McpEndpoint mcp;
+    /** Runs the background correction checks, one at a time. */
+    private java.util.concurrent.ExecutorService checks;
     private BuildService service;
 
     @Override
@@ -103,6 +105,14 @@ public final class AIBuilderPlugin extends JavaPlugin {
         ToolRegistry registry = new ToolRegistry(service, getLogger());
         Tools.registerAll(registry, service);
         mcp = new McpEndpoint(registry, getDescription().getVersion());
+        if (history != null) {
+            checks = java.util.concurrent.Executors.newSingleThreadExecutor(r -> {
+                Thread t = new Thread(r, "AIBuilder correction check");
+                t.setDaemon(true);
+                return t;
+            });
+            mcp.onSession(CorrectionCheck.of(history, checks, getLogger())::sessionStarted);
+        }
         getLogger().info("Using " + bridge.name() + ".");
         if (config.relayUrl().isEmpty() || config.relayToken().isEmpty()) {
             getLogger().warning(NOT_CONNECTED);
@@ -125,6 +135,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     @Override
     public void onDisable() {
         if (relay != null) relay.stop();
+        if (checks != null) checks.shutdownNow();
         if (map != null) map.close();
         if (drafts != null) drafts.close();
     }

@@ -7,6 +7,8 @@ import { useFetched } from '../lib/useFetched';
 import type { Servers } from '../lib/usePanel';
 import { can, type Server } from '../lib/types';
 import Pictures from './Pictures';
+import ChangedSince from './ChangedSince';
+import FeedbackDialog from './FeedbackDialog';
 import PromoteDialog from './PromoteDialog';
 import { Badge, ChangesCard, Conflicts, Pills, ServerPageLink, TypesCard } from './shared';
 
@@ -22,6 +24,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
   const [result, setResult] = useState<Placed | null>(null);
   const [revertError, setRevertError] = useState('');
   const [promote, setPromote] = useState(false);
+  const [feedback, setFeedback] = useState(false);
 
   if (error) return <div className="card"><p className="error">{error}</p></div>;
   if (!e) return <p className="muted">Loading diff…</p>;
@@ -34,6 +37,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
     setRevertError('');
     try {
       setResult(await api<Placed>(`${base}/revert`, { method: 'POST', body: JSON.stringify({ force }) }));
+      setFeedback(!!s.info?.lessons);
     } catch (ex) {
       setRevertError(message(ex));
       setBusy(false);
@@ -79,11 +83,13 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
             </>
           )}
         </section>
+        <ChangedSince server={s} entry={e} base={base} />
         <TypesCard of={e} />
         <ChangesCard of={e} />
       </div>
       {promote && <PromoteDialog from={server} servers={servers} onClose={() => setPromote(false)}
         source={{ world: e.world, bounds: boxArray(e) }} />}
+      {feedback && <FeedbackDialog server={server} id={e.id} onClose={() => setFeedback(false)} />}
     </>
   );
 }

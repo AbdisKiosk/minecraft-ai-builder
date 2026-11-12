@@ -79,13 +79,16 @@ function Rendered({ url }: { url: string }) {
   );
 }
 
-/** Loaded only when selected; the viewer owns the stage's canvas and releases it on unmount. */
-function Viewer3d({ url, mc }: { url: string; mc: string }) {
+/**
+ * Loaded only when selected; the viewer owns the stage's canvas and releases it on unmount. With `asset`, the blocks
+ * are one region without changes (an asset), shown as they are, with their model states filled in from the client jar.
+ */
+export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: boolean }) {
   const holder = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
   const [note, setNote] = useState('Loading blocks…');
-  const [mode, setMode] = useState<Mode>('changes');
+  const [mode, setMode] = useState<Mode>(asset ? 'after' : 'changes');
   const [onlyChanged, setOnlyChanged] = useState(false);
   const [cut, setCut] = useState(0);
   const [picked, setPicked] = useState<Picked | null>(null);
@@ -93,21 +96,34 @@ function Viewer3d({ url, mc }: { url: string; mc: string }) {
   useEffect(() => {
     let current = true;
     let v: Viewer | null = null;
-    Promise.all([import('../lib/viewer3d'), import('../lib/schematic'), api<BlockData>(url)]).then(([module, schematic, data]) => {
+    let jarUrl = `/api/minecraft/${encodeURIComponent(mc)}/client.jar`;
+    Promise.all([import('../lib/viewer3d'), import('../lib/schematic'), api<BlockData>(url)]).then(async ([module, schematic, data]) => {
       if (!current || !holder.current) return;
       if (!module.supported()) throw new Error('This browser has no WebGL 2, which the 3D view needs.');
+      if (asset && !data.models) {
+        // The jar is fetched once here and handed to the viewer, which would otherwise fetch it again.
+        setNote('Loading Minecraft textures… (first use downloads the client jar)');
+        const jar = await fetch(jarUrl);
+        if (!jar.ok) throw new Error((await jar.json().catch(() => null))?.error || `Could not load Minecraft textures (${jar.status}).`);
+        const blob = await jar.blob();
+        const { modelStates } = await import('../lib/blockModels');
+        data = { ...data, models: await modelStates(data.palette.map(p => typeof p === 'string' ? p : p.state), blob) };
+        if (!current || !holder.current) return;
+        jarUrl = URL.createObjectURL(blob);
+      }
       if (!data.models) throw new Error('3D needs an updated AIBuilder plugin on this server (complete block model states).');
       const d = schematic.decode(data);
       setDiff(d);
-      setCut(Math.min(d.height - 1, d.topChange + 1));
-      v = module.createViewer(holder.current, d, `/api/minecraft/${encodeURIComponent(mc)}/client.jar`, setPicked);
+      setCut(asset ? d.height - 1 : Math.min(d.height - 1, d.topChange + 1));
+      v = module.createViewer(holder.current, d, jarUrl, setPicked);
       setViewer(v);
     }).catch(ex => { if (current) setNote(message(ex)); });
     return () => {
       current = false;
       v?.dispose();
+      if (jarUrl.startsWith('blob:')) URL.revokeObjectURL(jarUrl);
     };
-  }, [url, mc]);
+  }, [url, mc, asset]);
   useEffect(() => {
     if (!viewer) return;
     let current = true;
@@ -123,19 +139,22 @@ function Viewer3d({ url, mc }: { url: string; mc: string }) {
   return (
     <div className="viewer3d">
       <div className="v3-bar">
-        <div className="seg" role="group" aria-label="3D mode">
-          {SLOTS.map(slot => <button key={slot} className={mode === slot ? 'on' : ''} aria-pressed={mode === slot}
-            onClick={() => setMode(slot)}>{slot[0].toUpperCase() + slot.slice(1)}</button>)}
-        </div>
-        <label><input type="checkbox" checked={onlyChanged} disabled={mode !== 'changes'}
-          onChange={e => setOnlyChanged(e.target.checked)} /> only changed blocks</label>
+        {!asset && <>
+          <div className="seg" role="group" aria-label="3D mode">
+            {SLOTS.map(slot => <button key={slot} className={mode === slot ? 'on' : ''} aria-pressed={mode === slot}
+              onClick={() => setMode(slot)}>{slot[0].toUpperCase() + slot.slice(1)}</button>)}
+          </div>
+          <label><input type="checkbox" checked={onlyChanged} disabled={mode !== 'changes'}
+            onChange={e => setOnlyChanged(e.target.checked)} /> only changed blocks</label>
+        </>}
         <span className="spacer" />
         <label>Cut height <input type="range" min={0} max={diff ? diff.height - 1 : 0} value={cut} disabled={!diff}
           onChange={e => setCut(Number(e.target.value))} /><output>{diff ? diff.origin[1] + cut : '—'}</output></label>
       </div>
       <div className="v3-stage" ref={holder} />
       <div className="v3-info" role="status">{note || (picked
-        ? <><b>{picked.pos.join(' ')}</b>  {picked.before} → {picked.after}  ({picked.kind?.toLowerCase() ?? 'unchanged'})</>
+        ? asset ? <><b>{picked.pos.join(' ')}</b>  {picked.after}</>
+          : <><b>{picked.pos.join(' ')}</b>  {picked.before} → {picked.after}  ({picked.kind?.toLowerCase() ?? 'unchanged'})</>
         : 'Drag to orbit · scroll to zoom · click a block to inspect')}</div>
     </div>
   );

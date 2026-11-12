@@ -40,10 +40,16 @@ public final class McpEndpoint {
     private final ToolStats stats = new ToolStats();
     // No HTML escaping: it would turn "=" and "'" into \\u003d / \\u0027 in the text Claude reads (states, errors).
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
+    private volatile Runnable onSession = () -> { };
 
     public McpEndpoint(ToolRegistry tools, String version) {
         this.tools = tools;
         this.version = version;
+    }
+
+    /** Runs when a client initializes a session; it must return at once (background work goes to its own thread). */
+    public void onSession(Runnable hook) {
+        this.onSession = hook;
     }
 
     /** Sizes of everything sent to and from Claude since the last reset. */
@@ -87,6 +93,7 @@ public final class McpEndpoint {
         return switch (method) {
             case "initialize" -> {
                 stats.record(ToolStats.SESSION, 0, INSTRUCTIONS.length(), 0);
+                onSession.run();
                 yield result(id, initialize(params));
             }
             case "ping" -> result(id, new JsonObject());
