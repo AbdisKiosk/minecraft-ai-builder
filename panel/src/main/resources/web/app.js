@@ -402,7 +402,8 @@ function picturesCard(whose) {
   return `<section class="card">
     <div class="toolbar"><h2 style="margin:0">Pictures</h2>
       <select id="view" aria-label="View"><option value="iso">Isometric</option><option value="top">Top-down</option>
-        <option value="north">North face</option><option value="south">South face</option><option value="east">East face</option><option value="west">West face</option></select>
+        <option value="north">North face</option><option value="south">South face</option><option value="east">East face</option><option value="west">West face</option>
+        <option value="3d">3D (interactive)</option></select>
       <select id="corner" aria-label="Camera corner"><option>se</option><option>sw</option><option>ne</option><option>nw</option></select>
       <span class="spacer"></span>
       <span class="legend"><span><i style="background:var(--added)"></i>added</span><span><i style="background:var(--removed)"></i>removed</span><span><i style="background:var(--changed)"></i>changed</span></span>
@@ -412,12 +413,39 @@ function picturesCard(whose) {
   </section>`;
 }
 
+// The 3D view on the page, if any. It holds a WebGL context, so it is disposed when the view or the page changes.
+let viewer3d = null;
+
+function closeViewer3d() {
+  if (viewer3d) viewer3d.dispose();
+  viewer3d = null;
+}
+
 function wirePictures(url) {
   const view = document.getElementById('view');
   const corner = document.getElementById('corner');
+  const box = document.getElementById('renders');
+  let painted = 0;
+  const paint3d = async () => {
+    const mine = painted;
+    box.className = 'renders one';
+    box.innerHTML = '<div class="viewer3d"><span class="note">Loading blocks…</span></div>';
+    const holder = box.firstChild;
+    try {
+      const [viewer, data] = await Promise.all([import('/viewer3d.js'), api(url.replace(/render$/, 'blocks'))]);
+      if (mine !== painted || !holder.isConnected) return;
+      if (!viewer.supported()) throw new Error('This browser has no WebGL 2, which the 3D view needs.');
+      viewer3d = viewer.mount(holder, data);
+    } catch (ex) {
+      if (mine === painted) holder.innerHTML = `<span class="note">${esc(ex.message)}</span>`;
+    }
+  };
   const paint = async () => {
-    const box = document.getElementById('renders');
+    painted++;
+    closeViewer3d();
     corner.disabled = view.value !== 'iso';
+    if (view.value === '3d') return paint3d();
+    box.className = 'renders';
     const slots = ['before', 'after', 'changes'];
     box.innerHTML = slots.map(k => `<figure class="render"><figcaption>${k}</figcaption><div class="img"><span class="note">Rendering…</span></div></figure>`).join('');
     try {
@@ -435,6 +463,11 @@ function wirePictures(url) {
       box.querySelectorAll('.img').forEach(el => { el.innerHTML = `<span class="note">${esc(ex.message)}</span>`; });
     }
   };
+  // The 3D view needs room to drag in: on a phone the pictures are the better view.
+  const small = window.matchMedia('(max-width: 700px)').matches;
+  const option = view.querySelector('option[value="3d"]');
+  option.disabled = small;
+  if (small) option.textContent = '3D (needs a wider screen)';
   view.onchange = paint;
   corner.onchange = paint;
   paint();
@@ -628,6 +661,7 @@ function zoom(src) {
 // ---------- routing ----------
 
 function route() {
+  closeViewer3d();
   const parts = location.hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
   if (parts[0] === 's' && parts[1] && parts[2] === 'h' && parts[3]) return diffPage(parts[1], parts[3]);
   if (parts[0] === 's' && parts[1] && parts[2] === 'd' && parts[3]) return draftPage(parts[1], parts[3]);
