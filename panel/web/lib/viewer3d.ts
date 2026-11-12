@@ -1,24 +1,38 @@
 // Interactive 3D view of a history entry or draft, for the Pictures card. Loaded only when "3D" is picked.
 // The data comes from /blocks (DiffImages.encode in the plugin): palette, run-length before/after, and the changes.
 import * as THREE from 'three';
-import { OrbitControls } from '/vendor/OrbitControls.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+type Kind = 'ADDED' | 'REMOVED' | 'CHANGED';
+type SubBox = number[];
+
+/** What /blocks sends. */
+export interface BlockData {
+  box: number[];
+  palette: { state: string; rgb: number; transparent?: boolean; boxes?: SubBox[] }[];
+  before: [number, number][];
+  after: [number, number][];
+  changes: [number, Kind][];
+}
+
+export interface Viewer { dispose(): void }
 
 // The same colours as IsoRenderer.
 const BACKGROUND = 0x1E2228;
 const TINT = { ADDED: 0x3FD16B, REMOVED: 0xE5484D, CHANGED: 0xF2C94C };
-const KIND = { ADDED: 1, REMOVED: 2, CHANGED: 3 };
+const KIND: Record<Kind, number> = { ADDED: 1, REMOVED: 2, CHANGED: 3 };
 const KIND_NAME = ['', 'added', 'removed', 'changed'];
 const KIND_TINT = [0, TINT.ADDED, TINT.REMOVED, TINT.CHANGED];
-const FULL = [[0, 0, 0, 1, 1, 1]];
+const FULL: SubBox[] = [[0, 0, 0, 1, 1, 1]];
 
-function mix(rgb, toward, f) {
+function mix(rgb: number, toward: number, f: number): number {
   const r = ((rgb >> 16) & 255) * (1 - f) + ((toward >> 16) & 255) * f;
   const g = ((rgb >> 8) & 255) * (1 - f) + ((toward >> 8) & 255) * f;
   const b = (rgb & 255) * (1 - f) + (toward & 255) * f;
   return (r << 16) | (g << 8) | b;
 }
 
-function expand(runs, volume) {
+function expand(runs: [number, number][], volume: number): Uint32Array {
   const out = new Uint32Array(volume);
   let i = 0;
   for (const [index, count] of runs) {
@@ -28,7 +42,7 @@ function expand(runs, volume) {
   return out;
 }
 
-export function supported() {
+export function supported(): boolean {
   try {
     return !!document.createElement('canvas').getContext('webgl2');
   } catch {
@@ -37,7 +51,7 @@ export function supported() {
 }
 
 /** Draws {@code data} into {@code el}. Call dispose() on the result before removing the element. */
-export function mount(el, data) {
+export function mount(el: HTMLElement, data: BlockData): Viewer {
   const [x1, y1, z1, x2, y2, z2] = data.box;
   const sx = x2 - x1 + 1, sy = y2 - y1 + 1, sz = z2 - z1 + 1;
   const volume = sx * sy * sz;
@@ -74,15 +88,15 @@ export function mount(el, data) {
     </div>
     <div class="v3-stage"></div>
     <div class="v3-info"></div>`;
-  const stage = el.querySelector('.v3-stage');
-  const info = el.querySelector('.v3-info');
-  const hide = el.querySelector('.v3-hide input');
-  const cut = el.querySelector('.v3-cut input');
-  const cutOut = el.querySelector('.v3-cut output');
+  const stage = el.querySelector<HTMLElement>('.v3-stage')!;
+  const info = el.querySelector<HTMLElement>('.v3-info')!;
+  const hide = el.querySelector<HTMLInputElement>('.v3-hide input')!;
+  const cut = el.querySelector<HTMLInputElement>('.v3-cut input')!;
+  const cutOut = el.querySelector<HTMLOutputElement>('.v3-cut output')!;
   const hint = 'Drag to rotate, right-drag to pan, scroll to zoom. Click a block for its coordinates.';
   let mode = 'changes';
   // One above the highest change, so an edit inside a building shows without its roof.
-  cut.value = Math.min(y2, y1 + changeMax[1] + 1);
+  cut.value = String(Math.min(y2, y1 + changeMax[1] + 1));
 
   // ---------- scene ----------
   const renderer = new THREE.WebGLRenderer({ antialias: true });
@@ -106,7 +120,7 @@ export function mount(el, data) {
   scene.add(outline);
   // Minecraft and three.js are both right-handed with y up: x is east, z is south. The box is centred on the origin.
   const ox = -sx / 2, oy = -sy / 2, oz = -sz / 2;
-  let meshes = [];
+  let meshes: THREE.InstancedMesh[] = [];
   let queued = 0;
 
   function draw() {
@@ -123,12 +137,12 @@ export function mount(el, data) {
     const changes = mode === 'changes';
     const cells = mode === 'before' ? before : changes ? marked : after;
     const onlyChanged = changes && hide.checked;
-    const layers = cut.value - y1 + 1;
+    const layers = Number(cut.value) - y1 + 1;
     const layer = sx * sz;
-    const shows = i => drawn[cells[i]] && !(onlyChanged && !kinds[i]);
-    const hides = i => solid[cells[i]] && !(onlyChanged && !kinds[i]);
+    const shows = (i: number) => drawn[cells[i]] && !(onlyChanged && !kinds[i]);
+    const hides = (i: number) => solid[cells[i]] && !(onlyChanged && !kinds[i]);
     // Instances: [cell, sub-box] pairs, for opaque blocks and for see-through ones.
-    const lists = [[], []];
+    const lists: number[][] = [[], []];
     for (let y = 0, i = 0; y < layers; y++) {
       for (let z = 0; z < sz; z++) {
         for (let x = 0; x < sx; x++, i++) {
@@ -178,7 +192,7 @@ export function mount(el, data) {
       scene.add(mesh);
       meshes.push(mesh);
     });
-    el.querySelectorAll('.seg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
+    el.querySelectorAll<HTMLButtonElement>('.seg button').forEach(b => b.classList.toggle('on', b.dataset.mode === mode));
     hide.disabled = !changes;
     cutOut.textContent = cut.value;
     outline.visible = false;
@@ -207,9 +221,9 @@ export function mount(el, data) {
 
   // ---------- picking ----------
   const raycaster = new THREE.Raycaster();
-  let down = null;
-  const onDown = e => { down = [e.clientX, e.clientY]; };
-  const onUp = e => {
+  let down: [number, number] | null = null;
+  const onDown = (e: PointerEvent) => { down = [e.clientX, e.clientY]; };
+  const onUp = (e: PointerEvent) => {
     if (!down || Math.hypot(e.clientX - down[0], e.clientY - down[1]) > 4) return;
     const r = renderer.domElement.getBoundingClientRect();
     raycaster.setFromCamera(new THREE.Vector2((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1), camera);
@@ -219,7 +233,7 @@ export function mount(el, data) {
       info.textContent = hint;
       return draw();
     }
-    const i = hit.object.userData.cellOf[hit.instanceId];
+    const i: number = hit.object.userData.cellOf[hit.instanceId!];
     const x = i % sx, z = Math.floor(i / sx) % sz, y = Math.floor(i / (sx * sz));
     outline.position.set(ox + x + 0.5, oy + y + 0.5, oz + z + 0.5);
     outline.visible = true;
@@ -231,10 +245,10 @@ export function mount(el, data) {
     draw();
   };
 
-  el.querySelectorAll('.seg button').forEach(b => { b.onclick = () => { mode = b.dataset.mode; rebuild(); }; });
+  el.querySelectorAll<HTMLButtonElement>('.seg button').forEach(b => { b.onclick = () => { mode = b.dataset.mode!; rebuild(); }; });
   hide.onchange = rebuild;
   cut.oninput = rebuild;
-  el.querySelector('.v3-reset').onclick = resetView;
+  el.querySelector<HTMLButtonElement>('.v3-reset')!.onclick = resetView;
   controls.addEventListener('change', draw);
   renderer.domElement.addEventListener('pointerdown', onDown);
   renderer.domElement.addEventListener('pointerup', onUp);

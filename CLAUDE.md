@@ -11,7 +11,7 @@ the web panel (`panel/`), which serves the same endpoints for many servers under
 - `bridge-we6/`: WorldEdit 6.1 (MC 1.8 → 1.12). Modern block states are mapped to legacy id:data via `LegacyBlockTable`, loaded from
   `legacy-blocks.txt`, which `tools/gen_legacy_blocks.py` generates from WorldEdit 7's `legacy.json`. Re-run it only to change aliases, hints or defaults.
 - `plugin/`: HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only). Compiled against spigot-api 1.8.8.
-- `panel/`: standalone web panel (Javalin). Relay hub, `/s/<id>/` proxy, login, SSE live updates, static UI in `src/main/resources/web/`. Never shaded into the plugin; plugin tests use it only on the test classpath.
+- `panel/`: standalone web panel (Javalin). Relay hub, `/s/<id>/` proxy, login, SSE live updates. The UI is a Next.js app in `web/` (React, TypeScript), exported to static files that the Gradle build puts in the jar; pages are hash routes because `/s/` belongs to the proxy. Never shaded into the plugin; plugin tests use it only on the test classpath.
 - `sdk/python/aibuilder/`: stdlib-only REST client for build scripts in `builds/`.
 
 Everything targets Java 17 bytecode (`--release 17`). The plugin core must never import WorldEdit classes;
@@ -19,6 +19,7 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 
 ## Commands
 - `./gradlew build`: tests + shaded jars at `plugin/build/libs/AIBuilder-<version>.jar` and `panel/build/libs/AIBuilderPanel-<version>.jar`
+- `cd panel/web && PANEL_URL=http://127.0.0.1:8080 npm run dev`: the panel UI with hot reload, its data proxied from a running panel. `./gradlew build -PskipWeb` builds without Node (a panel with no UI).
 - `./gradlew :panel:run --args="add-server test"` / `:panel:run`: panel CLI and server (state in `panel/run/panel.json`)
 - `./gradlew :plugin:runServer` (1.21.11 + WE 7.3.19), `:plugin:runLatest` (26.3 + WE 7.4.6), `:plugin:runLegacy` (1.8.8, add WE 6.1.9 yourself)
 - `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.

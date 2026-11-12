@@ -17,7 +17,12 @@ Paper server(s) ──wss, outbound, reconnecting──────┘   /relay
 ./gradlew build
 ```
 
-This produces `panel/build/libs/AIBuilderPanel-<version>.jar` next to the plugin jar. The panel needs Java 17+.
+This produces `panel/build/libs/AIBuilderPanel-<version>.jar` next to the plugin jar. The panel needs Java 17+ to run.
+
+The web UI is a Next.js app in `panel/web/`. The build runs `npm ci` and `npm run build` there and packs the exported
+static files into the jar, so building needs Node 20.9+ with `npm` on the `PATH`; running the jar does not need Node.
+To work on the UI, start a panel (`./gradlew :panel:run`) and then `cd panel/web && npm run dev`: the dev server
+reloads on save and proxies `/api` and `/events` to the panel (`PANEL_URL`, default `http://127.0.0.1:8080`).
 
 ## Set up on the VPS
 

@@ -12,6 +12,37 @@ dependencies {
     implementation 'com.google.code.gson:gson:2.11.0'
 }
 
+// The UI is a Next.js app in web/, exported to static files and served from the jar under /web. Needs Node 20.9+ with
+// npm on the PATH; -PskipWeb builds the panel without a UI (for work on the Java side on a machine without Node).
+def web = layout.projectDirectory.dir('web')
+def npm = System.getProperty('os.name').toLowerCase().contains('windows') ? 'npm.cmd' : 'npm'
+
+def webInstall = tasks.register('webInstall', Exec) {
+    workingDir = web.asFile
+    commandLine npm, 'ci', '--no-audit', '--no-fund'
+    inputs.file(web.file('package-lock.json'))
+    outputs.file(web.file('node_modules/.package-lock.json'))
+}
+
+def webBuild = tasks.register('webBuild', Exec) {
+    dependsOn webInstall
+    workingDir = web.asFile
+    commandLine npm, 'run', 'build'
+    environment 'NEXT_TELEMETRY_DISABLED', '1'
+    inputs.files(web.file('package-lock.json'), web.file('next.config.ts'), web.file('tsconfig.json'))
+    inputs.dir(web.dir('app'))
+    inputs.dir(web.dir('components'))
+    inputs.dir(web.dir('lib'))
+    inputs.dir(web.dir('public'))
+    outputs.dir(web.dir('out'))
+}
+
+processResources {
+    if (!providers.gradleProperty('skipWeb').isPresent()) {
+        from(webBuild) { into 'web' }
+    }
+}
+
 application {
     mainClass = 'me.abdiskiosk.minecraftaibuilder.panel.PanelApp'
 }
