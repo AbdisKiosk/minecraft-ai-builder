@@ -167,6 +167,61 @@ class AssetLibraryTest {
         assertTrue(!Files.exists(dir.resolve("asset-cache/1")) || Files.list(dir.resolve("asset-cache/1")).noneMatch(p -> p.toString().endsWith(".bin")));
     }
 
+    /** The panel answers `get` for a name with whichever asset that caller may use now: own, shared, or a replacement. */
+    @Test void cacheIsKeyedByAssetIdAndChecksumAndEveryPasteIsReauthorized() throws Exception {
+        byte[] oak = data, spruce = StateArrays.encode(new String[]{"spruce_planks", "air", "stone", "air"});
+        storage = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        for (var e : java.util.Map.of("/oak", oak, "/spruce", spruce).entrySet()) {
+            storage.createContext(e.getKey(), exchange -> {
+                downloads.incrementAndGet();
+                exchange.sendResponseHeaders(200, e.getValue().length);
+                exchange.getResponseBody().write(e.getValue()); exchange.close();
+            });
+        }
+        storage.start();
+        var answer = new java.util.concurrent.atomic.AtomicReference<JsonObject>();
+        AssetLibrary library = new AssetLibrary(dir, (op, args) -> {
+            requests.incrementAndGet();
+            if (answer.get() == null) throw new EditException("no asset 'window' in your library or shared with this server");
+            return answer.get();
+        });
+        java.util.function.BiFunction<String, byte[], JsonObject> asset = (id, bytes) -> {
+            try {
+                JsonObject meta = metadata();
+                meta.addProperty("id", id);
+                meta.addProperty("sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+                meta.addProperty("bytes", bytes.length);
+                meta.addProperty("url", "http://127.0.0.1:" + storage.getAddress().getPort() + (bytes == oak ? "/oak" : "/spruce"));
+                return meta;
+            } catch (Exception e) { throw new IllegalStateException(e); }
+        };
+
+        // User 2 pastes owner 1's 'window', shared with this server; the file is named by asset id and checksum.
+        answer.set(asset.apply("abcdefgh2345", oak));
+        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("oak_stairs[facing=east]"));
+        assertEquals(1, downloads.get());
+        String oakSha = answer.get().get("sha256").getAsString();
+        assertTrue(Files.isRegularFile(dir.resolve("asset-cache/2/abcdefgh2345-" + oakSha + ".bin")));
+
+        // The owner replaces it under the same name (a new asset id): the old bytes are never used.
+        answer.set(asset.apply("zyxwvuts2345", spruce));
+        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("spruce_planks"));
+        assertEquals(2, downloads.get());
+
+        // Same id with changed content (another checksum): downloaded again, not served from the cache.
+        answer.set(asset.apply("abcdefgh2345", spruce));
+        assertTrue(as(2, () -> library.load("window", 100)).palette().containsValue("spruce_planks"));
+        assertEquals(3, downloads.get());
+
+        // Unshared or deleted: the panel refuses, and the cached file is not used.
+        answer.set(null);
+        int before = requests.get();
+        EditException e = assertThrows(EditException.class, () -> as(2, () -> library.load("window", 100)));
+        assertTrue(e.getMessage().contains("shared with this server"), e.getMessage());
+        assertEquals(before + 1, requests.get());
+        assertEquals(3, downloads.get());
+    }
+
     @Test void listingIsValidatedAndCapped() {
         JsonArray many = new JsonArray();
         for (int i = 0; i < 50; i++) { JsonObject a = new JsonObject(); a.addProperty("name", "a" + i); many.add(a); }

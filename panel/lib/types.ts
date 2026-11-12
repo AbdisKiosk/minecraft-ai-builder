@@ -153,7 +153,20 @@ export interface Asset {
 export const FACINGS = ['north', 'south', 'east', 'west', 'up', 'down'] as const;
 export type Facing = typeof FACINGS[number];
 
+/** An asset in the library list: the user's own, or another user's shared with a server they build on. */
+export interface LibraryAsset extends Asset {
+  /** Only the owner shares, edits or deletes it. */
+  mine: boolean;
+  /** The owner's name, on another user's asset. */
+  owner?: string;
+  /** Own asset: the server ids it is shared with. Another's: the server ids the user builds on that it is shared with. */
+  shared: string[];
+}
+
+/** A server an asset is shared with, as its owner sees it. */
+export interface AssetShare { server: string; name: string; created: number }
+
 export interface AssetList {
-  assets: Asset[];
+  assets: LibraryAsset[];
   quota: { count: number; bytes: number; maxCount: number; maxBytes: number };
 }

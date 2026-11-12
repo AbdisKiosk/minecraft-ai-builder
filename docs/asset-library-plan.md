@@ -5,8 +5,8 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan, except the `.schem` upload, version-mismatch reporting and anchors, which are built (see "Upload a
-.schem", "Assets" and "Anchor and facing" in `panel.md`).
+Phase 3 is a plan, except the `.schem` upload, version-mismatch reporting, anchors and sharing with a server, which
+are built (see "Upload a .schem", "Assets", "Anchor and facing" and "Share an asset with a server" in `panel.md`).
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -65,7 +65,10 @@ Built with these deviations:
   player and a panel account, which does not exist yet.
 - **`.schem` upload** on the Library page. Built: Sponge versions 2 and 3, parsed on the panel
   (`lib/server/schem.ts`) and saved through the same path as every other asset; only the blocks are kept.
-- **Sharing an asset with a server** so all its members can use it.
+- **Sharing an asset with a server** so all its members can use it. Built for members with the builder role or above
+  (viewers cannot use it), while the owner is a builder there too; ownership and quota stay the owner's. `paste name=`
+  prefers the caller's own asset and refuses a name that several owners shared, naming them (see "Share an asset with
+  a server" in `panel.md`). Migration `008_asset_shares.sql`.
 
 ## Tests and limits
 - **Panel:** `npm test` cases for quota, ownership (one user cannot read another's asset) and the routes.

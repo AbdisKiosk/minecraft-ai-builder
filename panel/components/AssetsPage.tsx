@@ -3,25 +3,33 @@ import { api, assetApi, assetsApi, message } from '../lib/api';
 import { ago, num } from '../lib/format';
 import { capped, placeWarning } from '../lib/mcVersion';
 import { draftHref, go } from '../lib/routes';
-import { can, type Asset, type AssetList } from '../lib/types';
+import { can, type Asset, type AssetList, type LibraryAsset } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import Modal from './Modal';
 import { Viewer3d } from './Pictures';
 import { AnchorFields, parseAnchor, parseTags } from './SaveAssetDialog';
 import { Badge } from './shared';
+import ShareAssetDialog from './ShareAssetDialog';
 import UploadAssetDialog from './UploadAssetDialog';
 
 const NAME = /^[a-z0-9_-]{1,40}$/;
 const mb = (bytes: number) => (bytes / 1024 ** 2).toFixed(bytes < 10 * 1024 ** 2 ? 1 : 0) + ' MB';
 
-/** The user's asset library: pieces saved from any server, placed into a draft on any server they build on. */
+type Filter = 'all' | 'mine' | 'shared';
+
+/**
+ * The user's asset library: pieces saved from any server, placed into a draft on any server they build on, and other
+ * users' assets shared with servers they build on (read-only).
+ */
 export default function AssetsPage({ servers }: { servers: Servers }) {
   const [list, setList] = useState<AssetList | null>(null);
   const [error, setError] = useState('');
   const [open, setOpen] = useState<string | null>(null);
   const [editing, setEditing] = useState<Asset | null>(null);
-  const [placing, setPlacing] = useState<Asset | null>(null);
+  const [placing, setPlacing] = useState<LibraryAsset | null>(null);
+  const [sharing, setSharing] = useState<LibraryAsset | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [filter, setFilter] = useState<Filter>('all');
   // The 3D view needs room to drag in.
   const [small, setSmall] = useState(false);
   useEffect(() => setSmall(window.matchMedia('(max-width: 700px)').matches), []);
@@ -31,8 +39,9 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
   }, []);
   useEffect(load, [load]);
 
-  const remove = async (a: Asset) => {
-    if (!confirm(`Delete the asset "${a.name}"? This cannot be undone.`)) return;
+  const remove = async (a: LibraryAsset) => {
+    const shared = a.shared.length ? ' It is also taken away from the servers it is shared with.' : '';
+    if (!confirm(`Delete the asset "${a.name}"?${shared} This cannot be undone.`)) return;
     try {
       await api(assetApi(a.id), { method: 'DELETE' });
       if (open === a.id) setOpen(null);
@@ -43,17 +52,22 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
   };
 
   const shown = list?.assets.find(a => a.id === open);
+  const others = list?.assets.filter(a => !a.mine).length ?? 0;
+  const listed = list?.assets.filter(a => filter === 'all' || a.mine === (filter === 'mine')) ?? [];
+  const serverName = (id: string) => servers.get(id)?.name ?? id;
   return (
     <>
       <div className="page-head"><div><h1>Assets</h1>
         <div className="muted">Pieces you saved (a window, a pillar, a tree), kept with your account rather than a server.
           Save one from a server&apos;s <b>Map</b> with <b>Save as asset</b>, or upload a WorldEdit <span className="mono">.schem</span>.
+          <b> Share…</b> one with a server and its builders can use it too.
           {list && <> {list.quota.count} of {list.quota.maxCount} assets, {mb(list.quota.bytes)} of {mb(list.quota.maxBytes)}.</>}</div></div>
         <button onClick={() => setUploading(true)}>Upload .schem</button></div>
       {error && <p className="error">{error}</p>}
       {shown && (
         <section className="card" style={{ marginBottom: 16 }}>
-          <div className="toolbar"><h2 style={{ margin: 0 }} className="mono">{shown.name}</h2><span className="spacer" />
+          <div className="toolbar"><h2 style={{ margin: 0 }} className="mono">{shown.name}</h2>
+            {!shown.mine && <span className="muted">from {shown.owner}</span>}<span className="spacer" />
             <button className="ghost small" onClick={() => setOpen(null)}>Close</button></div>
           <div className="renders one">{small ? <p className="muted">The 3D view needs a wider screen.</p>
             : shown.mc ? <Viewer3d key={shown.id} url={`${assetApi(shown.id)}/blocks`} mc={shown.mc} asset />
@@ -64,12 +78,29 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
       {!list ? (!error && <p className="muted">Loading…</p>)
         : !list.assets.length ? <section className="card"><p className="empty">No assets yet. Open a server&apos;s Map, press
           <b> Save as asset</b> and click two corners around what you want to keep.</p></section>
-        : (
+        : (<>
+          {others > 0 && (
+            <div className="toolbar">
+              {(['all', 'mine', 'shared'] as const).map(f => (
+                <button key={f} className={filter === f ? 'small' : 'ghost small'} onClick={() => setFilter(f)}>
+                  {f === 'all' ? 'All' : f === 'mine' ? 'Mine' : `Shared with me (${others})`}</button>
+              ))}
+            </div>
+          )}
+          {!listed.length && <section className="card"><p className="empty">{filter === 'mine'
+            ? 'You have no assets of your own yet.' : 'Nobody has shared an asset with a server you build on.'}</p></section>}
           <div className="grid">
-            {list.assets.map(a => (
+            {listed.map(a => (
               <section className="card" key={a.id}>
                 <div className="server-head"><h2 className="mono">{a.name}</h2>
                   <Badge>{a.mc ? 'Minecraft ' + a.mc : 'version unknown'}</Badge></div>
+                {(!a.mine || a.shared.length > 0) && (
+                  <div className="pills" style={{ marginBottom: 8 }}>
+                    {!a.mine && <Badge kind="running">shared by {a.owner}</Badge>}
+                    {a.mine && <Badge kind="running">shared</Badge>}
+                    <span className="muted" style={{ fontSize: 12 }}>{a.mine ? 'with ' : 'on '}{a.shared.map(serverName).join(', ')}</span>
+                  </div>
+                )}
                 <div className="meta">{a.size.join(' × ')} · {num(a.blocks)} blocks · {mb(a.bytes)} · saved {ago(a.created)}
                   {(a.anchor || a.facing) && <> · anchor {a.anchor ? <span className="mono">{a.anchor.join(' ')}</span> : 'lowest corner'}
                     {a.facing && <>, faces {a.facing}</>}</>}</div>
@@ -83,15 +114,19 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
                   }}>3D view</button>
                   <button className="ghost" onClick={() => setPlacing(a)}>Place…</button>
                   <span className="spacer" />
-                  <button className="ghost small" onClick={() => setEditing(a)}>Edit</button>
-                  <button className="ghost small" onClick={() => remove(a)}>Delete</button>
+                  {a.mine && <>
+                    <button className="ghost small" onClick={() => setSharing(a)}>Share…</button>
+                    <button className="ghost small" onClick={() => setEditing(a)}>Edit</button>
+                    <button className="ghost small" onClick={() => remove(a)}>Delete</button>
+                  </>}
                 </div>
               </section>
             ))}
           </div>
-        )}
+        </>)}
       {editing && <EditAssetDialog asset={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {placing && <PlaceAssetDialog asset={placing} servers={servers} onClose={() => setPlacing(null)} />}
+      {sharing && <ShareAssetDialog asset={sharing} servers={servers} onClose={() => setSharing(null)} onChanged={load} />}
       {uploading && <UploadAssetDialog onClose={() => setUploading(false)} onSaved={load} />}
     </>
   );
@@ -140,9 +175,13 @@ function EditAssetDialog({ asset, onClose, onSaved }: { asset: Asset; onClose: (
   );
 }
 
-/** Places an asset into a draft on a server, through the same import as promote. */
-function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: Servers; onClose: () => void }) {
-  const targets = [...servers.values()].filter(s => can(s.role, 'builder')).sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
+/**
+ * Places an asset into a draft on a server, through the same import as promote: an own asset on any server the user
+ * builds on, another user's only on the servers it is shared with.
+ */
+function PlaceAssetDialog({ asset, servers, onClose }: { asset: LibraryAsset; servers: Servers; onClose: () => void }) {
+  const targets = [...servers.values()].filter(s => can(s.role, 'builder') && (asset.mine || asset.shared.includes(s.id)))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id));
   const [to, setTo] = useState(targets.find(s => s.online)?.id ?? '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -200,7 +239,7 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: Asset; servers: 
         <div className="dialog-head"><h2>Place {asset.name}</h2></div>
         <p className="muted" style={{ margin: 0 }}>Puts the asset ({asset.size.join(' × ')} blocks) into a draft on the server.
           Nothing is placed in the world until someone approves that draft.</p>
-        {!targets.length ? <p className="error">You are not a builder on any server.</p> : <>
+        {!targets.length ? <p className="error">You are not a builder on any server{asset.mine ? '' : ' it is shared with'}.</p> : <>
           <label>Server <select name="to" required value={to} onChange={e => setTo(e.target.value)}>
             {targets.map(s => <option key={s.id} value={s.id} disabled={!s.online}>{s.name}{s.online ? '' : ' (offline)'}</option>)}
           </select></label>

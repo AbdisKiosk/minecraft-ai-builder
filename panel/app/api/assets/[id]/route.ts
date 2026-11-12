@@ -4,7 +4,7 @@ import { body, requireUser, route } from '../../../../lib/server/route';
 
 type P = { id: string };
 
-/** One of the user's assets; 404 for anyone else's. */
+/** One of the user's assets, or one shared with a server they build on (read-only); 404 for anyone else's. */
 export const GET = route<P>(async (_req, { id }) => {
   const user = await requireUser();
   return answer(() => getAsset(deps(user), user.id, id));

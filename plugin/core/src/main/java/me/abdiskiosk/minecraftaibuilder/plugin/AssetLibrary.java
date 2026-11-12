@@ -27,7 +27,10 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 
-/** Account-owned pieces, resolved through the current call's grant. Cache hits still require authorization. */
+/**
+ * Account-owned pieces (the caller's own, or shared with this server), resolved through the current call's grant.
+ * Cache hits still require authorization.
+ */
 public final class AssetLibrary {
     public static final int MAX_BYTES = 5 * 1024 * 1024;
     private static final long CACHE_BYTES = 128L * 1024 * 1024;
@@ -115,6 +118,8 @@ public final class AssetLibrary {
         long volume = (long) sx * sy * sz;
         if (volume > Math.min(maxVolume, 2_000_000)) throw new EditException("asset exceeds volume limit");
         if (length < 1 || length > MAX_BYTES) throw new EditException("asset region is larger than 5 MB");
+        // Keyed by the asset id and checksum of this authorized get, never the name: a replaced asset, or another owner's
+        // asset of the same name shared with this server, cannot reuse stale bytes.
         Path file = cache.resolve(Long.toString(caller.user())).resolve(id + "-" + sha + ".bin");
         try {
             byte[] data = null;

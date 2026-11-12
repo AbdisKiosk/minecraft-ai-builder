@@ -339,6 +339,10 @@ function fakes() {
       async update() {},
       async remove() {},
       async touch() {},
+      shares: async () => [],
+      async share() {},
+      async unshare() {},
+      sharedWith: async () => [],
     },
     files: {
       write: async (owner, id, name, b) => { blobs.set(`${owner}/${id}/${name}`, b); },

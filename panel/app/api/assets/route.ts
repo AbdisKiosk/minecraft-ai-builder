@@ -2,7 +2,10 @@ import { answer, deps } from '../../../lib/server/assetStore';
 import { createAsset, listAssets } from '../../../lib/server/assets';
 import { body, requireUser, route } from '../../../lib/server/route';
 
-/** The signed-in user's assets, newest first, with their quota: {assets, quota: {count, bytes, maxCount, maxBytes}}. */
+/**
+ * The signed-in user's assets, newest first, then those shared with servers they build on (`mine: false`, read-only,
+ * with the `owner`'s name), and the quota of their own: {assets, quota: {count, bytes, maxCount, maxBytes}}.
+ */
 export const GET = route(async () => {
   const user = await requireUser();
   return answer(() => listAssets(deps(user), user.id));
