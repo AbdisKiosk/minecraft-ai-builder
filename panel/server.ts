@@ -1,10 +1,13 @@
 // The app's entry point: one Node process serves the Next.js pages and API routes, the plugin endpoints under
-// /s/<server>/ and the plugins' relay WebSocket. Next.js alone can't hold WebSockets, hence this custom server.
+// /s/<server>/, the plugin jar's download and the plugins' relay WebSocket. Next.js alone can't hold WebSockets,
+// hence this custom server.
 import nextEnv from '@next/env';
 import { createServer } from 'node:http';
 import next from 'next';
 import { migrate } from './lib/server/migrate';
 import { installHub, RELAY, RelayHub } from './lib/server/hub';
+import { PLUGIN_JAR_HREF } from './lib/pluginJar';
+import { handlePluginJar } from './lib/server/plugin-jar';
 import { handlePluginProxy } from './lib/server/plugin-proxy';
 
 const dev = process.env.NODE_ENV !== 'production';
@@ -29,6 +32,14 @@ const server = createServer((req, res) => {
       console.error('plugin proxy failed', e);
       if (!res.headersSent) res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'internal error' }));
+    });
+    return;
+  }
+  if (req.url?.split('?')[0] === PLUGIN_JAR_HREF) {
+    handlePluginJar(req, res).catch(e => {
+      console.error('plugin jar download failed', e);
+      if (!res.headersSent) res.writeHead(500);
+      res.end();
     });
     return;
   }

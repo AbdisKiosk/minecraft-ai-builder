@@ -6,7 +6,7 @@ import { can, type DraftSummary, type HistorySummary, type Server } from '../lib
 import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
 import MembersCard from './MembersCard';
-import { Badge, Jobs, RelaySetup, ServerMeta, Stats, type RelayConfig } from './shared';
+import { Badge, Jobs, PluginDownload, RelaySetup, ServerMeta, Stats, type RelayConfig } from './shared';
 
 interface HistoryPage { entries: HistorySummary[]; total: number }
 interface DraftList { drafts: DraftSummary[]; review?: boolean }
@@ -35,6 +35,7 @@ export default function ServerPage({ server, servers }: { server: Server; server
       )}
       {!server.online && !server.lastSeen && can(server.role, 'owner') && (
         <div className="card"><h2>Waiting for the plugin</h2>
+          <PluginDownload />
           <p>This server has never connected. Put the <code>relay</code> settings you got when you made it into the plugin&apos;s
             config and restart the server. Lost the token? Make a new one under Settings below.</p></div>
       )}

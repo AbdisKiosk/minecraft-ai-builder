@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { ago, duration, num } from '../lib/format';
+import { PLUGIN_JAR_HREF } from '../lib/pluginJar';
 import { diffHref, draftHref, serverHref } from '../lib/routes';
 import type { Counts, Detail, Job, Placed, Server } from '../lib/types';
 
@@ -42,6 +43,15 @@ export function ServerMeta({ server: s }: { server: Server }) {
   if (s.online) parts.push('connected ' + (when ? ago(when) : ''));
   else parts.push(when ? 'offline, last seen ' + ago(when) : 'never connected');
   return <>{parts.map((p, n) => <span key={n}>{n > 0 && ' · '}{p}</span>)}</>;
+}
+
+/** Where to get the plugin, for the places that tell someone to install it. */
+export function PluginDownload() {
+  return (
+    <p><a className="button ghost small" href={PLUGIN_JAR_HREF}>Download the plugin</a>{' '}
+      <span className="muted">Put the jar in the server&apos;s <code>plugins</code> folder, next to WorldEdit, and start
+        the server once so it writes its config.</span></p>
+  );
 }
 
 export interface RelayConfig { url: string; token: string }

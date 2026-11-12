@@ -1,0 +1,23 @@
+# The panel image (panel/Dockerfile) is built from the repository root: it needs panel/ and plugin/ only.
+*
+!panel
+!plugin
+
+panel/node_modules
+panel/.next
+panel/dist
+panel/.env*
+!panel/.env.example
+panel/test
+panel/Dockerfile
+panel/*.tsbuildinfo
+panel/next-env.d.ts
+
+plugin/.gradle
+plugin/**/build
+plugin/**/bin
+plugin/**/run
+plugin/**/src/test
+plugin/**/.settings
+plugin/**/.classpath
+plugin/**/.project

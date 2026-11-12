@@ -1,4 +1,5 @@
 import Logo from '../components/Logo';
+import { PLUGIN_JAR_HREF } from '../lib/pluginJar';
 import { auth0 } from '../lib/server/auth0';
 
 export const dynamic = 'force-dynamic';
@@ -44,6 +45,7 @@ export default async function Home() {
           <div className="cta">
             {session ? <a className="button" href="/dashboard">Open dashboard</a>
               : <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Create a free account</a>}
+            <a className="button ghost" href={PLUGIN_JAR_HREF}>Download the plugin</a>
             <a className="button ghost" href="#how">How it works</a>
           </div>
         </div>
@@ -61,7 +63,8 @@ export default async function Home() {
 
       <ol className="steps" id="how">
         <li><span><b>Create an account</b> and add your server. You get two lines for the plugin&apos;s config.</span></li>
-        <li><span><b>Install the AIBuilder plugin</b> next to WorldEdit, paste the lines and restart. The server connects out to us.</span></li>
+        <li><span><b><a href={PLUGIN_JAR_HREF}>Download the AIBuilder plugin</a></b> into your server&apos;s <code>plugins</code> folder
+          next to WorldEdit, paste the lines and restart. The server connects out to us.</span></li>
         <li><span><b>Make an access token</b> and point Claude Code at your server&apos;s address. Ask it to build.</span></li>
       </ol>
 

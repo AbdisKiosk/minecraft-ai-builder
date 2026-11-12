@@ -2,7 +2,7 @@ import { useState, type FormEvent } from 'react';
 import { api, message } from '../lib/api';
 import { go, serverHref } from '../lib/routes';
 import Modal from './Modal';
-import { RelaySetup, type RelayConfig } from './shared';
+import { PluginDownload, RelaySetup, type RelayConfig } from './shared';
 
 /** Makes a server and shows its relay settings, which are only shown this once. */
 export default function NewServerDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
@@ -29,6 +29,7 @@ export default function NewServerDialog({ onClose, onCreated }: { onClose: () =>
     return (
       <Modal className="card form-dialog" onClose={onClose}>
         <h2>Connect your server</h2>
+        <PluginDownload />
         <RelaySetup relay={made.relay} />
         <div className="toolbar">
           <button onClick={() => { onClose(); go(serverHref(made.id)); }}>Done</button>

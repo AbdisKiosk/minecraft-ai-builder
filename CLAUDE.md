@@ -15,7 +15,7 @@ servers under `/s/<server>/`.
 - `plugin/core/`: the plugin itself. HTTP server, MCP endpoint, tools, `BuildService` (threading, limits, jobs, progress events), `History` (per-job block diffs, render, revert), `Drafts` (review mode, approve/reject, promote export/import), `relay/RelayClient` (outbound WebSocket to the panel, JDK only; its test runs against `FakePanel`). Compiled against spigot-api 1.8.8.
 
 Beside it:
-- `panel/`: the web panel (Next.js, TypeScript). One Node process (`server.ts`) serves the landing page, the dashboard, the API routes, the `/s/<id>/` proxy and the plugins' `/relay` WebSocket. Auth0 accounts, servers, memberships, invites and access tokens in MySQL through raw SQL (no ORM; `migrations/*.sql` run on startup), archived history and Minecraft client jars in Cloudflare R2. Server code is in `lib/server/`; `hub.ts` must stay in step with `RelayProtocol`. `panel/Dockerfile` builds its image.
+- `panel/`: the web panel (Next.js, TypeScript). One Node process (`server.ts`) serves the landing page, the dashboard, the API routes, the `/s/<id>/` proxy and the plugins' `/relay` WebSocket. Auth0 accounts, servers, memberships, invites and access tokens in MySQL through raw SQL (no ORM; `migrations/*.sql` run on startup), archived history and Minecraft client jars in Cloudflare R2. Server code is in `lib/server/`; `hub.ts` must stay in step with `RelayProtocol`. `panel/Dockerfile` builds its image, from the repository root.
 - `sdk/python/aibuilder/`: stdlib-only REST client for build scripts in `builds/`.
 
 Everything in `plugin/` targets Java 17 bytecode (`--release 17`). The plugin core must never import WorldEdit classes;
@@ -25,7 +25,7 @@ bridges are loaded reflectively in `AIBuilderPlugin#loadBridge`.
 - `cd plugin && ./gradlew build`: tests + the shaded jar at `plugin/core/build/libs/AIBuilder-<version>.jar`
 - `cd plugin && ./gradlew :core:runServer` (1.21.11 + WE 7.3.19), `:core:runLatest` (26.3 + WE 7.4.6), `:core:runLegacy` (1.8.8, add WE 6.1.9 yourself). Run directories are `plugin/core/run/<version>/`.
 - `cd panel && npm run dev`: the panel on :3000 with hot reload (needs `panel/.env.local`, see `.env.example`). `npm test`, `npm run typecheck`, `npm run build`; `server.ts` itself does not hot reload.
-- `docker build -t aibuilder-panel panel`: the panel's image (port 3000, configured with the variables in `.env.example`).
+- `docker build -f panel/Dockerfile -t aibuilder-panel .`: the panel's image (port 3000, configured with the variables in `panel/.env.example`). It builds the plugin jar too, which the panel serves at `/download/AIBuilder.jar` (`lib/server/plugin-jar.ts`); in dev that is the jar in `plugin/core/build/libs/`.
 - `python3 -m unittest discover -s sdk/python/tests`: SDK unit tests.
 - `python3 tools/mcp_cli.py cost|list|call <tool> '<json>'|report`: the MCP endpoint from a shell, as a client sees it. It finds the local dev server by itself; with `AIBUILDER_LOG=<file>` it logs what every call costs, which is how a change to the tools is measured.
 - `python3 builds/selftest.py --yes`: places directional blocks, reads them back and checks validation against the running server. Use a throwaway server only.

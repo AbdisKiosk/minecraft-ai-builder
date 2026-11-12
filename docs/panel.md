@@ -34,13 +34,17 @@ MySQL server's own is.
 
 `npm run typecheck` checks the TypeScript and `npm test` runs the unit tests (Node 22.18+).
 
+Outside the image, the plugin download serves the newest jar in `plugin/core/build/libs/` (run `./gradlew build` in
+`plugin/` first), or in `PLUGIN_JAR_DIR` when that is set; without a jar it answers 404.
+
 ## Deploy
 
-`panel/Dockerfile` builds the image; the build context is the `panel` directory (in Coolify, set `panel` as the base
-directory):
+`panel/Dockerfile` builds the image. Its build context is the repository root, because it also builds the plugin jar
+from `plugin/` for the panel to offer as a download (in Coolify: base directory `/`, Dockerfile location
+`/panel/Dockerfile`):
 
 ```bash
-docker build -t aibuilder-panel panel
+docker build -f panel/Dockerfile -t aibuilder-panel .
 docker run --env-file panel.env -p 3000:3000 aibuilder-panel
 ```
 
@@ -50,7 +54,11 @@ tokens and the session cookie travel in every request.
 
 ## Connect a Minecraft server
 
-Add a server on the dashboard. The panel shows its `relay` settings once; put them in the server's
+Download the plugin from the panel (**Download the plugin** on the landing page and when you add a server, or
+`https://panel.example.com/download/AIBuilder.jar`), put it in the server's `plugins` folder next to WorldEdit and start
+the server once. The jar is the one built with the panel, so the two speak the same relay protocol.
+
+Then add a server on the dashboard. The panel shows its `relay` settings once; put them in the server's
 `plugins/AIBuilder/config.yml` and restart it:
 
 ```yaml
