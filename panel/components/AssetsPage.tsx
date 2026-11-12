@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
+import { anchorInside, cornerFromAnchor, parseAnchor, parsePosition } from '../lib/anchor';
 import { api, assetApi, assetsApi, message } from '../lib/api';
 import { ago, num } from '../lib/format';
 import { capped, placeWarning } from '../lib/mcVersion';
 import { draftHref, go } from '../lib/routes';
-import { can, type Asset, type AssetList, type LibraryAsset } from '../lib/types';
+import { can, type Asset, type AssetList, type Facing, type LibraryAsset } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import Modal from './Modal';
 import { Viewer3d } from './Pictures';
-import { AnchorFields, parseAnchor, parseTags } from './SaveAssetDialog';
+import { AnchorFields, parseTags } from './SaveAssetDialog';
 import { Badge } from './shared';
 import ShareAssetDialog from './ShareAssetDialog';
 import UploadAssetDialog from './UploadAssetDialog';
@@ -70,9 +71,11 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
             {!shown.mine && <span className="muted">from {shown.owner}</span>}<span className="spacer" />
             <button className="ghost small" onClick={() => setOpen(null)}>Close</button></div>
           <div className="renders one">{small ? <p className="muted">The 3D view needs a wider screen.</p>
-            : shown.mc ? <Viewer3d key={shown.id} url={`${assetApi(shown.id)}/blocks`} mc={shown.mc} asset />
+            : shown.mc ? <Viewer3d key={shown.id} url={`${assetApi(shown.id)}/blocks`} mc={shown.mc} asset
+              anchor={shown.anchor} facing={shown.facing} />
             : <p className="muted">3D needs the Minecraft version the asset was saved on, which is not known.</p>}</div>
-          <p className="muted" style={{ margin: '10px 0 0' }}>Coordinates are the asset&apos;s own: 0 0 0 is its lowest corner.</p>
+          <p className="muted" style={{ margin: '10px 0 0' }}>Coordinates are the asset&apos;s own: 0 0 0 is its lowest corner.
+            {(shown.anchor || shown.facing) && ' The anchor block is outlined in blue; the blue arrow points the way the asset faces.'}</p>
         </section>
       )}
       {!list ? (!error && <p className="muted">Loading…</p>)
@@ -124,7 +127,7 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
             ))}
           </div>
         </>)}
-      {editing && <EditAssetDialog asset={editing} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
+      {editing && <EditAssetDialog asset={editing} small={small} onClose={() => setEditing(null)} onSaved={() => { setEditing(null); load(); }} />}
       {placing && <PlaceAssetDialog asset={placing} servers={servers} onClose={() => setPlacing(null)} />}
       {sharing && <ShareAssetDialog asset={sharing} servers={servers} onClose={() => setSharing(null)} onChanged={load} />}
       {uploading && <UploadAssetDialog onClose={() => setUploading(false)} onSaved={load} />}
@@ -132,23 +135,28 @@ export default function AssetsPage({ servers }: { servers: Servers }) {
   );
 }
 
-function EditAssetDialog({ asset, onClose, onSaved }: { asset: Asset; onClose: () => void; onSaved: () => void }) {
+/** Edits an asset; with room for it, a 3D view shows the anchor and facing as typed, and a click there sets the anchor. */
+function EditAssetDialog({ asset, small, onClose, onSaved }: { asset: Asset; small: boolean; onClose: () => void; onSaved: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [anchorText, setAnchorText] = useState(asset.anchor?.join(' ') ?? '');
+  const [facing, setFacing] = useState<string>(asset.facing ?? '');
+  const typed = parseAnchor(anchorText);
+  const viewer = !small && asset.mc;
 
   const submit = async (ev: FormEvent<HTMLFormElement>) => {
     ev.preventDefault();
     const f = new FormData(ev.currentTarget);
     const name = String(f.get('name') || '').trim().toLowerCase();
     if (!NAME.test(name)) return setError('Names are 1-40 of a-z, 0-9, _ and -.');
-    const anchor = parseAnchor(String(f.get('anchor') || ''));
-    if (anchor === undefined) return setError('The anchor needs 3 whole numbers of 0 or more, or nothing.');
+    if (typed === undefined) return setError('The anchor needs 3 whole numbers of 0 or more, or nothing.');
+    if (typed && !anchorInside(typed, asset.size)) return setError(`The anchor must lie within 0 0 0 and ${asset.size.map(n => n - 1).join(' ')}.`);
     setBusy(true);
     setError('');
     try {
       await api(assetApi(asset.id), { method: 'PATCH', body: JSON.stringify({
         name, description: String(f.get('description') || ''), tags: parseTags(String(f.get('tags') || '')),
-        anchor, facing: String(f.get('facing') || '') || null }) });
+        anchor: typed, facing: facing || null }) });
       onSaved();
     } catch (ex) {
       setError(message(ex));
@@ -157,13 +165,15 @@ function EditAssetDialog({ asset, onClose, onSaved }: { asset: Asset; onClose: (
   };
 
   return (
-    <Modal className="form-dialog" onClose={onClose}>
+    <Modal className={viewer ? 'form-dialog wide' : 'form-dialog'} onClose={onClose}>
       <form onSubmit={submit}>
         <div className="dialog-head"><h2>Edit asset</h2></div>
         <label>Name <input type="text" name="name" defaultValue={asset.name} maxLength={40} pattern="[a-zA-Z0-9_\-]{1,40}" required data-autofocus /></label>
         <label>Description <textarea name="description" maxLength={1000} rows={3} defaultValue={asset.description} /></label>
         <label>Tags <input type="text" name="tags" defaultValue={asset.tags.join(', ')} placeholder="window, oak" /></label>
-        <AnchorFields anchor={asset.anchor?.join(' ') ?? ''} facing={asset.facing ?? ''} />
+        {viewer && <Viewer3d url={`${assetApi(asset.id)}/blocks`} mc={viewer} asset anchor={typed ?? null}
+          facing={(facing || null) as Facing | null} onPickCell={cell => setAnchorText(cell.join(' '))} />}
+        <AnchorFields anchor={anchorText} facing={facing} onAnchor={setAnchorText} onFacing={setFacing} pickable={!!viewer} />
         <p className="muted" style={{ margin: 0 }}>Within {asset.size.map(n => n - 1).join(' ')} for this asset.</p>
         {error && <p className="error">{error}</p>}
         <div className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
@@ -189,12 +199,17 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: LibraryAsset; se
   const [placed, setPlaced] = useState<{ draft?: string; skipped: string[] } | null>(null);
   const worlds = servers.get(to)?.info?.worlds ?? [];
   const warning = to ? placeWarning(asset.mc, servers.get(to)?.info?.mc) : null;
+  // With an anchor, the spot typed can be where the anchor block goes; the import itself always takes the lowest corner.
+  const [by, setBy] = useState<'corner' | 'anchor'>(asset.anchor ? 'anchor' : 'corner');
+  const [spot, setSpot] = useState('');
+  const typed = parsePosition(spot);
+  const corner = typed && (by === 'anchor' && asset.anchor ? cornerFromAnchor(typed, asset.anchor) : typed);
 
   const submit = async (ev: FormEvent<HTMLFormElement>) => {
     ev.preventDefault();
     const f = new FormData(ev.currentTarget);
-    const origin = String(f.get('origin') || '').trim().split(/[\s,]+/).map(Number);
-    if (origin.length !== 3 || !origin.every(Number.isInteger)) return setError('The corner needs 3 whole numbers.');
+    const origin = corner;
+    if (!origin) return setError(`The ${by === 'anchor' ? 'anchor position' : 'corner'} needs 3 whole numbers.`);
     setBusy(true);
     setError('');
     try {
@@ -247,7 +262,22 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: LibraryAsset; se
           <label>World {worlds.length
             ? <select key={to} name="world" required defaultValue={worlds[0]}>{worlds.map(w => <option key={w}>{w}</option>)}</select>
             : <input type="text" name="world" defaultValue="world" required />}</label>
-          <label>Lowest corner (x y z) <input type="text" name="origin" className="mono" placeholder="100 64 -20" required /></label>
+          {asset.anchor && (
+            <div className="pills" role="radiogroup" aria-label="Place by">
+              <label className="check"><input type="radio" name="by" checked={by === 'anchor'} onChange={() => setBy('anchor')} />
+                {' '}anchor position</label>
+              <label className="check"><input type="radio" name="by" checked={by === 'corner'} onChange={() => setBy('corner')} />
+                {' '}lowest corner</label>
+            </div>
+          )}
+          <label>{by === 'anchor' ? 'Anchor block goes at (x y z)' : 'Lowest corner (x y z)'}
+            <input type="text" name="origin" className="mono" placeholder="100 64 -20" required value={spot}
+              onChange={e => setSpot(e.target.value)} /></label>
+          {by === 'anchor' && asset.anchor && <p className="muted" style={{ margin: 0 }}>The anchor is block
+            {' '}<span className="mono">{asset.anchor.join(' ')}</span> of the asset
+            {corner && <>, so its lowest corner goes at <span className="mono">{corner.join(' ')}</span></>}.
+            {asset.facing && <> It is placed as saved, facing {asset.facing}: the panel does not turn assets (ask Claude to
+              paste it with a facing for that).</>}</p>}
           <label className="check"><input type="checkbox" name="air" defaultChecked /> place air too (clears what is in the way)</label>
           <label className="check"><input type="checkbox" name="skipUnknown" /> leave out blocks that server does not have</label>
         </>}

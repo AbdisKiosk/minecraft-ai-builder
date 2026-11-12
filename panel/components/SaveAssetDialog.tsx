@@ -1,4 +1,5 @@
 import { useState, type FormEvent } from 'react';
+import { parseAnchor } from '../lib/anchor';
 import { api, assetsApi, message } from '../lib/api';
 import { num } from '../lib/format';
 import { assetsHref } from '../lib/routes';
@@ -10,28 +11,28 @@ const NAME = /^[a-z0-9_-]{1,40}$/;
 /** The tags typed as "window, oak, small". */
 export const parseTags = (text: string) => text.split(',').map(t => t.trim().toLowerCase()).filter(Boolean);
 
-/** The anchor typed as "1 0 2" (null when empty), or undefined when it is not three whole numbers. */
-export function parseAnchor(text: string): [number, number, number] | null | undefined {
-  const t = text.trim();
-  if (!t) return null;
-  const v = t.split(/[\s,]+/).map(Number);
-  return v.length === 3 && v.every(n => Number.isInteger(n) && n >= 0) ? v as [number, number, number] : undefined;
-}
-
-/** Anchor and facing inputs (named anchor and facing), for saving and editing an asset. */
-export function AnchorFields({ anchor, facing }: { anchor: string; facing: string }) {
+/**
+ * Anchor and facing inputs (named anchor and facing), for saving and editing an asset. Controlled, so a 3D view beside
+ * them can show and set the anchor; `pickable` says that view is there.
+ */
+export function AnchorFields({ anchor, facing, onAnchor, onFacing, pickable }: {
+  anchor: string; facing: string; onAnchor: (text: string) => void; onFacing: (facing: string) => void; pickable?: boolean;
+}) {
   return (
     <>
       <div className="row3">
-        <label>Anchor (x y z) <input type="text" name="anchor" className="mono" defaultValue={anchor} placeholder="none" /></label>
-        <label>Facing <select name="facing" defaultValue={facing}>
+        <label>Anchor (x y z) <input type="text" name="anchor" className="mono" value={anchor} placeholder="none"
+          onChange={e => onAnchor(e.target.value)} /></label>
+        <label>Facing <select name="facing" value={facing} onChange={e => onFacing(e.target.value)}>
           <option value="">none</option>
           {FACINGS.map(f => <option key={f}>{f}</option>)}
         </select></label>
       </div>
-      <p className="muted" style={{ margin: 0 }}>The anchor is the block Claude puts at a given spot (0 0 0 is the lowest corner;
-        clicking a block in the 3D view shows its position). Facing is the way the piece faces, away from the wall or floor it
-        sits on; Claude turns it to face north, south, east or west. Leave both empty to place by the lowest corner.</p>
+      <p className="muted" style={{ margin: 0 }}>The anchor is the block Claude puts at a given spot, and Place… can put it
+        at a spot too (0 0 0 is the lowest corner; {pickable ? 'click a block in the 3D view to pick it, shown in blue'
+          : 'after saving, Edit lets you pick it by clicking a block in the 3D view'}). Facing is the way the piece faces, away
+        from the wall or floor it sits on; Claude turns it to face north, south, east or west. Leave both empty to place by
+        the lowest corner.</p>
     </>
   );
 }
@@ -45,6 +46,8 @@ export default function SaveAssetDialog({ serverId, world, rect, y, onClose }:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [saved, setSaved] = useState<Asset | null>(null);
+  const [anchorText, setAnchorText] = useState('0 0 0');
+  const [facing, setFacing] = useState('');
   const width = rect.x2 - rect.x1 + 1, depth = rect.z2 - rect.z1 + 1;
 
   const submit = async (ev: FormEvent<HTMLFormElement>) => {
@@ -103,7 +106,7 @@ export default function SaveAssetDialog({ serverId, world, rect, y, onClose }:
           <label>From y <input type="text" name="y1" inputMode="numeric" defaultValue={y?.[0]} required /></label>
           <label>To y <input type="text" name="y2" inputMode="numeric" defaultValue={y?.[1]} required /></label>
         </div>
-        <AnchorFields anchor="0 0 0" facing="" />
+        <AnchorFields anchor={anchorText} facing={facing} onAnchor={setAnchorText} onFacing={setFacing} />
         {error && <p className="error">{error}</p>}
         <div className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
           <button type="button" className="ghost" onClick={onClose}>Cancel</button>

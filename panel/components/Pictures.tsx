@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { api, message } from '../lib/api';
-import type { Renders } from '../lib/types';
+import type { Cell } from '../lib/anchor';
+import type { Facing, Renders } from '../lib/types';
 import type { BlockData, Diff, Mode } from '../lib/schematic';
 import type { Picked, Viewer } from '../lib/viewer3d';
 import Modal from './Modal';
@@ -81,9 +82,13 @@ function Rendered({ url }: { url: string }) {
 
 /**
  * Loaded only when selected; the viewer owns the stage's canvas and releases it on unmount. With `asset`, the blocks
- * are one region without changes (an asset), shown as they are, with their model states filled in from the client jar.
+ * are one region without changes (an asset), shown as they are, with their model states filled in from the client jar;
+ * its `anchor` cell is marked and an arrow points the way it `faces`. With `onPickCell`, a click on a block hands its
+ * cell (from the box's lowest corner) to that, to pick an anchor.
  */
-export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: boolean }) {
+export function Viewer3d({ url, mc, asset, anchor, facing, onPickCell }: {
+  url: string; mc: string; asset?: boolean; anchor?: Cell | null; facing?: Facing | null; onPickCell?: (cell: Cell) => void;
+}) {
   const holder = useRef<HTMLDivElement>(null);
   const [viewer, setViewer] = useState<Viewer | null>(null);
   const [diff, setDiff] = useState<Diff | null>(null);
@@ -93,6 +98,8 @@ export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: 
   const [cut, setCut] = useState(0);
   const [picked, setPicked] = useState<Picked | null>(null);
   const drawn = useRef(false);
+  const pickCell = useRef(onPickCell);
+  useEffect(() => { pickCell.current = onPickCell; });
   useEffect(() => {
     let current = true;
     let v: Viewer | null = null;
@@ -115,7 +122,10 @@ export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: 
       const d = schematic.decode(data);
       setDiff(d);
       setCut(asset ? d.height - 1 : Math.min(d.height - 1, d.topChange + 1));
-      v = module.createViewer(holder.current, d, jarUrl, setPicked);
+      v = module.createViewer(holder.current, d, jarUrl, p => {
+        setPicked(p);
+        if (p) pickCell.current?.(p.cell);
+      });
       setViewer(v);
     }).catch(ex => { if (current) setNote(message(ex)); });
     return () => {
@@ -136,6 +146,11 @@ export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: 
     }, 250);
     return () => { current = false; clearTimeout(timer); };
   }, [viewer, mode, onlyChanged, cut]);
+  // A string key, so a new array with the same cell does not redraw the marker.
+  const anchorKey = anchor?.join(' ') ?? '';
+  useEffect(() => {
+    viewer?.setAnchor(anchorKey ? anchorKey.split(' ').map(Number) as Cell : null, facing ?? null);
+  }, [viewer, anchorKey, facing]);
   return (
     <div className="viewer3d">
       <div className="v3-bar">
@@ -155,7 +170,7 @@ export function Viewer3d({ url, mc, asset }: { url: string; mc: string; asset?: 
       <div className="v3-info" role="status">{note || (picked
         ? asset ? <><b>{picked.pos.join(' ')}</b>  {picked.after}</>
           : <><b>{picked.pos.join(' ')}</b>  {picked.before} → {picked.after}  ({picked.kind?.toLowerCase() ?? 'unchanged'})</>
-        : 'Drag to orbit · scroll to zoom · click a block to inspect')}</div>
+        : `Drag to orbit · scroll to zoom · click a block to ${onPickCell ? 'make it the anchor' : 'inspect'}`)}</div>
     </div>
   );
 }
