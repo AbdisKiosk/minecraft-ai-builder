@@ -172,6 +172,9 @@ tbody tr.link:hover { background: var(--surface-2); }
 .draft-banner:hover { text-decoration: none; background: color-mix(in srgb, var(--changed) 22%, transparent); }
 .spacer { flex: 1; }
 dialog.form-dialog { width: min(520px, calc(100vw - 32px)); color: var(--text); }
+dialog.form-dialog.wide { width: min(760px, calc(100vw - 32px)); }
+.form-dialog .v3-stage { height: min(44vh, 400px); min-height: 240px; }
+.form-dialog .pills { gap: 16px; }
 .form-dialog form { display: grid; gap: 12px; }
 .form-dialog label { display: grid; gap: 4px; font-weight: 550; }
 .form-dialog label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }

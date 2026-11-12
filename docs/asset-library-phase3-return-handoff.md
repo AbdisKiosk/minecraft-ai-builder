@@ -40,8 +40,8 @@ the relay with R2, `/aibuilder link` and `/aibuilder asset save` on a running se
 combinations (reasoned through only: every new field and frame is additive, and a plugin without `links:true` in the
 welcome refuses the in-game commands at once).
 
-**Known gaps:** no anchor marker in the 3D view; anchors are not in `get_context` (its 30-asset listing is at 5,201 of
-5,500 characters); the Place… dialog still takes the lowest corner; on a server with review on, an in-game save
+**Known gaps:** anchors are not in `get_context` (its 30-asset listing is at 5,201 of 5,500 characters); the Place…
+dialog places by anchor position but cannot turn an asset (the draft import has no rotation); on a server with review on, an in-game save
 includes the open draft (as `save_blueprint` does); the plugin's "Promote again with skip unknown blocks" text also
 shows in the Place… dialog.
 

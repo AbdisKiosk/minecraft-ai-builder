@@ -55,7 +55,9 @@ Built with these deviations:
   a window onto any wall instead of guessing from the min corner. Built: nullable `anchor_x/y/z` and six-way `facing`
   (migration `007_asset_anchor.sql`, both NULL for older and uploaded assets), set on Save as asset and Edit, and
   `paste` `at` + `facing` (`common/Anchor.java`). Gap: only the four horizontal facings turn; an `up`/`down` asset
-  pastes only facing its own way, since `Blueprint` has no vertical flip. The 3D view draws no anchor marker yet.
+  pastes only facing its own way, since `Blueprint` has no vertical flip. The 3D view marks the anchor and facing,
+  Edit picks the anchor with a click there, and Place… takes the anchor's position, but does not turn the asset (the
+  draft import has no rotation).
 - **Version mismatch:** an asset saved on 1.21 and pasted on 1.8 goes through the existing unknown-block handling. The
   result reports what was skipped. Built, report-only (see "Assets" in `panel.md`): Place… warns before a newer asset
   goes to an older server and lists the states the import left out; `paste name=` of a library asset leaves out the
