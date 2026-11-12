@@ -37,9 +37,8 @@ jobs:
           file: panel/Dockerfile
           platforms: linux/amd64
           # The commit in the plugin jar's name; the build context has no .git to read it from.
-          build-args: GIT_COMMIT=${{ github.sha }}
-          push: true
           build-args: GIT_COMMIT=${{ env.GIT_COMMIT }}
+          push: true
           tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
       - name: Trigger Coolify deployment
