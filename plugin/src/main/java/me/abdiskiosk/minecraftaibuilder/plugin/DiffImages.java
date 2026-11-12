@@ -2,9 +2,7 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
-import me.abdiskiosk.minecraftaibuilder.common.BlockColors;
 import me.abdiskiosk.minecraftaibuilder.common.BlockDiff;
-import me.abdiskiosk.minecraftaibuilder.common.BlockShape;
 import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
@@ -79,9 +77,9 @@ final class DiffImages {
     }
 
     /**
-     * {@code palette} lists each distinct state with the renderer's colour and shape, {@code before} and {@code after}
-     * are run-length lists of {@code [paletteIndex, count]} in {@link RegionCodec#index} order, and {@code changes}
-     * lists {@code [index, kind]} in index order.
+     * {@code palette} lists each distinct state, {@code before} and {@code after} are run-length lists of
+     * {@code [paletteIndex, count]} in {@link RegionCodec#index} order (the order of a Sponge schematic's block data),
+     * and {@code changes} lists {@code [index, kind]} in index order.
      */
     static JsonObject encode(Box box, String[] before, String[] after, BlockDiff diff) {
         Map<String, Integer> palette = new LinkedHashMap<>();
@@ -90,23 +88,7 @@ final class DiffImages {
         JsonArray beforeRuns = runs(before, palette);
         JsonArray afterRuns = runs(after, palette);
         JsonArray entries = new JsonArray();
-        for (String state : palette.keySet()) {
-            JsonObject e = new JsonObject();
-            e.addProperty("state", state);
-            e.addProperty("rgb", BlockColors.rgb(state));
-            e.addProperty("transparent", BlockColors.isTransparent(state));
-            // Left out for a full cube, which most blocks are.
-            if (!BlockShape.isFullCube(state)) {
-                JsonArray boxes = new JsonArray();
-                for (double[] b : BlockShape.boxes(state)) {
-                    JsonArray one = new JsonArray();
-                    for (double v : b) one.add(v);
-                    boxes.add(one);
-                }
-                e.add("boxes", boxes);
-            }
-            entries.add(e);
-        }
+        for (String state : palette.keySet()) entries.add(state);
         o.add("palette", entries);
         o.add("before", beforeRuns);
         o.add("after", afterRuns);

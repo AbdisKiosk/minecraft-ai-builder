@@ -7,16 +7,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@babylonjs/core": "^8.56.2",
+    "@enginehub/nbt-ts": "^1.4.1",
+    "@enginehub/schematicwebviewer": "^5.0.1",
+    "buffer": "^6.0.3",
     "next": "^16.4.6",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1",
-    "three": "^0.187.0"
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@types/three": "^0.187.0",
     "typescript": "^7.0.2"
   }
 }

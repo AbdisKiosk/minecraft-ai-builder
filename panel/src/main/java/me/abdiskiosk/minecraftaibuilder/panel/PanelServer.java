@@ -17,7 +17,9 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.URI;
+import java.net.http.HttpClient;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Duration;
 import java.util.concurrent.CompletionException;
@@ -47,6 +49,7 @@ public final class PanelServer {
     private final Auth auth = new Auth();
     private final Events events = new Events();
     private final RelayHub hub;
+    private final ClientJars clientJars;
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "panel-timer");
         t.setDaemon(true);
@@ -56,7 +59,13 @@ public final class PanelServer {
     private FileTime configTime;
 
     public PanelServer(PanelConfig config) {
+        this(config, new ClientJars(config.file().toAbsolutePath().getParent().resolve("cache").resolve("client-jars"),
+                ClientJars.MOJANG_MANIFEST, HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()));
+    }
+
+    PanelServer(PanelConfig config, ClientJars clientJars) {
         this.config = config;
+        this.clientJars = clientJars;
         this.hub = new RelayHub(config, events);
     }
 
@@ -175,6 +184,19 @@ public final class PanelServer {
         });
         app.get("/api/servers/{server}/drafts/{id}/blocks", ctx ->
                 forward(ctx, draft("blocks", idArgs(ctx)), HISTORY_TIMEOUT));
+        // Block models and textures for the 3D view. A version's jar never changes, so browsers may keep it.
+        app.get("/api/minecraft/{version}/client.jar", ctx -> {
+            try {
+                Path jar = clientJars.get(ctx.pathParam("version"));
+                ctx.contentType("application/java-archive").header("Cache-Control", "private, max-age=31536000, immutable")
+                        .header("Content-Length", String.valueOf(Files.size(jar))).result(Files.newInputStream(jar));
+            } catch (ClientJars.UnknownVersion e) {
+                error(ctx, 404, e.getMessage());
+            } catch (IOException e) {
+                LOG.warn("Could not get the Minecraft client jar: {}", e.toString());
+                error(ctx, 502, "could not download the Minecraft client from Mojang: " + e.getMessage());
+            }
+        });
         app.post("/api/servers/{server}/drafts/{id}/approve", ctx -> {
             JsonObject args = idArgs(ctx);
             JsonElement body = json(ctx);
