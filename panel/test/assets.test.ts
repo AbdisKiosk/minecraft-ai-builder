@@ -161,6 +161,7 @@ test('the export data turns into the 3D view blocks, in the asset\'s own coordin
   assert.deepEqual([...diff.after].map(i => diff.palette[i]), STATES);
   assert.throws(() => decodeStates(encode(STATES), 7), /8 blocks/);
   assert.throws(() => decodeStates(gzipSync(Buffer.from('nope')), 8), AssetError);
+  assert.throws(() => decodeStates(encode(['stone[a=' + 'x'.repeat(260) + ']']), 1), /longer than 256/);
 });
 
 test('saving reads the region from the server and stores both files', async () => {

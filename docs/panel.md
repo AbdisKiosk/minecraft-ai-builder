@@ -374,7 +374,8 @@ Every MCP and REST call through `/s/<server>/` carries the account of its access
 that account's library on every server where it is a builder.
 
 - `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters,
-  then, while there is room, those shared with this server, with `by`.
+  then, while there is room, those shared with this server, with `by` (the owner's name, at most 16 characters) and
+  the description cut to 56 characters, so a shared entry is no longer than an own one.
   If the library cannot be reached, it says so in `assets_error` and the rest of the context is still returned.
 - `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library, then in the assets
   shared with this server (see "Share an asset with a server").
@@ -447,7 +448,7 @@ Rules:
 claim a linked player's UUID. That only reaches the library of an account that is a builder on that very server
 (someone the server's owner chose to let build there), and only to add assets to it (in-game requests cannot list,
 fetch or delete assets). The server is always the one the relay socket authenticated with its token, never a frame
-field, and the plugin never names a user. A server can unlink a UUID only when the linked account is a member of that
+field, and the plugin never names a user. A server can unlink a UUID only when the linked account is a builder on that
 server.
 
 ## Drafts: approve edits before they are placed

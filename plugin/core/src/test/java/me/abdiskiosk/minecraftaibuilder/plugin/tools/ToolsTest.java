@@ -544,6 +544,17 @@ class ToolsTest {
         // 30 x (name 40 + size 15 + description 80 + JSON punctuation and escapes) = 5,201 characters, about 1.5k tokens.
         assertEquals(5_201, added);
         assertTrue(added <= 5_500, "get_context's asset listing is capped at 5,500 characters; it was " + added);
+
+        // Shared assets as the panel sends them (assetRelay.ts): a 16-character owner in "by" and the description cut to
+        // 56 characters, so the worst case stays the same size.
+        for (com.google.gson.JsonElement e : assets) {
+            JsonObject a = e.getAsJsonObject();
+            a.addProperty("description", "\"quoted\" \\ " + "d".repeat(45));
+            a.addProperty("by", "o".repeat(16));
+        }
+        int shared = CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)),
+                () -> registry.call("get_context", new JsonObject()).data()).toString().length() - plain.toString().length();
+        assertEquals(added, shared, "a shared entry is no longer than an own one");
     }
 
     @Test
@@ -838,6 +849,19 @@ class ToolsTest {
             String refused = error("build", "{\"ops\":[{\"op\":\"paste\",\"origin\":[0,64,0],"
                     + "\"blueprint\":{\"palette\":{\"c\":\"copper_bulb\"},\"layers\":[[\"c\"]]}}]}");
             assertTrue(refused.contains("unknown block 'copper_bulb'"), refused);
+            return null;
+        });
+    }
+
+    @Test
+    void aLongUnknownStateIsCutInTheSkippedList() throws Exception {
+        String longValue = "oak_stairs[facing=" + "x".repeat(3000) + "]";
+        withAsset(new String[]{"oak_stairs[facing=east]", longValue}, () -> {
+            Args a = args("{\"name\":\"window\",\"origin\":[0,64,0]}");
+            single("paste", a);
+            String shown = a.skipped().iterator().next();
+            assertEquals(80, shown.length());
+            assertTrue(shown.startsWith("oak_stairs[facing=xxx") && shown.endsWith("..."), shown);
             return null;
         });
     }

@@ -33,8 +33,14 @@ const placement = (r: AssetRow) => ({ ...(r.anchor ? { anchor: r.anchor } : {}),
 /** The most assets get_context lists. */
 const LISTED = 30;
 
-/** An owner's name as Claude sees it: short, without an email's domain. */
-const ownerTag = (name: string) => name.replace(/@.*/, '').replace(/\s+/g, ' ').trim().slice(0, 16) || '?';
+/** An owner's name as Claude sees it: short, without an email's domain, and nothing JSON has to escape. */
+const ownerTag = (name: string) => name.replace(/@.*/, '').replace(/[^\p{L}\p{N} ._-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 16) || '?';
+/**
+ * A listed description is cut to 80 characters; a shared one to 56, so its `,"by":"<16>"` (24 characters) keeps every
+ * entry within the size ToolsTest#largestAssetListingStaysSmall caps.
+ */
+const DESCRIPTION = 80;
+const SHARED_DESCRIPTION = DESCRIPTION - 24;
 
 /**
  * What `paste name=` means for this caller on this server: their own asset wins; otherwise the one asset of that name
@@ -64,10 +70,10 @@ export async function assetRequest(deps: Deps, user: number, server: string, mc:
     // Shared assets come after the caller's own; one hidden by an own asset of the same name cannot be pasted by name.
     const shared = own.length >= LISTED ? []
       : (await deps.store.sharedWith(user, { server })).filter(r => r.owner !== user && r.via.includes(server) && !names.has(r.name));
-    const brief = (r: AssetRow) => ({ name: r.name, size: r.size, description: r.description.replace(/\s+/g, ' ').slice(0, 80) });
+    const brief = (r: AssetRow, cut = DESCRIPTION) => ({ name: r.name, size: r.size, description: r.description.replace(/\s+/g, ' ').slice(0, cut) });
     return { assets: [
-      ...own.map(brief),
-      ...shared.slice(0, LISTED - own.length).map(r => ({ ...brief(r), by: ownerTag(r.ownerName) })),
+      ...own.map(r => brief(r)),
+      ...shared.slice(0, LISTED - own.length).map(r => ({ ...brief(r, SHARED_DESCRIPTION), by: ownerTag(r.ownerName) })),
     ] };
   }
   const args = frame.args ?? {};

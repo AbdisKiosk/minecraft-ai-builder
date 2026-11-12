@@ -307,3 +307,15 @@ test('the listing stays at 30 with shared assets, own ones first', async () => {
   assert.equal(list.length, 30);
   assert.ok(list.every(a => a.by === undefined));
 });
+
+test('a shared listing entry is no longer than an own one: description cut to 56, owner to 16 plain characters', async () => {
+  const f = fakes();
+  const long = 'x'.repeat(100);
+  await f.save(1, 'mine', { description: long });
+  await f.save(2, 'theirs', { description: long });
+  await f.share(2, 'theirs');
+  const listed = (await f.call(1, 'list')).assets as { name: string; description: string; by?: string }[];
+  assert.deepEqual(listed.map(a => [a.name, a.description.length, a.by]), [['mine', 80, undefined], ['theirs', 56, 'owner2']]);
+  const sizes = listed.map(a => JSON.stringify({ ...a, name: 'n', description: a.description.padEnd(a.by ? 56 : 80), by: a.by?.padEnd(16) }).length);
+  assert.equal(sizes[0], sizes[1]);
+});

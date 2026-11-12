@@ -10,14 +10,17 @@ export const linkStore: LinkStore = {
     await transaction(async c => {
       // The user's row serialises one user's codes, so two requests at once cannot both pass the limit.
       await query('SELECT id FROM users WHERE id = ? FOR UPDATE', [user], c);
-      // Every code made before the window has expired (CODE_TTL_MS = CODE_WINDOW_MS): the table stays small.
-      await exec('DELETE FROM minecraft_link_codes WHERE created_at < ?', [since], c);
+      // Only this user's old codes here: a table-wide delete would lock every gap, and two users making codes at
+      // once would deadlock on their inserts. Codes made before the window have expired (CODE_TTL_MS = CODE_WINDOW_MS).
+      await exec('DELETE FROM minecraft_link_codes WHERE user_id = ? AND created_at < ?', [user, since], c);
       const r = await one<{ n: number }>('SELECT COUNT(*) AS n FROM minecraft_link_codes WHERE user_id = ? AND created_at >= ?', [user, since], c);
       check(Number(r?.n ?? 0));
       await exec('UPDATE minecraft_link_codes SET used_at = ? WHERE user_id = ? AND used_at IS NULL', [created, user], c);
       await exec('INSERT INTO minecraft_link_codes (code_hash, user_id, created_at, expires_at) VALUES (?, ?, ?, ?)',
         [hash, user, created, expires], c);
     });
+    // Everyone else's expired codes, outside the transaction; the table stays small. A failure here costs nothing.
+    await exec('DELETE FROM minecraft_link_codes WHERE created_at < ?', [since]).catch(() => {});
   },
   async consumeCode(hash, now) {
     const spent = await exec('UPDATE minecraft_link_codes SET used_at = ? WHERE code_hash = ? AND used_at IS NULL AND expires_at > ?',
@@ -38,7 +41,9 @@ export const linkStore: LinkStore = {
   async link(uuid, user, name, at, check) {
     return transaction(async c => {
       await query('SELECT id FROM users WHERE id = ? FOR UPDATE', [user], c);
-      const owner = await one<{ user_id: number }>('SELECT user_id FROM minecraft_links WHERE uuid = ? FOR UPDATE', [uuid], c);
+      // No FOR UPDATE: on a UUID not linked yet it would lock a gap, and two new links in one gap would deadlock. A
+      // link made by someone else in between fails the insert with ER_DUP_ENTRY below.
+      const owner = await one<{ user_id: number }>('SELECT user_id FROM minecraft_links WHERE uuid = ?', [uuid], c);
       const count = await one<{ n: number }>('SELECT COUNT(*) AS n FROM minecraft_links WHERE user_id = ? AND uuid <> ?', [user, uuid], c);
       check(Number(count?.n ?? 0), owner?.user_id ?? null);
       if (owner) {

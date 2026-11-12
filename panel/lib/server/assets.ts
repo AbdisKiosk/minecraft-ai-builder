@@ -250,7 +250,10 @@ export function decodeStates(gz: Uint8Array, maxLength: number): StateRuns {
     at += 2;
     if (at + n > view.byteLength) throw new AssetError(502, 'the region data ends early');
     // Java's modified UTF-8 is plain UTF-8 for block states (no NUL, no characters outside the BMP).
-    palette.push(utf8.decode(raw.subarray(at, at + n)));
+    const state = utf8.decode(raw.subarray(at, at + n));
+    // As for .schem uploads (schem.ts MAX_STATE_LENGTH): no real block state is longer, and a paste names states back.
+    if (state.length > 256) throw new AssetError(502, 'the region data has a block state longer than 256 characters');
+    palette.push(state);
     at += n;
   }
   const runs: [number, number][] = [];

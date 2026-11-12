@@ -186,14 +186,15 @@ export async function linkPlayer(deps: LinkDeps, server: string, frame: Json): P
   return { linked: true, already: !added };
 }
 
-const notLinkedHere = () => new LinkError(404, 'this Minecraft account is not linked to a panel account that is a member of this server');
+const notLinkedHere = () => new LinkError(404, 'this Minecraft account is not linked to a panel account that is a builder on this server');
 
-/** {player} from `server`'s socket: removes the player's link, if its account is a member of that server. */
+/** {player} from `server`'s socket: removes the player's link, if its account is a builder on that server. */
 export async function unlinkPlayer(deps: LinkDeps, server: string, frame: Json): Promise<Json> {
   const player = checkPlayer(frame.player);
   const user = await deps.store.userOf(player.uuid);
   // Any server could send this for any UUID: one that is no business of this server answers as if there were no link.
-  if (user === null || !await deps.roleOf(user, server)) throw notLinkedHere();
+  // Builder, as for link and save: a server where the account only views cannot remove its global link.
+  if (user === null || !atLeast(await deps.roleOf(user, server), LINK_ROLE)) throw notLinkedHere();
   if (!await deps.store.unlink(player.uuid, user)) throw notLinkedHere();
   return { unlinked: true };
 }

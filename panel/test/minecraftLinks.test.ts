@@ -156,14 +156,17 @@ test('players and their names are checked; a bad name is dropped, a bad UUID ref
   for (const bad of [undefined, null, {}, { uuid: 'nope' }, { uuid: ALEX + '0' }, 'string']) assert.throws(() => checkPlayer(bad), /player UUID/);
 });
 
-test('unlink: the user on the panel, or the player on a server where the account is a member', async () => {
+test('unlink: the user on the panel, or the player on a server where the account is a builder', async () => {
   const f = fakes();
   f.role(1, 'srv', 'builder');
+  f.role(1, 'viewed', 'viewer');
   f.role(3, 'evil', 'owner');
   await f.link('srv', await f.code(1));
   await assert.rejects(unlinkByUser(f.deps, 2, ALEX), /not linked to yours/);
-  await assert.rejects(unlinkPlayer(f.deps, 'evil', { player: { uuid: ALEX } }), /not linked to a panel account that is a member of this server/,
+  await assert.rejects(unlinkPlayer(f.deps, 'evil', { player: { uuid: ALEX } }), /not linked to a panel account that is a builder on this server/,
     'a server the account has nothing to do with cannot remove the link');
+  await assert.rejects(unlinkPlayer(f.deps, 'viewed', { player: { uuid: ALEX } }), /not linked/,
+    'nor can one where the account only views');
   assert.equal(await f.deps.store.userOf(ALEX), 1);
   assert.deepEqual(await unlinkPlayer(f.deps, 'srv', { player: { uuid: ALEX } }), { unlinked: true });
   await assert.rejects(unlinkPlayer(f.deps, 'srv', { player: { uuid: ALEX } }), /not linked/);

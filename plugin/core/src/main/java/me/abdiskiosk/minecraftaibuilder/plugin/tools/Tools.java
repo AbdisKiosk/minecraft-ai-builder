@@ -86,6 +86,8 @@ public final class Tools {
     private static final int MAX_LISTED_REGIONS = 30;
     /** Block states a library paste names as left out; more only adds skipped_total. */
     private static final int MAX_SKIPPED = 10;
+    /** Characters of one skipped state name in a result. */
+    private static final int MAX_SKIPPED_NAME = 80;
     private static final String TELL_PREFIX = "[AIBuilder] ";
     private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
@@ -1012,7 +1014,9 @@ public final class Tools {
             unknown.add(state);
             // A missing block by its name, a bad property value by the whole state.
             String type = state.indexOf('[') < 0 ? state : state.substring(0, state.indexOf('['));
-            names.add(catalog.info(type).isPresent() ? state : type);
+            String shown = catalog.info(type).isPresent() ? state : type;
+            // Cut, so a crafted asset cannot push the result past McpEndpoint.MAX_RESULT_CHARS after its edit ran.
+            names.add(shown.length() > MAX_SKIPPED_NAME ? shown.substring(0, MAX_SKIPPED_NAME - 3) + "..." : shown);
         }
         if (unknown.isEmpty()) return asset;
         Blueprint kept = asset.without(unknown::contains);
