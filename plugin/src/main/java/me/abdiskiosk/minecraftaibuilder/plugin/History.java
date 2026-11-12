@@ -41,6 +41,11 @@ import java.util.logging.Level;
  * {@code history/index.jsonl} lists the entries. Entries can be rendered (before, after, changes) and reverted;
  * reverting puts back the old blocks where nothing has changed them since, so it does not depend on WorldEdit's
  * undo history and survives restarts.
+ *
+ * <p>When the server is connected to a panel that keeps history in object storage, each entry is also archived:
+ * {@code <id>.blocks.json.gz} (the 3D view's blocks) and {@code <id>.render.json.gz} (the default pictures) are made
+ * from the job's own snapshot when it is recorded, uploaded with the diff, and deleted once the panel has them. The
+ * entry's {@code archive} field is {@code pending} until then and {@code done} after.
  */
 public final class History implements BuildService.Recorder {
 
@@ -60,6 +65,8 @@ public final class History implements BuildService.Recorder {
     /** Oldest first. */
     private final Map<String, JsonObject> entries = new LinkedHashMap<>();
     private long lastId;
+    private volatile boolean archiving;
+    private volatile Runnable onPending = () -> {};
 
     public History(Plugin plugin, BuildService service, Settings settings) {
         this.plugin = plugin;
@@ -108,8 +115,19 @@ public final class History implements BuildService.Recorder {
     }
 
     @Override
-    public synchronized String record(BuildService.JobInfo job, BlockDiff diff, List<Box> boxes) {
-        String id = nextId();
+    public String record(BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, RegionSnapshot after) {
+        String id;
+        synchronized (this) {
+            id = nextId();
+        }
+        // Built outside the lock: the 3D blocks need the server thread, which may be waiting on this history.
+        boolean archived = archiving && diff != null && after != null && writeArchive(id, diff, after);
+        synchronized (this) {
+            return store(id, job, diff, boxes, archived);
+        }
+    }
+
+    private String store(String id, BuildService.JobInfo job, BlockDiff diff, List<Box> boxes, boolean archiveFiles) {
         JsonObject e = new JsonObject();
         e.addProperty("id", id);
         e.addProperty("job", job.id());
@@ -147,10 +165,102 @@ public final class History implements BuildService.Recorder {
         } else if (job.bounds() != null) {
             e.add("bounds", box(job.bounds()));
         }
+        if (archiving) e.addProperty("archive", "pending");
+        if (archiveFiles) e.addProperty("archiveFiles", true);
         entries.put(id, e);
         append(e);
         prune();
+        if (archiving) onPending.run();
         return id;
+    }
+
+    /** Writes the blocks and default pictures of a new entry for the archive; false when there are none. */
+    private boolean writeArchive(String id, BlockDiff diff, RegionSnapshot after) {
+        DiffImages.Region region = DiffImages.recorded(diff, after, settings.maxRenderVolume());
+        if (region == null) return false;
+        try {
+            Files.createDirectories(dir);
+            Files.write(dir.resolve(id + ".blocks.json.gz"), gzip(gson.toJson(DiffImages.blocks(service, region, diff))));
+            Files.write(dir.resolve(id + ".render.json.gz"), gzip(gson.toJson(DiffImages.render(region, diff, null, null))));
+            return true;
+        } catch (IOException | RuntimeException ex) {
+            plugin.getLogger().log(Level.WARNING, "Could not prepare history " + id + " for the panel", ex);
+            deleteArchiveFiles(id);
+            return false;
+        }
+    }
+
+    private static byte[] gzip(String text) throws IOException {
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        try (java.util.zip.GZIPOutputStream gz = new java.util.zip.GZIPOutputStream(out)) {
+            gz.write(text.getBytes(StandardCharsets.UTF_8));
+        }
+        return out.toByteArray();
+    }
+
+    private void deleteArchiveFiles(String id) {
+        for (String suffix : new String[]{".blocks.json.gz", ".render.json.gz"}) {
+            try {
+                Files.deleteIfExists(dir.resolve(id + suffix));
+            } catch (IOException ex) {
+                plugin.getLogger().log(Level.WARNING, "Could not delete " + id + suffix, ex);
+            }
+        }
+    }
+
+    // ---- archive (called from the relay's upload thread) ----
+
+    /**
+     * Turns archiving on: new entries are prepared for the panel, and {@code onPending} runs after each one. Entries
+     * recorded before are archived too, with their diff only.
+     */
+    public void archiveTo(Runnable onPending) {
+        this.onPending = onPending;
+        this.archiving = true;
+    }
+
+    /** Entries the panel does not have yet, oldest first. */
+    public synchronized List<String> pendingArchives() {
+        List<String> out = new ArrayList<>();
+        for (JsonObject e : entries.values()) {
+            if (!e.has("archive") || !"done".equals(e.get("archive").getAsString())) out.add(e.get("id").getAsString());
+        }
+        return out;
+    }
+
+    /** The files to upload for an entry, by name (diff, blocks, render); empty when it changed nothing. */
+    public synchronized Map<String, Path> archiveFiles(String id) {
+        entry(id);
+        Map<String, Path> files = new LinkedHashMap<>();
+        for (String[] f : new String[][]{{"diff", ".diff.gz"}, {"blocks", ".blocks.json.gz"}, {"render", ".render.json.gz"}}) {
+            Path file = dir.resolve(id + f[1]);
+            if (Files.isRegularFile(file)) files.put(f[0], file);
+        }
+        return files;
+    }
+
+    /** What the panel lists and shows for an entry without asking the server: the entry, stats, types and changes. */
+    public JsonObject archiveDetail(String id) {
+        JsonObject e;
+        synchronized (this) {
+            e = entry(id).deepCopy();
+        }
+        e.remove("archive");
+        e.remove("archiveFiles");
+        if (e.get("tracked").getAsBoolean()) DiffImages.describe(e, diff(id, e), LISTED_CHANGES);
+        return e;
+    }
+
+    /** The panel has the entry: the files only it needs are dropped here. The diff stays, for revert. */
+    public void markArchived(String id) {
+        synchronized (this) {
+            JsonObject e = entries.get(id);
+            if (e == null) return;
+            e.addProperty("archive", "done");
+            e.remove("archiveFiles");
+            rewriteIndex();
+        }
+        deleteArchiveFiles(id);
     }
 
     /** Time-ordered, unique even within one millisecond. */
@@ -189,9 +299,13 @@ public final class History implements BuildService.Recorder {
             } catch (IOException ex) {
                 plugin.getLogger().log(Level.WARNING, "Could not delete history " + oldest, ex);
             }
+            deleteArchiveFiles(oldest);
             removed = true;
         }
-        if (!removed) return;
+        if (removed) rewriteIndex();
+    }
+
+    private void rewriteIndex() {
         try {
             Path tmp = dir.resolve("index.jsonl.tmp");
             StringBuilder sb = new StringBuilder();
@@ -252,7 +366,18 @@ public final class History implements BuildService.Recorder {
      */
     public JsonObject revert(String id, boolean force) {
         JsonObject e = entry(id);
-        BlockDiff diff = diff(id, e);
+        return revert(id, e, diff(id, e), force);
+    }
+
+    /**
+     * Reverts an entry this server no longer keeps but the panel archived: the panel sends the entry and its diff.
+     */
+    public JsonObject revertArchived(String id, JsonObject entry, byte[] diff, boolean force) {
+        if (entries.containsKey(id)) return revert(id, force);
+        return revert(id, entry, BlockDiff.decode(diff), force);
+    }
+
+    private JsonObject revert(String id, JsonObject e, BlockDiff diff, boolean force) {
         String world = e.get("world").getAsString();
         List<Box> boxes = new ArrayList<>();
         if (e.has("boxes")) e.getAsJsonArray("boxes").forEach(b -> boxes.add(box(b.getAsJsonArray())));

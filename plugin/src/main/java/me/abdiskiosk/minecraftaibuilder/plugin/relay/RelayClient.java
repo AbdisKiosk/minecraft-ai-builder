@@ -20,7 +20,10 @@ import me.abdiskiosk.minecraftaibuilder.plugin.http.RestApi;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 
 import java.net.URI;
+import java.io.IOException;
 import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -62,6 +65,13 @@ public final class RelayClient implements BuildService.JobListener {
     private final ExecutorService workers = Executors.newFixedThreadPool(4, daemon("AIBuilder-Relay"));
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(daemon("AIBuilder-Relay-Timer"));
     private final Map<String, Long> lastProgress = new ConcurrentHashMap<>();
+    /** Requests this plugin made of the panel, by id, waiting for their answer. */
+    private final Map<Long, CompletableFuture<JsonObject>> answers = new ConcurrentHashMap<>();
+    private final java.util.concurrent.atomic.AtomicLong nextAsk = new java.util.concurrent.atomic.AtomicLong(1);
+    private final ExecutorService uploads = Executors.newSingleThreadExecutor(daemon("AIBuilder-Relay-Upload"));
+    private final java.util.concurrent.atomic.AtomicBoolean uploadQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    /** The panel on this connection keeps history in object storage. */
+    private volatile boolean archive;
 
     private volatile WebSocket socket;
     private volatile boolean stopped;
@@ -130,6 +140,7 @@ public final class RelayClient implements BuildService.JobListener {
             }
         }
         workers.shutdownNow();
+        uploads.shutdownNow();
         timer.shutdownNow();
     }
 
@@ -158,6 +169,9 @@ public final class RelayClient implements BuildService.JobListener {
 
     private synchronized void failed(String why) {
         socket = null;
+        archive = false;
+        for (CompletableFuture<JsonObject> f : answers.values()) f.completeExceptionally(new IllegalStateException("disconnected"));
+        answers.clear();
         if (stopped) return;
         String next = "retrying in " + backoff + "s: " + why;
         // Log changes only, so a panel that is down for hours does not flood the console.
@@ -238,6 +252,15 @@ public final class RelayClient implements BuildService.JobListener {
         }
         String type = frame.has("t") ? frame.get("t").getAsString() : "";
         JsonElement id = frame.get("id");
+        if (type.equals(RelayProtocol.WELCOME)) {
+            welcome(frame);
+            return;
+        }
+        if (type.equals(RelayProtocol.ANSWER)) {
+            CompletableFuture<JsonObject> f = id == null ? null : answers.remove(id.getAsLong());
+            if (f != null) f.complete(frame);
+            return;
+        }
         if (id == null) return;
         workers.submit(() -> {
             RestApi.Response r;
@@ -272,6 +295,104 @@ public final class RelayClient implements BuildService.JobListener {
         });
     }
 
+    // ---- history archive ----
+
+    private void welcome(JsonObject frame) {
+        if (history == null || !frame.has("archive") || !frame.get("archive").getAsBoolean()) return;
+        archive = true;
+        history.archiveTo(this::scheduleUploads);
+        scheduleUploads();
+    }
+
+    /** Uploads the entries the panel does not have yet, one at a time, on the upload thread. */
+    private void scheduleUploads() {
+        if (!archive || !uploadQueued.compareAndSet(false, true)) return;
+        try {
+            uploads.submit(() -> {
+                uploadQueued.set(false);
+                for (String id : history.pendingArchives()) {
+                    if (!archive || socket == null) return;
+                    try {
+                        upload(id);
+                    } catch (RuntimeException | IOException e) {
+                        logger.log(Level.WARNING, "Relay: could not archive history " + id + " (" + describe(e) + "); trying again later");
+                        return;
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // stopping
+        }
+    }
+
+    private void upload(String id) throws IOException, InterruptedException {
+        Map<String, java.nio.file.Path> files = history.archiveFiles(id);
+        if (!files.isEmpty()) {
+            JsonObject ask = new JsonObject();
+            ask.addProperty("t", RelayProtocol.UPLOAD);
+            ask.addProperty("kind", "history");
+            ask.addProperty("entry", id);
+            JsonArray list = new JsonArray();
+            for (Map.Entry<String, java.nio.file.Path> f : files.entrySet()) {
+                JsonObject one = new JsonObject();
+                one.addProperty("name", f.getKey());
+                one.addProperty("size", java.nio.file.Files.size(f.getValue()));
+                list.add(one);
+            }
+            ask.add("files", list);
+            JsonObject urls = answered(ask).getAsJsonObject("urls");
+            for (Map.Entry<String, java.nio.file.Path> f : files.entrySet()) {
+                HttpRequest put = HttpRequest.newBuilder(URI.create(urls.get(f.getKey()).getAsString()))
+                        .timeout(Duration.ofMinutes(5))
+                        .header("Content-Type", "application/gzip")
+                        .PUT(HttpRequest.BodyPublishers.ofFile(f.getValue()))
+                        .build();
+                HttpResponse<String> r = http.send(put, HttpResponse.BodyHandlers.ofString());
+                if (r.statusCode() / 100 != 2) throw new IOException("storage answered " + r.statusCode() + " for " + f.getKey());
+            }
+        }
+        JsonObject done = new JsonObject();
+        done.addProperty("t", RelayProtocol.UPLOADED);
+        done.addProperty("kind", "history");
+        done.addProperty("entry", id);
+        done.add("detail", history.archiveDetail(id));
+        JsonArray names = new JsonArray();
+        files.keySet().forEach(names::add);
+        done.add("files", names);
+        answered(done);
+        history.markArchived(id);
+    }
+
+    /** Asks the panel and waits for its answer's body; fails unless the answer is 2xx. */
+    private JsonObject answered(JsonObject ask) throws IOException, InterruptedException {
+        long id = nextAsk.getAndIncrement();
+        ask.addProperty("id", id);
+        CompletableFuture<JsonObject> f = new CompletableFuture<>();
+        answers.put(id, f);
+        send(ask);
+        JsonObject answer;
+        try {
+            answer = f.get(60, TimeUnit.SECONDS);
+        } catch (java.util.concurrent.ExecutionException e) {
+            throw new IOException("disconnected from the panel");
+        } catch (java.util.concurrent.TimeoutException e) {
+            throw new IOException("the panel did not answer");
+        } finally {
+            answers.remove(id);
+        }
+        int status = answer.has("status") ? answer.get("status").getAsInt() : 500;
+        JsonElement body = answer.get("body");
+        if (status / 100 != 2) {
+            String msg = body != null && body.isJsonObject() && body.getAsJsonObject().has("error")
+                    ? body.getAsJsonObject().get("error").getAsString() : "status " + status;
+            throw new IOException("the panel refused: " + msg);
+        }
+        return body != null && body.isJsonObject() ? body.getAsJsonObject() : new JsonObject();
+    }
+
     private RestApi.Response history(JsonObject frame) {
         if (history == null) return RestApi.error(404, "history is turned off on this server (history.enabled)");
         JsonObject args = frame.has("args") && frame.get("args").isJsonObject() ? frame.getAsJsonObject("args") : new JsonObject();
@@ -285,8 +406,10 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("view") ? args.get("view").getAsString() : null,
                     args.has("corner") ? args.get("corner").getAsString() : null));
             case "blocks" -> new RestApi.Response(200, history.blocks(str(args, "id")));
-            case "revert" -> new RestApi.Response(200, history.revert(str(args, "id"),
-                    args.has("force") && args.get("force").getAsBoolean()));
+            case "revert" -> new RestApi.Response(200, args.has("diff")
+                    ? history.revertArchived(str(args, "id"), args.getAsJsonObject("entry"),
+                            java.util.Base64.getDecoder().decode(str(args, "diff")), bool(args, "force"))
+                    : history.revert(str(args, "id"), bool(args, "force")));
             default -> RestApi.error(400, "unknown history op '" + op + "'");
         });
     }

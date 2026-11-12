@@ -3,7 +3,7 @@ import type { Role } from './roles';
 import { sha256 } from './tokens';
 
 export interface UserRow { id: number; sub: string; email: string | null; name: string | null; picture: string | null }
-export interface ServerRow { id: string; name: string; owner_id: number; created_at: Date; last_seen_at: Date | null }
+export interface ServerRow { id: string; name: string; owner_id: number; created_at: Date; last_seen_at: Date | null; info: unknown }
 
 /** The user's role on a server, or null when they are not a member. */
 export async function roleOf(userId: number, serverId: string): Promise<Role | null> {
@@ -14,7 +14,7 @@ export async function roleOf(userId: number, serverId: string): Promise<Role | n
 /** Every server the user is a member of, with their role. */
 export async function serversOf(userId: number): Promise<(ServerRow & { role: Role })[]> {
   return query(
-    `SELECT s.id, s.name, s.owner_id, s.created_at, s.last_seen_at, m.role
+    `SELECT s.id, s.name, s.owner_id, s.created_at, s.last_seen_at, s.info, m.role
        FROM memberships m JOIN servers s ON s.id = m.server_id
       WHERE m.user_id = ? ORDER BY s.name, s.id`, [userId]);
 }

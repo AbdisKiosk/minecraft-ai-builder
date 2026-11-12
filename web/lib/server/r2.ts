@@ -1,4 +1,4 @@
-import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, GetObjectCommand, HeadObjectCommand, ListObjectsV2Command, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 // Cloudflare R2 through its S3 API. One client per process, shared by server.ts and Next's route bundles.
@@ -78,4 +78,23 @@ export async function remove(keys: string[]): Promise<void> {
     const batch = keys.slice(i, i + 1000);
     await r2().send(new DeleteObjectsCommand({ Bucket: bucket(), Delete: { Objects: batch.map(Key => ({ Key })), Quiet: true } }));
   }
+}
+
+/** Deletes every object whose key starts with `prefix`. */
+export async function removePrefix(prefix: string): Promise<number> {
+  let token: string | undefined;
+  let n = 0;
+  do {
+    const page = await r2().send(new ListObjectsV2Command({ Bucket: bucket(), Prefix: prefix, ContinuationToken: token }));
+    const keys = (page.Contents ?? []).map(o => o.Key!).filter(Boolean);
+    if (keys.length) await remove(keys);
+    n += keys.length;
+    token = page.IsTruncated ? page.NextContinuationToken : undefined;
+  } while (token);
+  return n;
+}
+
+/** Whether R2 is configured; without it the app keeps no archive and the plugins keep their history themselves. */
+export function configured(): boolean {
+  return ['R2_ACCOUNT_ID', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'].every(k => !!process.env[k]);
 }

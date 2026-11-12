@@ -42,8 +42,8 @@ export default function Pictures({ base, whose, none, mc }: { base: string; whos
           ? <Viewer3d key={`${base}/${mc}`} url={`${base}/blocks`} mc={mc} />
           : <p className="muted">3D needs the server's Minecraft version.</p>}</div>
         : <Rendered key={`${view}/${corner}`} url={`${base}/render?view=${view}&corner=${corner}`} />}
-      <p className="muted" style={{ margin: '10px 0 0' }}>Drawn from the world as it is now, with {whose} old and new blocks put in
-        place. Changes hidden inside solid blocks do not show; see the list below.</p>
+      <p className="muted" style={{ margin: '10px 0 0' }}>The area around {whose} changes, with its old and new blocks put in place.
+        Changes hidden inside solid blocks do not show; see the list below.</p>
     </section>
   );
 }

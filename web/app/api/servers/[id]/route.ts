@@ -1,4 +1,6 @@
 import { membersOf } from '../../../../lib/server/access';
+import { serverPrefix } from '../../../../lib/server/archive';
+import { configured, removePrefix } from '../../../../lib/server/r2';
 import { exec } from '../../../../lib/server/db';
 import { hub } from '../../../../lib/server/hub';
 import { body, HttpError, json, requireRole, requireUser, route } from '../../../../lib/server/route';
@@ -24,6 +26,8 @@ export const DELETE = route<P>(async (_req, { id }) => {
   const members = await membersOf(id);
   await exec('DELETE FROM servers WHERE id = ?', [id]);
   hub().kick(id, 'server deleted from the panel');
+  // Its archived history; the rows went with the server.
+  if (configured()) removePrefix(serverPrefix(id)).catch(e => console.warn(`could not delete ${id}'s files from R2`, e));
   hub().emit({ type: 'access', users: members });
   return new Response(null, { status: 204 });
 });

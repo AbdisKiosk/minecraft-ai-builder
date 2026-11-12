@@ -51,6 +51,8 @@ export interface Server {
   running: Job[];
   recent: Job[];
   drafts?: DraftSummary[];
+  /** Bumped when an entry is archived, so the history list reloads. */
+  historyRev?: number;
 }
 
 export interface HistorySummary extends Counts {

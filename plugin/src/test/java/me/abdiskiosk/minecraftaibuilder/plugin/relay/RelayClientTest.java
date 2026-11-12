@@ -131,7 +131,7 @@ class RelayClientTest {
         Box box = Box.of(new Vec3(0, 64, 0), new Vec3(1, 64, 0));
         BlockDiff diff = BlockDiff.of(box, new String[]{"air", "stone"}, new String[]{"oak_planks", "stone"});
         String id = history.record(new BuildService.JobInfo("j1", "done", "done", "fill", "test", "Alex", "world", box,
-                2, 2, 1, System.currentTimeMillis(), 5, null, null, null, null, null), diff, List.of(box));
+                2, 2, 1, System.currentTimeMillis(), 5, null, null, null, null, null), diff, List.of(box), null);
 
         String cookie = login();
         HttpResponse<String> page = http.send(HttpRequest.newBuilder(URI.create("http://127.0.0.1:" + panel.port() + "/api/servers/test/history"))

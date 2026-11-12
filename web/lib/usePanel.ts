@@ -8,7 +8,8 @@ type Action =
   | { type: 'snapshot'; servers: Server[] }
   | { type: 'server'; server: Server }
   | { type: 'job'; server: string; event: string; job: Job }
-  | { type: 'draft'; server: string; draft: DraftSummary };
+  | { type: 'draft'; server: string; draft: DraftSummary }
+  | { type: 'history'; server: string };
 
 function reduce(servers: Servers, action: Action): Servers {
   if (action.type === 'snapshot') return new Map(action.servers.map(s => [s.id, s]));
@@ -20,7 +21,9 @@ function reduce(servers: Servers, action: Action): Servers {
   const s = servers.get(action.server);
   if (!s) return servers;
   let next: Server;
-  if (action.type === 'job') {
+  if (action.type === 'history') {
+    next = { ...s, historyRev: (s.historyRev || 0) + 1 };
+  } else if (action.type === 'job') {
     const job = action.job;
     const running = s.running.filter(j => j.id !== job.id);
     next = action.event === 'job.end'
@@ -66,6 +69,7 @@ export function usePanel() {
     on('server', server => dispatch({ type: 'server', server }));
     on('job', data => dispatch({ type: 'job', ...data }));
     on('draft', data => dispatch({ type: 'draft', ...data }));
+    on('history', data => dispatch({ type: 'history', server: data.server }));
     source.onerror = () => {
       setLive(false);
       // The browser retries by itself; check whether the session expired.

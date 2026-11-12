@@ -3,7 +3,9 @@ import type { IncomingMessage } from 'node:http';
 import type { Duplex } from 'node:stream';
 import { WebSocket, WebSocketServer } from 'ws';
 import { serverForRelayToken } from './access';
+import { ArchiveError, commit, uploadUrls } from './archive';
 import { exec } from './db';
+import { configured as r2Configured } from './r2';
 import { bearer } from './tokens';
 
 /**
@@ -148,6 +150,8 @@ export type HubEvent =
   | { type: 'server'; server: string; state: ReturnType<ServerState['toJson']> }
   | { type: 'job'; server: string; event: string; job: Json }
   | { type: 'draft'; server: string; draft: Json }
+  /** A history entry was archived. */
+  | { type: 'history'; server: string; entry: string }
   /** Memberships, names or servers changed for these users: they need a fresh snapshot. */
   | { type: 'access'; users: number[] };
 
@@ -212,6 +216,10 @@ export class RelayHub {
       case 'reply':
         if (c.ready && typeof frame.id === 'number') c.complete(frame.id, frame);
         return;
+      case 'upload':
+      case 'uploaded':
+        if (c.ready) this.archive(c, frame);
+        return;
       case 'event': {
         if (!c.ready) return;
         const s = this.state(c.serverId);
@@ -246,9 +254,31 @@ export class RelayHub {
     const s = this.state(c.serverId);
     s.connected(frame);
     console.info(`relay: server ${c.serverId} connected (${frame.mc ?? '?'} ${frame.bridge ?? '?'}, ${frame.plugin ?? '?'})`);
+    // History goes to R2 when it is configured: the plugin then uploads each entry (see archive.ts).
+    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true }));
     exec('UPDATE servers SET info = ?, last_seen_at = NOW() WHERE id = ?', [JSON.stringify(s.info), c.serverId])
       .catch(e => console.warn('relay: could not save server info', e.message));
     this.emit({ type: 'server', server: c.serverId, state: s.toJson() });
+  }
+
+  /** A plugin's upload request or confirmation; answered with {"t":"answer"} under the same id. */
+  private archive(c: Connection, frame: Json) {
+    const answer = (status: number, body: unknown) => {
+      if (c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ t: 'answer', id: frame.id, status, body }));
+    };
+    if (typeof frame.id !== 'number') return;
+    if (frame.kind !== 'history') return answer(400, { error: `unknown kind '${frame.kind}'` });
+    const work = frame.t === 'upload'
+      ? uploadUrls(c.serverId, frame.entry, frame.files)
+      : commit(c.serverId, frame.entry, frame.detail, frame.files).then(() => {
+        this.emit({ type: 'history', server: c.serverId, entry: String(frame.entry) });
+        return {};
+      });
+    work.then(body => answer(200, body), e => {
+      if (e instanceof ArchiveError) return answer(e.status, { error: e.message });
+      console.warn(`archive: ${frame.t} ${frame.entry} from ${c.serverId} failed`, e);
+      answer(500, { error: 'the panel could not store it; try again later' });
+    });
   }
 
   private onClose(c: Connection, code: number, reason: string) {

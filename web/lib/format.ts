@@ -29,4 +29,4 @@ export function dateTime(ms: number): string {
   return new Date(ms).toLocaleString();
 }
 
-export const OFFLINE = 'The server is offline. Drafts and history are read from it, so they show again when it reconnects.';
+export const OFFLINE = 'The server is offline. Drafts are read from it, so they show again when it reconnects.';

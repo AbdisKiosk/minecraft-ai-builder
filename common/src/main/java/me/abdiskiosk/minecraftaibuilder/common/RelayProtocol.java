@@ -15,6 +15,20 @@ package me.abdiskiosk.minecraftaibuilder.common;
  *                 {"t":"event","event":"draft.update","draft":{...summary...}}
  * </pre>
  *
+ * A panel that keeps history in object storage (the web app) also answers requests the plugin makes, so a history
+ * entry outlives the server's own copy. The plugin never holds storage credentials: it PUTs to the URLs it is given.
+ *
+ * <pre>
+ * panel → plugin  {"t":"welcome","archive":true}   (after hello)
+ * plugin → panel  {"t":"upload","id":3,"kind":"history","entry":"h1x","files":[{"name":"diff","size":812},...]}
+ * panel → plugin  {"t":"answer","id":3,"status":200,"body":{"urls":{"diff":"https://...",...}}}
+ * plugin → panel  {"t":"uploaded","id":4,"kind":"history","entry":"h1x","detail":{...entry, stats, types, changes...}}
+ * panel → plugin  {"t":"answer","id":4,"status":200,"body":{}}
+ * </pre>
+ *
+ * A panel that does not know these frames never answers them; the plugin then keeps the entry and tries again on the
+ * next connection.
+ *
  * The panel knows which server a socket belongs to from the bearer token it connected with.
  */
 public final class RelayProtocol {
@@ -31,6 +45,10 @@ public final class RelayProtocol {
     public static final String DRAFT = "draft";
     public static final String REPLY = "reply";
     public static final String EVENT = "event";
+    public static final String WELCOME = "welcome";
+    public static final String UPLOAD = "upload";
+    public static final String UPLOADED = "uploaded";
+    public static final String ANSWER = "answer";
 
     public static final String JOB_START = "job.start";
     public static final String JOB_PROGRESS = "job.progress";

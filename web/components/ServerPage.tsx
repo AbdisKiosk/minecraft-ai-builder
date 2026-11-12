@@ -168,9 +168,9 @@ function History({ id, server }: { id: string; server: Server }) {
   }, [id]);
 
   // A finished job adds a history entry: read the first page again.
+  // A finished job, or an entry the plugin just archived, changes the first page; so does going on or offline.
   const newest = server.recent[0] ? server.recent[0].id + server.recent[0].status : '';
-  useEffect(() => { if (server.online) load(null); }, [load, newest, server.online]);
-  if (!server.online) return <section className="card"><h2>History</h2><p className="empty">{OFFLINE}</p></section>;
+  useEffect(() => { load(null); }, [load, newest, server.historyRev, server.online]);
 
   const last = entries?.[entries.length - 1];
   return (

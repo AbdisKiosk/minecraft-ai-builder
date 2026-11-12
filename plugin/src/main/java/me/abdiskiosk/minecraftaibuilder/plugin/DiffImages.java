@@ -9,6 +9,7 @@ import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.IsoRenderer;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.RegionSnapshot;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 
 import java.util.Base64;
 import java.util.LinkedHashMap;
@@ -25,7 +26,27 @@ final class DiffImages {
     }
 
     /** The box a diff is shown in, with the world's blocks in it before and after the diff. */
-    private record Region(Box box, String[] before, String[] after) {
+    record Region(Box box, String[] before, String[] after) {
+    }
+
+    /**
+     * The region of a diff as its job left it, from the snapshot the job read afterwards, so it costs no world read:
+     * the diff's own bounds, without surroundings. Null when the diff is empty or the region is over {@code maxVolume}.
+     */
+    static Region recorded(BlockDiff diff, RegionSnapshot after, long maxVolume) {
+        if (diff.isEmpty()) return null;
+        Box box = diff.bounds();
+        if (box == null || box.volume() > maxVolume) return null;
+        String[] now = new String[(int) box.volume()];
+        for (int y = box.min().y(); y <= box.max().y(); y++) {
+            for (int z = box.min().z(); z <= box.max().z(); z++) {
+                for (int x = box.min().x(); x <= box.max().x(); x++) {
+                    String state = after.get(new Vec3(x, y, z));
+                    now[RegionCodec.index(box, x, y, z)] = state == null ? "air" : state;
+                }
+            }
+        }
+        return new Region(box, diff.overlay(box, now, false), diff.overlay(box, now, true));
     }
 
     /**
@@ -50,7 +71,11 @@ final class DiffImages {
     /** Before, after and changes pictures as base64 PNGs. See {@link #region} for the parameters. */
     static JsonObject render(BuildService service, String world, BlockDiff diff, String what, String viewName,
                              String cornerName, long maxVolume, long perTick) {
-        Region r = region(service, world, diff, what, maxVolume, perTick);
+        return render(region(service, world, diff, what, maxVolume, perTick), diff, viewName, cornerName);
+    }
+
+    /** Before, after and changes pictures of a region already read. */
+    static JsonObject render(Region r, BlockDiff diff, String viewName, String cornerName) {
         Box box = r.box();
         String[] before = r.before();
         String[] after = r.after();
@@ -74,7 +99,11 @@ final class DiffImages {
 
     /** The same region as {@link #render}, as blocks for the panel's 3D view. */
     static JsonObject blocks(BuildService service, String world, BlockDiff diff, String what, long maxVolume, long perTick) {
-        Region r = region(service, world, diff, what, maxVolume, perTick);
+        return blocks(service, region(service, world, diff, what, maxVolume, perTick), diff);
+    }
+
+    /** A region already read, as blocks for the panel's 3D view. */
+    static JsonObject blocks(BuildService service, Region r, BlockDiff diff) {
         JsonObject out = encode(r.box(), r.before(), r.after(), diff);
         // Reads/history omit default properties; model variants require all of them. Resolve only the palette,
         // on the server thread, without expanding every cell or changing the compact labels used for inspection.

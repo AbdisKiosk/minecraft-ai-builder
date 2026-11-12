@@ -186,8 +186,11 @@ public final class BuildService {
         /** The boxes to read before and after the job, or null to not track it (too large, or turned off). */
         List<Box> boxes(Caller caller, List<Op> ops);
 
-        /** @param diff null when the job was not tracked */
-        String record(JobInfo job, BlockDiff diff, List<Box> boxes);
+        /**
+         * @param diff  null when the job was not tracked
+         * @param after what the job's boxes held when it finished; null when it was not tracked
+         */
+        String record(JobInfo job, BlockDiff diff, List<Box> boxes, RegionSnapshot after);
 
         long readsPerTick();
     }
@@ -659,7 +662,8 @@ public final class BuildService {
             try {
                 BlockDiff diff = before != null && after != null && after.done() ? RegionSnapshot.diff(before, after) : null;
                 job.phase = "done";
-                job.historyId = rec.record(provisional(job, error), diff, before == null ? null : before.boxes());
+                job.historyId = rec.record(provisional(job, error), diff, before == null ? null : before.boxes(),
+                        diff == null ? null : after);
             } catch (RuntimeException e) {
                 plugin.getLogger().log(java.util.logging.Level.WARNING, "job " + job.id + ": could not save history", e);
             }

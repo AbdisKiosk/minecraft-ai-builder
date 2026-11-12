@@ -47,6 +47,7 @@ export async function GET(req: Request): Promise<Response> {
         if (!allowed.has(e.server)) return;
         if (e.type === 'server') send('server', { id: e.server, ...e.state });
         else if (e.type === 'job') send('job', { server: e.server, event: e.event, job: e.job });
+        else if (e.type === 'history') send('history', { server: e.server, entry: e.entry });
         else send('draft', { server: e.server, draft: e.draft });
       });
       // Keeps proxies from closing an idle stream; also re-checks membership in case an event was missed.

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { api, message, serverApi } from '../lib/api';
 import { boxText, dateTime, duration, num } from '../lib/format';
-import { OFFLINE } from '../lib/format';
 import { diffHref } from '../lib/routes';
 import type { HistoryEntry, Placed } from '../lib/types';
 import { useFetched } from '../lib/useFetched';
@@ -17,14 +16,13 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
   const admin = can(s.role, 'admin');
   const builder = can(s.role, 'builder');
   const base = `${serverApi(server)}/history/${encodeURIComponent(id)}`;
-  const { data: e, error } = useFetched<HistoryEntry>(base, s.online);
+  const { data: e, error } = useFetched<HistoryEntry>(base);
   const [force, setForce] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Placed | null>(null);
   const [revertError, setRevertError] = useState('');
   const [promote, setPromote] = useState(false);
 
-  if (!s.online && !e) return <div className="card"><p className="empty">{OFFLINE}</p></div>;
   if (error) return <div className="card"><p className="error">{error}</p></div>;
   if (!e) return <p className="muted">Loading diff…</p>;
   const total = e.added + e.removed + e.changed;
@@ -63,7 +61,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
         <section className="card"><h2>Revert</h2>
           <p className="muted">Puts back the old blocks as a new job. Blocks changed again since this edit are left alone and listed, unless you force it.</p>
           <div className="toolbar">
-            {admin ? <>
+            {admin && !s.online ? <span className="muted">The server is offline; reverting needs it online.</span> : admin ? <>
               <button className="danger" disabled={busy || !e.tracked || total === 0} onClick={revert}>Revert this edit</button>
               <label><input type="checkbox" checked={force} onChange={ev => setForce(ev.target.checked)} /> also overwrite later changes</label>
             </> : <span className="muted">Admins and the owner can revert.</span>}
