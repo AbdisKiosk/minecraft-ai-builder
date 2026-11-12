@@ -36,7 +36,7 @@ export interface DraftSummary extends Counts {
   created: number;
 }
 
-export interface ServerInfo { mc?: string; bridge?: string; plugin?: string; review?: boolean; worlds?: string[] }
+export interface ServerInfo { mc?: string; bridge?: string; plugin?: string; review?: boolean; worlds?: string[]; lessons?: boolean }
 
 export interface Server {
   id: string;
@@ -95,3 +95,15 @@ export interface Placed {
 }
 
 export type Renders = Record<'before' | 'after' | 'changes', string>;
+
+/** A lesson Claude reads every session on a server (plugin/.../Lessons.java). */
+export interface Lesson {
+  id: string;
+  text: string;
+  origin: 'feedback' | 'claude' | 'manual';
+  /** The history (h…) or draft (d…) ids it came from. */
+  entries: string[];
+  by: string;
+  time: number;
+  seen: boolean;
+}

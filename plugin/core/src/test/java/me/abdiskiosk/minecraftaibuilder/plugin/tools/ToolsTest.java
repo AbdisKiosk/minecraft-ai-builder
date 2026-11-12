@@ -14,9 +14,12 @@ import me.abdiskiosk.minecraftaibuilder.common.WorldEditBridge;
 import me.abdiskiosk.minecraftaibuilder.common.RegionCodec;
 import me.abdiskiosk.minecraftaibuilder.common.Schematic;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
+import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 import me.abdiskiosk.minecraftaibuilder.plugin.PluginConfig;
 import org.bukkit.Bukkit;
 import org.bukkit.Server;
+import org.bukkit.World;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
@@ -53,12 +56,21 @@ class ToolsTest {
     static {
         if (Bukkit.getServer() == null) {
             Logger logger = Logger.getAnonymousLogger();
+            World world = (World) Proxy.newProxyInstance(World.class.getClassLoader(), new Class<?>[]{World.class},
+                    (proxy, method, params) -> switch (method.getName()) {
+                        case "getName" -> "world";
+                        case "getMaxHeight" -> 256;
+                        default -> method.getReturnType() == boolean.class ? Boolean.FALSE : method.getReturnType() == int.class ? 0 : null;
+                    });
             Bukkit.setServer((Server) Proxy.newProxyInstance(Server.class.getClassLoader(), new Class<?>[]{Server.class},
                     (proxy, method, params) -> {
                         Object answer = switch (method.getName()) {
                             case "isPrimaryThread" -> Boolean.TRUE;
                             case "getLogger" -> logger;
                             case "getName", "getVersion", "getBukkitVersion", "toString" -> "test";
+                            case "getOnlinePlayers" -> List.of();
+                            case "getWorlds" -> List.of(world);
+                            case "getWorld" -> "world".equals(params[0]) ? world : null;
                             default -> null;
                         };
                         if (answer == null && method.getReturnType() == boolean.class) return Boolean.FALSE;
@@ -454,5 +466,41 @@ class ToolsTest {
         Tool tell = other.all().stream().filter(x -> x.name().equals("tell")).findFirst().orElseThrow();
         assertEquals("teleport is off; set players.allow-teleport: true in config.yml", assertThrows(EditException.class,
                 () -> tell.handler().call(args("{\"message\":\"hi\",\"teleport\":[0,64,0]}"))).getMessage());
+    }
+
+    @Test
+    void getContextListsLessonsAndDeliversFeedbackOnce() {
+        assertFalse(registry.call("get_context", new JsonObject()).data().has("lessons"));
+        service.lessons().add("Floors are spruce_planks", Lessons.MANUAL, List.of(), "Ann");
+        service.lessons().feedback("d1", "The tower is too tall", false, "panel: Ann");
+
+        JsonObject first = registry.call("get_context", new JsonObject()).data();
+        assertEquals("[\"Floors are spruce_planks\"]", first.get("lessons").toString(), first.toString());
+        assertEquals("[\"d1: The tower is too tall\"]", first.get("feedback").toString());
+        JsonObject second = registry.call("get_context", new JsonObject()).data();
+        assertTrue(second.has("lessons"));
+        assertFalse(second.has("feedback"), second.toString());
+    }
+
+    /** The lesson tool is left out of tools/list, yet Claude can call it over MCP. */
+    @Test
+    void theUnlistedLessonToolIsCallableOverMcp() {
+        McpEndpoint mcp = new McpEndpoint(registry, "test");
+        String list = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/list\"}")).toString();
+        assertFalse(list.contains("\"lesson\""), list);
+
+        JsonObject r = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"lesson\",\"arguments\":{\"text\":\"Use lanterns, not torches\",\"entry\":\"h1\"}}}")).getAsJsonObject();
+        JsonObject result = r.getAsJsonObject("result");
+        assertFalse(result.get("isError").getAsBoolean(), r.toString());
+        Lessons.Lesson saved = service.lessons().list().get(0);
+        assertEquals("Use lanterns, not torches", saved.text());
+        assertEquals(Lessons.CLAUDE, saved.origin());
+        assertEquals(List.of("h1"), saved.entries());
+        assertFalse(saved.seen());
+
+        JsonObject typo = mcp.handle(JsonParser.parseString("{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/call\",\"params\":"
+                + "{\"name\":\"lesson\",\"arguments\":{\"lesson\":\"x\"}}}")).getAsJsonObject().getAsJsonObject("result");
+        assertTrue(typo.get("isError").getAsBoolean());
     }
 }

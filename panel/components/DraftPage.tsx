@@ -7,6 +7,7 @@ import { useFetched } from '../lib/useFetched';
 import type { Servers } from '../lib/usePanel';
 import { can, type Server } from '../lib/types';
 import Pictures from './Pictures';
+import FeedbackDialog from './FeedbackDialog';
 import PromoteDialog from './PromoteDialog';
 import { Badge, ChangesCard, Conflicts, Pills, ServerPageLink, Stats, TypesCard } from './shared';
 
@@ -23,6 +24,7 @@ export default function DraftPage({ server: s, id, servers }: { server: Server; 
   const [rejected, setRejected] = useState(false);
   const [decisionError, setDecisionError] = useState('');
   const [promote, setPromote] = useState(false);
+  const [feedback, setFeedback] = useState(false);
 
   if (!s.online && !d) return <div className="card"><p className="empty">{OFFLINE}</p></div>;
   if (error) return <div className="card"><p className="error">{error}</p></div>;
@@ -40,7 +42,10 @@ export default function DraftPage({ server: s, id, servers }: { server: Server; 
     try {
       const r = await api<Placed>(`${base}/${what}`, { method: 'POST', body: JSON.stringify(what === 'approve' ? { force } : {}) });
       if (what === 'approve') setApproved(r);
-      else setRejected(true);
+      else {
+        setRejected(true);
+        setFeedback(!!s.info?.lessons);
+      }
     } catch (ex) {
       setDecisionError(message(ex));
       setBusy(null);
@@ -105,6 +110,7 @@ export default function DraftPage({ server: s, id, servers }: { server: Server; 
       </div>
       {promote && <PromoteDialog from={server} servers={servers} onClose={() => setPromote(false)}
         source={{ world: d.world, bounds: d.bounds, fromDraft: true }} />}
+      {feedback && <FeedbackDialog server={server} id={d.id} onClose={() => setFeedback(false)} />}
     </>
   );
 }

@@ -16,6 +16,7 @@ import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.CallContext;
 import me.abdiskiosk.minecraftaibuilder.plugin.Drafts;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
+import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.map.WorldMap;
 import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 
@@ -214,6 +215,7 @@ public final class RelayClient implements BuildService.JobListener {
         o.addProperty("history", history != null);
         o.addProperty("review", drafts != null && drafts.reviewOn());
         o.addProperty("map", map != null);
+        o.addProperty("lessons", true);
         send(o);
         for (BuildService.JobInfo job : service.running()) onJob(RelayProtocol.JOB_START, job);
         if (drafts != null) drafts.openSummaries().forEach(this::onDraft);
@@ -286,6 +288,7 @@ public final class RelayClient implements BuildService.JobListener {
                     }
                     case RelayProtocol.HISTORY -> history(frame);
                     case RelayProtocol.DRAFT -> draft(frame);
+                    case RelayProtocol.LESSONS -> lessons(frame);
                     default -> RestApi.error(400, "unknown frame type '" + type + "'");
                 };
             } catch (EditException e) {
@@ -447,10 +450,14 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("corner") ? args.get("corner").getAsString() : null));
             case "blocks" -> new RestApi.Response(200, history.blocks(str(args, "id")));
             case "corrections" -> new RestApi.Response(200, history.corrections(str(args, "id")));
-            case "revert" -> new RestApi.Response(200, args.has("diff")
-                    ? history.revertArchived(str(args, "id"), args.getAsJsonObject("entry"),
-                            java.util.Base64.getDecoder().decode(str(args, "diff")), bool(args, "force"))
-                    : history.revert(str(args, "id"), bool(args, "force")));
+            case "revert" -> {
+                JsonObject done = args.has("diff")
+                        ? history.revertArchived(str(args, "id"), args.getAsJsonObject("entry"),
+                                java.util.Base64.getDecoder().decode(str(args, "diff")), bool(args, "force"))
+                        : history.revert(str(args, "id"), bool(args, "force"));
+                feedback(args);
+                yield new RestApi.Response(200, done);
+            }
             default -> RestApi.error(400, "unknown history op '" + op + "'");
         });
     }
@@ -468,7 +475,11 @@ public final class RelayClient implements BuildService.JobListener {
                     args.has("corner") ? args.get("corner").getAsString() : null));
             case "blocks" -> new RestApi.Response(200, drafts.blocks(str(args, "id")));
             case "approve" -> new RestApi.Response(200, drafts.approve(str(args, "id"), bool(args, "force"), by));
-            case "reject" -> new RestApi.Response(200, drafts.reject(str(args, "id"), by));
+            case "reject" -> {
+                JsonObject done = drafts.reject(str(args, "id"), by);
+                feedback(args);
+                yield new RestApi.Response(200, done);
+            }
             case "export" -> new RestApi.Response(200, drafts.export(str(args, "world"), box(args.getAsJsonArray("box"))));
             case "import" -> {
                 JsonArray origin = args.getAsJsonArray("origin");
@@ -481,6 +492,59 @@ public final class RelayClient implements BuildService.JobListener {
             }
             default -> RestApi.error(400, "unknown draft op '" + op + "'");
         });
+    }
+
+    /**
+     * Feedback that came with a reject or revert: {"feedback":"...","remember":true}. The action already happened, so
+     * feedback that cannot be stored is logged rather than turned into a failed reply.
+     */
+    private void feedback(JsonObject args) {
+        if (!args.has("feedback") || args.get("feedback").getAsString().isBlank()) return;
+        try {
+            service.lessons().feedback(str(args, "id"), str(args, "feedback"), bool(args, "remember"), by(args));
+        } catch (EditException e) {
+            logger.warning("Relay: feedback on " + str(args, "id") + " was not kept: " + e.getMessage());
+        }
+    }
+
+    /** The panel's Lessons page, and feedback given after a reject or revert ({@code feedback}). */
+    private RestApi.Response lessons(JsonObject frame) {
+        JsonObject args = frame.has("args") && frame.get("args").isJsonObject() ? frame.getAsJsonObject("args") : new JsonObject();
+        String op = frame.has("op") ? frame.get("op").getAsString() : "";
+        Lessons lessons = service.lessons();
+        return switch (op) {
+            case "list" -> new RestApi.Response(200, lessons.listJson());
+            case "add" -> {
+                Lessons.Saved saved = lessons.add(str(args, "text"), Lessons.MANUAL, java.util.List.of(), by(args));
+                JsonObject o = new JsonObject();
+                o.add("lesson", Lessons.json(saved.lesson()));
+                if (saved.replaced() != null) o.add("replaced", Lessons.json(saved.replaced()));
+                yield new RestApi.Response(200, o);
+            }
+            case "edit" -> {
+                JsonObject o = new JsonObject();
+                o.add("lesson", Lessons.json(lessons.edit(str(args, "id"), str(args, "text"))));
+                yield new RestApi.Response(200, o);
+            }
+            case "delete" -> {
+                if (!lessons.remove(str(args, "id"))) yield RestApi.error(404, "no lesson '" + str(args, "id") + "'");
+                JsonObject o = new JsonObject();
+                o.addProperty("deleted", str(args, "id"));
+                yield new RestApi.Response(200, o);
+            }
+            case "seen" -> {
+                JsonObject o = new JsonObject();
+                o.addProperty("seen", lessons.markSeen());
+                yield new RestApi.Response(200, o);
+            }
+            case "feedback" -> new RestApi.Response(200,
+                    lessons.feedback(str(args, "id"), str(args, "feedback"), bool(args, "remember"), by(args)));
+            default -> RestApi.error(400, "unknown lessons op '" + op + "'");
+        };
+    }
+
+    private static String by(JsonObject args) {
+        return args.has("by") && !args.get("by").getAsString().isBlank() ? args.get("by").getAsString() : "panel";
     }
 
     private static boolean bool(JsonObject o, String key) {

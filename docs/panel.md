@@ -224,6 +224,25 @@ their names with markers.
 
 Settings under `map:` in the plugin's `config.yml`: `enabled` (default true) and `threads` (default 2).
 
+## Lessons
+
+A lesson is a short rule (at most 160 characters) that Claude reads in `get_context` at the start of every session
+on a server. Lessons apply as soon as they are saved; there is no approval step.
+
+- After an admin rejects a draft or reverts an edit on the panel, the panel asks "Do you want to give feedback on this
+  build?". The text (at most 300 characters) reaches Claude once, in `get_context` as `feedback`, with the draft or
+  entry id. With **Remember this for future builds** (ticked by default) it is also saved as a lesson. Skip asks
+  nothing more; rejects and reverts in the game or by Claude never ask.
+- Claude saves its own lessons with the `lesson` tool, which is not in the tool list Claude gets every session.
+- **Lessons** on a server's page lists them with where they came from (feedback, Claude or written there), who wrote
+  them and the build they came from. Every member sees them, and lessons nobody has seen yet are marked new until
+  someone opens the page. Admins and the owner add, edit and delete them.
+- A server keeps at most 12. A new lesson then replaces the oldest one Claude wrote; when people wrote every one,
+  Claude's is refused and a person's replaces the oldest.
+
+Lessons and pending feedback live in the plugin's `lessons.json`, beside `areas.json`. A plugin from before lessons
+answers the Lessons page with "too old"; update it with the jar from the panel.
+
 ## Drafts: approve edits before they are placed
 
 Turn on review in a server's `plugins/AIBuilder/config.yml` to keep Claude's edits out of the world until someone

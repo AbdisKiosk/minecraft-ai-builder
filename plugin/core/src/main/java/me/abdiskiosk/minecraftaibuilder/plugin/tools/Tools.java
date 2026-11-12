@@ -23,6 +23,7 @@ import me.abdiskiosk.minecraftaibuilder.common.SelectionInfo;
 import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
+import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
 import me.abdiskiosk.minecraftaibuilder.plugin.Decorator;
 import org.bukkit.Bukkit;
@@ -85,7 +86,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, player notes, server version.",
+                "Call first: players (position, facing, looked-at block), the caller's WorldEdit selection, markers, areas, player notes, lessons, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -196,6 +197,20 @@ public final class Tools {
         registry.register(new Tool("place_blueprint", "Paste a blueprint object, a saved name or a file at origin.",
                 schema("\"blueprint\":{\"type\":\"object\"},\"path\":{\"type\":\"string\"},\"name\":{\"type\":\"string\"},\"origin\":" + VEC + ",\"rotation\":{\"type\":\"integer\"}", "origin"),
                 a -> edit(a, service, parseOp("paste", a))).unlisted());
+        registry.register(new Tool("lesson", "Save a lesson every later session reads in get_context; entry=the history or draft id it comes from.",
+                schema("\"text\":{\"type\":\"string\"},\"entry\":{\"type\":\"string\"}", "text"),
+                a -> lesson(a, service)).unlisted());
+    }
+
+    private static ToolResult lesson(Args a, BuildService service) {
+        a.only("lesson", "text", "entry");
+        String entry = a.str("entry", null);
+        Lessons.Saved saved = service.lessons().add(a.str("text"), Lessons.CLAUDE,
+                entry == null || entry.isEmpty() ? List.of() : List.of(entry), "Claude");
+        JsonObject o = new JsonObject();
+        o.addProperty("saved", saved.lesson().id());
+        if (saved.replaced() != null) o.addProperty("replaced", saved.replaced().text());
+        return ToolResult.of(o);
     }
 
     // ---- handlers ----
@@ -299,6 +314,7 @@ public final class Tools {
             service.markers().takeAllNotes().forEach((player, list) -> list.forEach(n -> notes.add(player + ": " + n)));
         }
         if (!notes.isEmpty()) out.add("notes", notes);
+        service.lessons().addTo(out);
         return ToolResult.of(out);
     }
 

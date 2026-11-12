@@ -56,6 +56,7 @@ public final class BuildService {
     private final PluginConfig config;
     private final Path dataDir;
     private final Markers markers;
+    private final Lessons lessons;
     private final MemoryGuard memory;
     /** Large reads run one at a time, so the arrays of several checks never sit in the heap together. */
     private final Semaphore largeReads = new Semaphore(1, true);
@@ -76,6 +77,7 @@ public final class BuildService {
         this.config = config;
         this.dataDir = dataDir;
         this.markers = new Markers(dataDir);
+        this.lessons = new Lessons(dataDir);
         this.memory = new MemoryGuard(config == null ? 0 : config.minFreeMemoryMb() * 1_048_576L);
     }
 
@@ -94,6 +96,11 @@ public final class BuildService {
     /** Markers and notes set with /aibuilder mark and /aibuilder note. */
     public Markers markers() {
         return markers;
+    }
+
+    /** Lessons Claude reads every session, and feedback from the panel waiting for it. */
+    public Lessons lessons() {
+        return lessons;
     }
 
     /**

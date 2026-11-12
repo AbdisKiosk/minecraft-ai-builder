@@ -143,6 +143,40 @@ class RelayClientTest {
     }
 
     @Test
+    void servesLessonsAndKeepsFeedbackForClaude() throws Exception {
+        assertTrue(panel.hello().get("lessons").getAsBoolean());
+
+        JsonObject added = panel.request(frame("{\"t\":\"lessons\",\"op\":\"add\",\"args\":{\"text\":\"Roofs are dark_oak\",\"by\":\"panel: Ann\"}}"));
+        assertEquals(200, added.get("status").getAsInt(), added.toString());
+        JsonObject lesson = added.getAsJsonObject("body").getAsJsonObject("lesson");
+        assertEquals("manual", lesson.get("origin").getAsString());
+        assertEquals("panel: Ann", lesson.get("by").getAsString());
+        String id = lesson.get("id").getAsString();
+
+        JsonObject fb = panel.request(frame("{\"t\":\"lessons\",\"op\":\"feedback\",\"args\":{\"id\":\"d1\",\"feedback\":\"Too dark\",\"remember\":true}}"));
+        assertEquals(200, fb.get("status").getAsInt(), fb.toString());
+        assertEquals("feedback", fb.getAsJsonObject("body").getAsJsonObject("lesson").get("origin").getAsString());
+
+        JsonObject list = panel.request(frame("{\"t\":\"lessons\",\"op\":\"list\"}")).getAsJsonObject("body");
+        assertEquals(2, list.getAsJsonArray("lessons").size());
+        assertEquals(12, list.get("max").getAsInt());
+        assertEquals(2, panel.request(frame("{\"t\":\"lessons\",\"op\":\"seen\"}")).getAsJsonObject("body").get("seen").getAsInt());
+
+        JsonObject edited = panel.request(frame("{\"t\":\"lessons\",\"op\":\"edit\",\"args\":{\"id\":\"" + id + "\",\"text\":\"Roofs are spruce\"}}"));
+        assertEquals("Roofs are spruce", edited.getAsJsonObject("body").getAsJsonObject("lesson").get("text").getAsString());
+        assertEquals(200, panel.request(frame("{\"t\":\"lessons\",\"op\":\"delete\",\"args\":{\"id\":\"" + id + "\"}}")).get("status").getAsInt());
+        assertEquals(404, panel.request(frame("{\"t\":\"lessons\",\"op\":\"delete\",\"args\":{\"id\":\"" + id + "\"}}")).get("status").getAsInt());
+        assertEquals(400, panel.request(frame("{\"t\":\"lessons\",\"op\":\"add\",\"args\":{\"text\":\" \"}}")).get("status").getAsInt());
+        assertEquals(400, panel.request(frame("{\"t\":\"lessons\",\"op\":\"nope\"}")).get("status").getAsInt());
+
+        // Claude gets the feedback once, in get_context; the remembered lesson stays.
+        JsonObject context = new JsonObject();
+        service.lessons().addTo(context);
+        assertEquals("[\"d1: Too dark\"]", context.get("feedback").toString());
+        assertEquals("[\"Too dark\"]", context.get("lessons").toString());
+    }
+
+    @Test
     void reportsATokenThePanelRejects() throws Exception {
         RelayClient wrong = client("aibs_wrong");
         wrong.start();
