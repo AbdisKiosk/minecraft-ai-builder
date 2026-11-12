@@ -78,6 +78,8 @@ public final class AIBuilderPlugin extends JavaPlugin {
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
         accounts = new AccountCommands(this, service, () -> relay, getLogger());
+        org.bukkit.command.PluginCommand command = getCommand("aibuilder");
+        if (command != null) command.setTabCompleter(this);
         if (getServer().getPluginManager().isPluginEnabled("WorldGuard") && getConfig().getBoolean("worldguard.enabled", true)) {
             boolean protect = getConfig().getBoolean("worldguard.protect", false);
             try {
@@ -192,8 +194,9 @@ public final class AIBuilderPlugin extends JavaPlugin {
             return true;
         }
         if (!sender.hasPermission("aibuilder.admin")) {
-            sender.sendMessage("You need aibuilder.admin for this. Players with " + AccountCommands.PERMISSION
-                    + " can use /aibuilder link <code>, /aibuilder unlink and /aibuilder asset save <name> [description].");
+            sender.sendMessage(sender.hasPermission(AccountCommands.PERMISSION)
+                    ? "You can use /aibuilder link <code>, /aibuilder unlink, /aibuilder asset save <name> [description] and /aibuilder asset list."
+                    : "You need aibuilder.admin for this.");
             return true;
         }
         if (args.length > 0 && args[0].equalsIgnoreCase("stats")) {
@@ -227,6 +230,18 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage("Claude Code and scripts connect through the panel, with an access token from Connect Claude on this server's page.");
         }
         return true;
+    }
+
+    /** Only what the sender may run; see {@link Completions}. */
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (service == null) return List.of();
+        Player player = sender instanceof Player p ? p : null;
+        return Completions.complete(args, player != null, sender::hasPermission, () -> {
+            Markers markers = service.markers();
+            List<String> worlds = player != null ? List.of(player.getWorld().getName()) : markers.worlds();
+            return worlds.stream().flatMap(w -> markers.list(w).keySet().stream()).toList();
+        }, () -> drafts == null ? List.of() : drafts.openSummaries().stream().map(d -> d.get("world").getAsString()).toList());
     }
 
     /** mark, unmark, marks and note: how a player points at places and leaves word for Claude. */

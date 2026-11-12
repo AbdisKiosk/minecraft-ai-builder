@@ -41,9 +41,10 @@ combinations (reasoned through only: every new field and frame is additive, and 
 welcome refuses the in-game commands at once).
 
 **Known gaps:** anchors are not in `get_context` (its 30-asset listing is at 5,201 of 5,500 characters); the Place…
-dialog places by anchor position but cannot turn an asset (the draft import has no rotation); on a server with review on, an in-game save
-includes the open draft (as `save_blueprint` does); the plugin's "Promote again with skip unknown blocks" text also
-shows in the Place… dialog.
+dialog places by anchor position but cannot turn an asset (the draft import has no rotation). Closed since the first
+update: the 3D anchor marker and click-to-pick (`anchor-ui`); an in-game save reads the world without the open draft,
+the unknown-blocks refusal names the "leave out blocks" checkbox of both dialogs, and players have `/aibuilder asset
+list` and tab completion (`ingame-polish`); the review findings fixed in `0bbe41a`.
 
 **Old intro follows.** This is a return update for the session that finished phase 2, not an introduction to the
 project. Phase 2 is merged. Phase 3 has started with the `.schem` upload; the other four phase-3 bullets are still a

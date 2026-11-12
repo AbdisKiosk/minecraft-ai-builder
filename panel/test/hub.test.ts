@@ -185,6 +185,7 @@ test('the welcome offers account links; link frames are checked before any looku
     // Without object storage there is no library to save into; said before the link is looked up.
     const save = await answerTo(a, { t: 'player_asset', id: 4, op: 'check', player, args: { name: 'window' } });
     assert.equal(save.status, 503);
+    assert.equal((await answerTo(a, { t: 'player_asset', id: 100, op: 'list', player, args: {} })).status, 503);
     for (let id = 5; id < 23; id++) await answerTo(a, { t: 'link', id, code: '?', player });
     const limited = await answerTo(a, { t: 'link', id: 23, code: '?', player });
     assert.equal(limited.status, 429, 'twenty link attempts a minute per server');

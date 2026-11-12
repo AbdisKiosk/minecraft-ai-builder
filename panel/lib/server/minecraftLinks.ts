@@ -208,22 +208,35 @@ export async function linkedBuilder(deps: LinkDeps, server: string, player: Play
   }
   const role = await deps.roleOf(user, server);
   if (!atLeast(role, LINK_ROLE)) {
-    throw new LinkError(403, `your linked panel account needs the ${LINK_ROLE} role on this server to save assets; yours is ${role ?? 'none'}`);
+    throw new LinkError(403, `your linked panel account needs the ${LINK_ROLE} role on this server to use its assets here; `
+      + `yours is ${role ?? 'none'}, so ask the server's owner`);
   }
   return user;
 }
 
+/** What a player may do from the game: list (/aibuilder asset list), and check then save (/aibuilder asset save). */
+const PLAYER_OPS = ['list', 'check', 'save'];
+
 /**
- * An in-game asset request ({op: check|save, player, args}) from `server`'s socket. It is authorized by the player's
- * link and role on that server, not by a tool call's grant, and goes through the same rules as Claude's saves.
+ * An in-game asset request ({op: list|check|save, player, args}) from `server`'s socket. It is authorized by the
+ * player's link and role on that server, not by a tool call's grant, and goes through the same rules as Claude's
+ * calls: list answers what get_context lists (own assets, then those shared with this server), never a download.
  */
 export async function playerAssetRequest(deps: LinkDeps, assets: (user: number) => AssetDeps, server: string,
   mc: string | null, frame: Json, sign: (key: string) => Promise<string>): Promise<Json> {
-  if (frame.op !== 'check' && frame.op !== 'save') throw new LinkError(400, `unknown in-game asset operation '${String(frame.op)}'`);
+  if (!PLAYER_OPS.includes(frame.op)) throw new LinkError(400, `unknown in-game asset operation '${String(frame.op)}'`);
   const player = checkPlayer(frame.player);
   const user = await linkedBuilder(deps, server, player);
   if (player.name) await deps.store.rename(player.uuid, player.name).catch(() => {});
-  return assetRequest(assets(user), user, server, mc, { op: frame.op, args: frame.args ?? {} }, sign);
+  try {
+    return await assetRequest(assets(user), user, server, mc, { op: frame.op, args: frame.args ?? {} }, sign);
+  } catch (e) {
+    // Claude renames on its own; a player is told how.
+    if (e instanceof AssetError && e.status === 409 && e.message.startsWith('you already have an asset named')) {
+      throw new AssetError(409, `${e.message}; pick another name, or rename or delete that one on the panel`);
+    }
+    throw e;
+  }
 }
 
 /** The status and body a link or in-game asset failure answers with; null for an unexpected error. */

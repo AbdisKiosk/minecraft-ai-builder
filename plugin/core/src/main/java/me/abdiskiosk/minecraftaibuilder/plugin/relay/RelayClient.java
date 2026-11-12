@@ -162,23 +162,31 @@ public final class RelayClient implements BuildService.JobListener {
 
     private void connect() {
         if (stopped) return;
+        Listener listener = new Listener();
         http.newWebSocketBuilder()
                 .header("Authorization", "Bearer " + token)
                 .connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(uri, new Listener())
+                .buildAsync(uri, listener)
                 .whenComplete((ws, error) -> {
                     if (error != null) {
                         failed(describe(error));
                         return;
                     }
+                    boolean closedEarly;
                     synchronized (this) {
                         socket = ws;
                         sendChain = CompletableFuture.completedFuture(null);
                         backoff = 1;
+                        closedEarly = listener.closedEarly;
                     }
                     lastHeard = System.currentTimeMillis();
                     if (!status.startsWith("connected")) logger.info("Relay connected to " + uri);
                     status = "connected to " + uri;
+                    // The panel closed it (a rejected token, say) before this ran, when closed() could not tell it was ours.
+                    if (closedEarly) {
+                        closed(ws, listener.earlyCode, listener.earlyReason);
+                        return;
+                    }
                     sendHello();
                 });
     }
@@ -412,12 +420,12 @@ public final class RelayClient implements BuildService.JobListener {
 
     /**
      * The library of the panel account the player is linked to, as {@link AssetLibrary#saveRegion} takes it: only
-     * {@code check} and {@code save}. The panel finds the account from the link; the plugin never names one. Throws at
-     * once when this panel cannot take in-game saves, before anything is read.
+     * {@code list}, {@code check} and {@code save}. The panel finds the account from the link; the plugin never names
+     * one. Throws at once when this panel cannot take in-game requests, before anything is read.
      */
     public BiFunction<String, JsonObject, JsonObject> playerLibrary(UUID player, String name) {
         playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
-        if (!assets) throw new EditException("the panel has no asset library (it needs object storage configured)");
+        if (!assets) throw new EditException("the panel has no asset library yet (it needs object storage); ask its owner to set one up");
         return (op, args) -> {
             JsonObject frame = playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
             frame.addProperty("op", op);
@@ -443,7 +451,8 @@ public final class RelayClient implements BuildService.JobListener {
             return answered(frame, ACCOUNT_TIMEOUT);
         } catch (IOException e) {
             String msg = e.getMessage();
-            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : "panel: " + msg);
+            // The panel's own words tell the player what to do; a dropped or silent connection is worth another try.
+            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : msg + "; try again in a moment");
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EditException("interrupted");
@@ -709,6 +718,10 @@ public final class RelayClient implements BuildService.JobListener {
 
     private final class Listener implements WebSocket.Listener {
         private final StringBuilder buffer = new StringBuilder();
+        /** A close that came before connect() made this socket current; guarded by the RelayClient. */
+        private boolean closedEarly;
+        private int earlyCode;
+        private String earlyReason;
 
         @Override
         public void onOpen(WebSocket ws) {
@@ -744,6 +757,13 @@ public final class RelayClient implements BuildService.JobListener {
 
         @Override
         public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
+            synchronized (RelayClient.this) {
+                if (socket != ws && !closedEarly && !stopped) {
+                    closedEarly = true;
+                    earlyCode = code;
+                    earlyReason = reason;
+                }
+            }
             closed(ws, code, reason);
             return null;
         }

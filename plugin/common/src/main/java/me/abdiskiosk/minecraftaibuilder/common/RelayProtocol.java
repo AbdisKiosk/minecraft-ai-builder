@@ -48,11 +48,12 @@ package me.abdiskiosk.minecraftaibuilder.common;
  * <pre>
  * plugin → panel  {"t":"link","id":6,"code":"ABCD-EFGH","player":{"uuid":"...","name":"Alex"}}
  *                 {"t":"unlink","id":7,"player":{"uuid":"...","name":"Alex"}}
- *                 {"t":"player_asset","id":8,"op":"check|save","player":{"uuid":"...","name":"Alex"},"args":{...}}
+ *                 {"t":"player_asset","id":8,"op":"list|check|save","player":{"uuid":"...","name":"Alex"},"args":{...}}
  * panel → plugin  {"t":"answer","id":6,"status":200,"body":{"linked":true,"already":false}}
  * </pre>
- * player_asset takes the args of the asset frame's check and save. An older panel sends no "links" and the plugin then
- * sends none of these frames.
+ * player_asset takes the args of the asset frame's list, check and save and answers as they do (never get: a player
+ * cannot download through it). An older panel sends no "links" and the plugin then sends none of these frames; a panel
+ * from before op "list" answers it with a 400 "unknown in-game asset operation", which the plugin explains.
  *
  * Without a welcome that says {@code "archive":true}, the plugin keeps its entries and asks for nothing.
  *

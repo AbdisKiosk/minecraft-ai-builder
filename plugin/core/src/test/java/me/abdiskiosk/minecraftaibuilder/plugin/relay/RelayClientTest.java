@@ -406,7 +406,7 @@ class RelayClientTest {
 
         panel.send("{\"t\":\"welcome\",\"archive\":false,\"assets\":false,\"links\":true}"); // links, but no object storage
         settled();
-        assertEquals("the panel has no asset library (it needs object storage configured)", refused(new AccountCommands.Save("window", "")));
+        assertEquals("the panel has no asset library yet (it needs object storage); ask its owner to set one up", refused(new AccountCommands.Save("window", "")));
         assertEquals(0, reads.get());
     }
 
@@ -440,6 +440,52 @@ class RelayClientTest {
         assertTrue(perform(new AccountCommands.Save("window", "oak window")).endsWith("A poly2d selection saves its bounding box."));
     }
 
+    /** With review on, players see the world without the open draft, and so does what they save (as on the panel). */
+    @Test
+    void anInGameSaveReadsTheWorldNotTheOpenDraft() throws Exception {
+        fakeServer();
+        settled();
+        me.abdiskiosk.minecraftaibuilder.plugin.Drafts drafts = new me.abdiskiosk.minecraftaibuilder.plugin.Drafts(service,
+                new me.abdiskiosk.minecraftaibuilder.plugin.Drafts.Settings(true, 1000, 2, 1000),
+                new History.Settings(true, 1000, 10, 1 << 20, 4096, 1000), Logger.getAnonymousLogger());
+        service.setDrafts(drafts);
+        Vec3 at = new Vec3(0, 64, 0);
+        drafts.add("world", new me.abdiskiosk.minecraftaibuilder.common.Draft.Entry("build", "test", "Claude", 1,
+                new BlockDiff.Builder().change(at, "stone", "gold_block").build(), null));
+        Box box = Box.of(at, new Vec3(1, 64, 0));
+        assertEquals(List.of("gold_block", "stone"), List.of(service.read("world", box)), "Claude's reads include the draft");
+
+        selection = new SelectionInfo("world", "cuboid", box, 2, List.of());
+        java.util.concurrent.atomic.AtomicReference<String[]> saved = new java.util.concurrent.atomic.AtomicReference<>();
+        panel.playerHandler = f -> {
+            if (f.get("op").getAsString().equals("save")) {
+                saved.set(StateArrays.decode(java.util.Base64.getDecoder().decode(f.getAsJsonObject("args").get("data").getAsString()), 2));
+            }
+            return new JsonObject();
+        };
+        perform(new AccountCommands.Save("window", ""));
+        assertEquals(List.of("stone", "stone"), List.of(saved.get()), "the in-game save left the draft out");
+    }
+
+    @Test
+    void listsTheLinkedPlayersLibraryInGame() throws Exception {
+        settled();
+        panel.playerHandler = f -> frame("{\"assets\":[{\"name\":\"window\",\"size\":[3,4,1],\"description\":\"oak\"},"
+                + "{\"name\":\"tower\",\"size\":[9,30,9],\"description\":\"\",\"by\":\"sam\"}]}");
+        assertEquals("Your asset library:\n  window  3x4x1 - oak\n  tower  9x30x9  shared by sam", perform(new AccountCommands.ListAssets()));
+        JsonObject list = panel.playerFrames.poll(5, TimeUnit.SECONDS);
+        assertEquals(RelayProtocol.PLAYER_ASSET, list.get("t").getAsString());
+        assertEquals("list", list.get("op").getAsString());
+        assertEquals(ALEX.toString(), list.getAsJsonObject("player").get("uuid").getAsString());
+        assertFalse(list.has("assetKey") || list.has("user"), "authorized by the link: " + list);
+
+        // A panel from before in-game lists refuses the operation; the player is told what to do instead.
+        panel.playerStatus = 400;
+        panel.playerHandler = f -> frame("{\"error\":\"unknown in-game asset operation 'list'\"}");
+        assertEquals("This panel cannot list assets in game yet; see your library on the panel, or ask its owner to update it.",
+                refused(new AccountCommands.ListAssets()));
+    }
+
     @Test
     void anInGameSaveIsRefusedBeforeTheWorldIsRead() throws Exception {
         fakeServer();
@@ -447,7 +493,12 @@ class RelayClientTest {
         assertEquals("Make a WorldEdit selection first (//wand, or //pos1 and //pos2).", refused(new AccountCommands.Save("window", "")));
 
         selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 0, 0), new Vec3(199, 99, 199)), 4_000_000, List.of());
-        assertEquals("assets are limited to 2000000 blocks; save a smaller region", refused(new AccountCommands.Save("window", "")));
+        assertEquals("Your selection is 4,000,000 blocks; an asset holds at most 2,000,000. Select a smaller region.",
+                refused(new AccountCommands.Save("window", "")));
+        // Over max-read-volume: the read limit save_blueprint has applies here too, said in the player's terms.
+        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 0, 0), new Vec3(99, 29, 99)), 300_000, List.of());
+        assertEquals("Your selection is 300,000 blocks; this server saves at most 262,144 at once (limits.max-read-volume). "
+                + "Select a smaller region.", refused(new AccountCommands.Save("window", "")));
         assertTrue(panel.playerFrames.isEmpty(), "too large is said before asking the panel");
 
         // Not linked (or no quota, or a taken name): the panel says so before any chunk is loaded.
@@ -458,14 +509,6 @@ class RelayClientTest {
         assertTrue(refused(new AccountCommands.Save("window", "")).contains("/aibuilder link <code>"));
         assertEquals("check", panel.playerFrames.poll(5, TimeUnit.SECONDS).get("op").getAsString());
         assertTrue(panel.playerFrames.isEmpty(), "nothing is saved after a refused check");
-
-        // Over max-read-volume: the read limit save_blueprint has applies here too.
-        panel.playerStatus = 200;
-        panel.playerHandler = f -> new JsonObject();
-        selection = new SelectionInfo("world", "cuboid", Box.of(new Vec3(0, 0, 0), new Vec3(99, 29, 99)), 300_000, List.of());
-        assertTrue(refused(new AccountCommands.Save("window", "")).contains("max read is 262144"));
-        assertEquals("check", panel.playerFrames.poll(5, TimeUnit.SECONDS).get("op").getAsString());
-        assertTrue(panel.playerFrames.isEmpty());
         assertEquals(0, reads.get(), "no refused save read the world");
         assertTrue(Files.notExists(service.dataDir().resolve("blueprints/window.json")));
     }

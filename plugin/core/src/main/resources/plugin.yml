@@ -7,9 +7,9 @@ depend: [WorldEdit]
 softdepend: [FastAsyncWorldEdit, WorldGuard]
 commands:
   aibuilder:
-    description: Shows AIBuilder status and connection details; "stats" shows what MCP calls cost in tokens; mark, marks, unmark and note point Claude at places and leave it notes; draft approves or rejects edits waiting for review; link, unlink and asset save put WorldEdit selections in your panel asset library.
-    usage: /aibuilder [stats [reset] | mark <name> | unmark <name> | marks | note <text> | draft [approve|reject] [world] [force] | link <code> | unlink | asset save <name> [description]]
-# No command-wide permission: AIBuilderPlugin#onCommand asks for aibuilder.admin, except for link, unlink and asset save.
+    description: Shows AIBuilder status and connection details; "stats" shows what MCP calls cost in tokens; mark, marks, unmark and note point Claude at places and leave it notes; draft approves or rejects edits waiting for review; link, unlink, asset save and asset list put WorldEdit selections in your panel asset library and list it.
+    usage: /aibuilder [stats [reset] | mark <name> | unmark <name> | marks | note <text> | draft [approve|reject] [world] [force] | link <code> | unlink | asset save <name> [description] | asset list]
+# No command-wide permission: AIBuilderPlugin#onCommand asks for aibuilder.admin, except for link, unlink and asset.
 permissions:
   aibuilder.admin:
     default: op
@@ -17,5 +17,5 @@ permissions:
     description: See, approve and reject drafts with /aibuilder draft.
     default: op
   aibuilder.asset:
-    description: Link your Minecraft account to your panel account with /aibuilder link and unlink, and save WorldEdit selections to its asset library with /aibuilder asset save. The panel also wants the builder role on this server.
+    description: Link your Minecraft account to your panel account with /aibuilder link and unlink, save WorldEdit selections to its asset library with /aibuilder asset save, and list it with /aibuilder asset list. The panel also wants the builder role on this server.
     default: op

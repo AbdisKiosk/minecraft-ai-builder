@@ -340,8 +340,10 @@ public final class Drafts {
             if (!errors.isEmpty()) unknown.add(s);
         }
         if (!unknown.isEmpty() && !skipUnknown) {
-            throw new EditException(unknown.size() + " block states do not exist on this server: "
-                    + String.join(", ", unknown.stream().limit(20).toList()) + ". Promote again with skip unknown blocks.");
+            // Shown by the panel's Promote and Place dialogs alike; both name their checkbox "leave out blocks ...".
+            throw new EditException((unknown.size() == 1 ? "1 block state does" : unknown.size() + " block states do")
+                    + " not exist on this server: " + String.join(", ", unknown.stream().limit(20).toList())
+                    + (unknown.size() > 20 ? ", ..." : "") + ". Tick \"leave out blocks\" to place the rest without them.");
         }
         Blueprint bp = Blueprint.ofStates(sx, sy, sz, states, !air, unknown::contains);
         if (bp.cellCount() == 0) throw new EditException("nothing to place");

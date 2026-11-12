@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
-import { AssetError, MAX_ASSETS, type AssetRow, type Deps } from '../lib/server/assets.ts';
+import { AssetError, MAX_ASSETS, type AssetRow, type Deps, type SharedRow } from '../lib/server/assets.ts';
 import {
   AttemptLimit, CODE_TTL_MS, LinkError, MAX_CODES, MAX_LINKS, checkPlayer, failure, hashCode, issueCode, linkPlayer,
   listLinks, newCode, normalizeCode, playerAssetRequest, unlinkByUser, unlinkPlayer, type LinkDeps, type LinkStore,
@@ -196,6 +196,7 @@ function region() {
 
 function library(f: ReturnType<typeof fakes>) {
   const rows: AssetRow[] = [];
+  const shared: SharedRow[] = [];
   const blobs = new Map<string, Uint8Array>();
   const owners: number[] = [];
   const assets = (user: number): Deps => {
@@ -208,8 +209,8 @@ function library(f: ReturnType<typeof fakes>) {
         usage: async owner => ({ count: rows.filter(r => r.owner === owner).length, bytes: 0 }),
         async insert(row, check) { check(await this.usage(row.owner)); rows.push(row); },
         async update() {}, async remove() {}, async touch() {},
-        // An in-game save only checks and saves into the player's own library; nothing is shared here.
-        shares: async () => [], async share() {}, async unshare() {}, sharedWith: async () => [],
+        // In game a player lists, checks and saves; what others share with them is only listed.
+        shares: async () => [], async share() {}, async unshare() {}, sharedWith: async () => shared,
       },
       files: {
         async write(owner, id, name, bytes) { blobs.set(`${owner}/${id}/${name}`, bytes); },
@@ -230,7 +231,7 @@ function library(f: ReturnType<typeof fakes>) {
     playerAssetRequest(f.deps, assets, server, '1.21.4', { op, player, args }, async () => 'https://storage.example/x');
   const save = (server: string, name: string, extra = {}) =>
     call(server, 'save', { name, size: [1, 1, 1], data: region().toString('base64'), ...extra });
-  return { rows, owners, call, save };
+  return { rows, shared, owners, call, save };
 }
 
 test('an in-game save without a link fails and names the page and the command', async () => {
@@ -259,18 +260,37 @@ test('an in-game save goes to the linked account, on a server where it builds, w
   assert.deepEqual(saved, { saved: 'window', size: [1, 1, 1], blocks: 1, library: true });
   assert.equal(lib.rows[0].owner, 1, 'ownership comes from the link, never a frame field');
   assert.equal(lib.rows[0].mc, '1.21.4');
-  await assert.rejects(lib.call('srv', 'check', { name: 'window' }), /already have an asset named 'window'/);
+  await assert.rejects(lib.call('srv', 'check', { name: 'window' }), /already have an asset named 'window'; pick another name/);
   await assert.rejects(lib.save('srv', 'window'), /already have an asset named 'window'/);
-  await assert.rejects(lib.save('watch', 'door'), /needs the builder role on this server to save assets; yours is viewer/);
-  await assert.rejects(lib.save('elsewhere', 'door'), /yours is none/);
-  await assert.rejects(lib.call('srv', 'get', { name: 'window' }), /unknown in-game asset operation 'get'/, 'in game only checks and saves');
-  await assert.rejects(lib.call('srv', 'list', {}), /unknown in-game asset operation/);
+  await assert.rejects(lib.save('watch', 'door'), /needs the builder role on this server to use its assets here; yours is viewer/);
+  await assert.rejects(lib.save('elsewhere', 'door'), /yours is none, so ask the server's owner/);
+  await assert.rejects(lib.call('srv', 'get', { name: 'window' }), /unknown in-game asset operation 'get'/, 'in game never downloads');
+  await assert.rejects(lib.call('srv', 'delete', { name: 'window' }), /unknown in-game asset operation 'delete'/);
   for (let i = 1; i < MAX_ASSETS; i++) lib.rows.push({ ...lib.rows[0], id: `fill${i}`, name: `fill${i}` });
   await assert.rejects(lib.call('srv', 'check', { name: 'more' }), /library is full/);
   await assert.rejects(lib.save('srv', 'more'), /library is full/);
   // The role is checked on every save, not only when linking.
   f.roles.delete('1@srv');
   await assert.rejects(lib.save('srv', 'later'), /needs the builder role/);
+});
+
+test("an in-game list shows the linked account's own assets, then those shared with this server", async () => {
+  const f = fakes();
+  const lib = library(f);
+  await assert.rejects(lib.call('srv', 'list', {}), /not linked to a panel account/);
+  f.role(1, 'srv', 'builder');
+  f.role(1, 'watch', 'viewer');
+  await f.link('srv', await f.code(1));
+  assert.deepEqual(await lib.call('srv', 'list', {}), { assets: [] });
+  await lib.save('srv', 'window', { description: 'oak\nwindow' });
+  const other = { ...lib.rows[0], owner: 2, id: 'other1', description: '' };
+  lib.shared.push({ ...other, name: 'tower', ownerName: 'sam@example.com', via: ['srv'] },
+    { ...other, name: 'window', ownerName: 'sam', via: ['srv'] }, { ...other, name: 'wall', ownerName: 'kim', via: ['elsewhere'] });
+  assert.deepEqual(await lib.call('srv', 'list', {}), { assets: [
+    { name: 'window', size: [1, 1, 1], description: 'oak window' },
+    { name: 'tower', size: [1, 1, 1], description: '', by: 'sam' },
+  ] }, 'an own asset hides a shared one of the same name; one shared with another server is not listed');
+  await assert.rejects(lib.call('watch', 'list', {}), /needs the builder role/, 'the role is checked on this server for a list too');
 });
 
 test('the player name a server reports is kept up to date for the panel', async () => {
