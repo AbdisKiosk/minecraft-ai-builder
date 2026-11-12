@@ -12,6 +12,11 @@ export const MAX_ASSETS = 200;
 export const MAX_BYTES = 256 * 1024 ** 2;
 /** Saving from a server and placing into one need what promote needs there (app/api/promote/route.ts). */
 export const PROMOTE_ROLE: Role = 'builder';
+/**
+ * Sharing an asset with a server needs this role there, and so does using one shared with it: listing, placing and
+ * pasting it. The share counts only while the owner still has it too (AssetStore#sharedWith).
+ */
+export const SHARE_ROLE: Role = 'builder';
 /** Same as the plugin's saved blueprints (Tools#savedName), so Claude can paste an asset by name later. */
 export const NAME = /^[a-z0-9_-]{1,40}$/;
 export const MAX_DESCRIPTION = 1000;
@@ -55,6 +60,24 @@ export interface Asset {
 }
 
 export interface AssetRow extends Asset { owner: number }
+
+/** An asset in the library list: the user's own, or one shared with a server they build on. */
+export interface LibraryAsset extends Asset {
+  /** Only the owner shares, renames, describes or deletes it; others' assets are read-only. */
+  mine: boolean;
+  /** The owner's name, on another user's asset. */
+  owner?: string;
+  /** Own asset: the servers it is shared with. Another's: the servers the user builds on that it is shared with. */
+  shared: string[];
+}
+
+/** A server an asset is shared with, as its owner sees it. */
+export interface Share { server: string; name: string; created: number }
+export interface ShareRow extends Share { asset: string }
+/** Another user's asset, shared with servers the caller builds on (`via`). */
+export interface SharedRow extends AssetRow { ownerName: string; via: string[] }
+/** Narrows AssetStore#sharedWith to one server, asset name or asset id. */
+export interface SharedFilter { server?: string; name?: string; id?: string }
 export interface Usage { count: number; bytes: number }
 export type Changes = Partial<Pick<Asset, 'name' | 'description' | 'tags'>>;
 
@@ -71,8 +94,19 @@ export interface AssetStore {
   insert(row: AssetRow, check: (usage: Usage) => void): Promise<void>;
   /** A taken name is refused with a 409 AssetError. */
   update(owner: number, id: string, changes: Changes): Promise<void>;
+  /** Also removes the asset's shares. */
   remove(owner: number, id: string): Promise<void>;
   touch(owner: number, id: string): Promise<void>;
+  /** Every share of the owner's assets, with the server's name. */
+  shares(owner: number): Promise<ShareRow[]>;
+  /** Shares an asset with a server; sharing it again changes nothing. */
+  share(id: string, server: string, by: number): Promise<void>;
+  unshare(id: string, server: string): Promise<void>;
+  /**
+   * Other users' assets shared with servers where both `user` and the asset's owner have SHARE_ROLE or above, most
+   * recently used first, each with the owner's name and those servers (`via`).
+   */
+  sharedWith(user: number, filter?: SharedFilter): Promise<SharedRow[]>;
 }
 
 /** The asset files (R2). */
@@ -230,6 +264,7 @@ export const newId = () => {
 };
 
 const view = ({ owner: _owner, ...a }: AssetRow): Asset => a;
+const sharedView = ({ ownerName, via, ...r }: SharedRow): LibraryAsset => ({ ...view(r), mine: false, owner: ownerName, shared: via });
 
 /** The asset if `userId` owns it; otherwise 404, the same as for an asset that does not exist. */
 export async function owned(deps: Deps, userId: number, id: unknown): Promise<AssetRow> {
@@ -238,22 +273,45 @@ export async function owned(deps: Deps, userId: number, id: unknown): Promise<As
   return row;
 }
 
+/**
+ * The asset if `userId` owns it, or if it is shared with a server where they and its owner build (with `server`: that
+ * server); otherwise 404, the same as for an asset that does not exist. Only for reading and placing, never changes.
+ */
+export async function readable(deps: Deps, userId: number, id: unknown, server?: string): Promise<LibraryAsset & { row: AssetRow }> {
+  if (typeof id !== 'string' || !ID.test(id)) throw new AssetError(404, `no asset '${String(id)}'`);
+  const row = await deps.store.get(id);
+  if (row && row.owner === userId) return { ...view(row), mine: true, shared: [], row };
+  const shared = (await deps.store.sharedWith(userId, server === undefined ? { id } : { id, server }))
+    .find(r => r.id === id && r.owner !== userId);
+  if (!shared) throw new AssetError(404, `no asset '${id}'`);
+  return { ...sharedView(shared), row: shared };
+}
+
+/** The user's own assets, then those shared with servers they build on, with the quota of their own. */
 export async function listAssets(deps: Deps, userId: number) {
-  const rows = await deps.store.list(userId);
-  const assets = rows.filter(r => r.owner === userId).map(view);
+  const [rows, shares, others] = await Promise.all([deps.store.list(userId), deps.store.shares(userId), deps.store.sharedWith(userId)]);
+  const own = rows.filter(r => r.owner === userId);
+  const sharedTo = new Map<string, string[]>();
+  for (const s of shares) sharedTo.set(s.asset, [...sharedTo.get(s.asset) ?? [], s.server]);
+  const assets: LibraryAsset[] = [
+    ...own.map(r => ({ ...view(r), mine: true, shared: sharedTo.get(r.id) ?? [] })),
+    ...others.filter(r => r.owner !== userId).map(sharedView),
+  ];
   return {
     assets,
-    quota: { count: assets.length, bytes: assets.reduce((n, a) => n + a.bytes, 0), maxCount: MAX_ASSETS, maxBytes: MAX_BYTES },
+    quota: { count: own.length, bytes: own.reduce((n, a) => n + a.bytes, 0), maxCount: MAX_ASSETS, maxBytes: MAX_BYTES },
   };
 }
 
-export async function getAsset(deps: Deps, userId: number, id: unknown): Promise<Asset> {
-  return view(await owned(deps, userId, id));
+export async function getAsset(deps: Deps, userId: number, id: unknown): Promise<LibraryAsset> {
+  const { row: _row, ...asset } = await readable(deps, userId, id);
+  if (asset.mine) asset.shared = (await deps.store.shares(userId)).filter(s => s.asset === asset.id).map(s => s.server);
+  return asset;
 }
 
-/** The 3D view's blocks of an asset, parsed. */
+/** The 3D view's blocks of an asset the user owns or can use through a share, parsed. */
 export async function assetBlocks(deps: Deps, userId: number, id: unknown): Promise<unknown> {
-  const row = await owned(deps, userId, id);
+  const { row } = await readable(deps, userId, id);
   const gz = await deps.files.read(row.owner, row.id, 'blocks');
   if (!gz) throw new AssetError(410, 'the blocks of this asset are missing from storage');
   return JSON.parse(gunzipSync(gz).toString('utf8'));
@@ -343,17 +401,44 @@ export async function deleteAsset(deps: Deps, userId: number, id: unknown): Prom
   await deps.files.removeAll(userId, row.id);
 }
 
+// ---- sharing ----
+
+/** The servers the owner shared an asset with. */
+export async function listShares(deps: Deps, userId: number, id: unknown): Promise<{ shares: Share[] }> {
+  const row = await owned(deps, userId, id);
+  return { shares: (await deps.store.shares(userId)).filter(s => s.asset === row.id).map(({ asset: _asset, ...s }) => s) };
+}
+
+/**
+ * Shares an asset with a server: {server}. Only the owner, who needs SHARE_ROLE there, as do the members who use it.
+ * It stays the owner's asset and counts against the owner's quota alone. Answers with the asset's shares.
+ */
+export async function shareAsset(deps: Deps, userId: number, id: unknown, b: Json): Promise<{ shares: Share[] }> {
+  const row = await owned(deps, userId, id);
+  const server = checkServer(b.server);
+  await deps.requireRole(server, SHARE_ROLE);
+  await deps.store.share(row.id, server, userId);
+  return listShares(deps, userId, row.id);
+}
+
+/** Stops sharing an asset with a server; needs no role there, so an owner who left can still take it back. */
+export async function unshareAsset(deps: Deps, userId: number, id: unknown, server: unknown): Promise<void> {
+  const row = await owned(deps, userId, id);
+  await deps.store.unshare(row.id, checkServer(server));
+}
+
 /**
  * Places an asset into a draft on a server: {server, world, origin [x,y,z], air?, skipUnknown?}. Answers with the
  * import frame's reply, which names the draft. Nothing is placed in the world until that draft is approved.
  */
 export async function placeAsset(deps: Deps, userId: number, id: unknown, b: Json): Promise<Reply> {
-  const row = await owned(deps, userId, id);
   const server = checkServer(b.server);
   const world = checkWorld(b.world);
   const origin = ints(b.origin, 3);
   if (!origin) throw new AssetError(400, 'give origin as [x,y,z], the lowest corner');
   await deps.requireRole(server, PROMOTE_ROLE);
+  // The user's own asset, or one shared with this very server.
+  const { row, mine } = await readable(deps, userId, id, server);
   const region = await deps.files.read(row.owner, row.id, 'region');
   if (!region) throw new AssetError(410, 'the blocks of this asset are missing from storage');
   const reply = await deps.relay(server, {
@@ -362,7 +447,7 @@ export async function placeAsset(deps: Deps, userId: number, id: unknown, b: Jso
       air: b.air !== false, skipUnknown: b.skipUnknown === true, label: `asset ${row.name}`,
     },
   });
-  // Only orders the list Claude sees: the import already happened, so a failed touch must not fail it.
-  if (reply.status >= 200 && reply.status < 300) await deps.store.touch(userId, row.id).catch(() => {});
+  // Only orders the owner's list Claude sees: the import already happened, so a failed touch must not fail it.
+  if (mine && reply.status >= 200 && reply.status < 300) await deps.store.touch(userId, row.id).catch(() => {});
   return reply;
 }

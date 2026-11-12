@@ -3,8 +3,10 @@ import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import {
   AssetError, type AssetRow, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps, getAsset,
-  listAssets, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, solidBlocks, assetBlocks, updateAsset, viewerBlocks,
+  listAssets, listShares, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, shareAsset, solidBlocks, assetBlocks, unshareAsset,
+  updateAsset, viewerBlocks,
 } from '../lib/server/assets.ts';
+import { atLeast, type Role } from '../lib/server/roles.ts';
 import { decode } from '../lib/schematic.ts';
 
 /** What StateArrays.encode writes (palette + runs, gzipped), for a list of states in y, z, x order. */
@@ -38,9 +40,11 @@ const BOX = [10, 64, 20, 11, 65, 21];
 
 const user = (id: number) => id;
 
-/** In-memory MySQL, R2 and relay; `roles` is what each user is on each server. */
+/** In-memory MySQL, R2 and relay; `roles` is what each user is on each server ("server:user"). */
 function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'builder', 'a:2': 'builder' }) {
   const rows = new Map<string, AssetRow>();
+  const shares: { asset: string; server: string; by: number }[] = [];
+  const builds = (server: string, u: number) => atLeast(roles[`${server}:${u}`] as Role | undefined, 'builder');
   const blobs = new Map<string, Uint8Array>();
   const frames: { server: string; frame: any }[] = [];
   const checked: string[] = [];
@@ -65,9 +69,35 @@ function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'build
         if (r && r.owner === owner) rows.set(id, { ...r, ...changes });
       },
       async remove(owner, id) {
-        if (rows.get(id)?.owner === owner) rows.delete(id);
+        if (rows.get(id)?.owner !== owner) return;
+        rows.delete(id);
+        for (let i = shares.length - 1; i >= 0; i--) if (shares[i].asset === id) shares.splice(i, 1);
       },
       async touch() {},
+      shares: async owner => shares.filter(s => rows.get(s.asset)?.owner === owner)
+        .map(s => ({ asset: s.asset, server: s.server, name: `Server ${s.server}`, created: 0 })),
+      async share(asset, server, by) {
+        if (!shares.some(s => s.asset === asset && s.server === server)) shares.push({ asset, server, by });
+      },
+      async unshare(asset, server) {
+        const i = shares.findIndex(s => s.asset === asset && s.server === server);
+        if (i >= 0) shares.splice(i, 1);
+      },
+      // The SQL's rule: both the caller and the owner build on the server it is shared with.
+      async sharedWith(u, filter = {}) {
+        const out = new Map<string, AssetRow & { ownerName: string; via: string[] }>();
+        for (const s of shares) {
+          const r = rows.get(s.asset);
+          if (!r || r.owner === u || !builds(s.server, u) || !builds(s.server, r.owner)) continue;
+          if (filter.server !== undefined && s.server !== filter.server) continue;
+          if (filter.name !== undefined && r.name !== filter.name) continue;
+          if (filter.id !== undefined && r.id !== filter.id) continue;
+          const seen = out.get(r.id);
+          if (seen) seen.via.push(s.server);
+          else out.set(r.id, { ...r, ownerName: `User ${r.owner}`, via: [s.server] });
+        }
+        return [...out.values()];
+      },
     },
     files: {
       write: async (owner, id, name, bytes) => { blobs.set(`${owner}/${id}/${name}`, bytes); },
@@ -87,7 +117,7 @@ function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'build
     },
     mcVersion: async () => '1.21.4',
   };
-  return { deps, rows, blobs, frames, checked, as: (id: number) => { me = id; } };
+  return { deps, rows, blobs, frames, checked, shares, roles, as: (id: number) => { me = id; } };
 }
 
 const save = (deps: Deps, owner: number, name: string, extra: Record<string, unknown> = {}) =>
@@ -236,6 +266,74 @@ test('Save as asset names the 2,000,000-block and 5 MB limits and asks for a sma
   await assert.rejects(save(f.deps, user(1), 'dense', { box: [0, 0, 0, 199, 99, 99] }), (e: unknown) => e instanceof AssetError
     && e.status === 400 && /^the region's block data is 5\.00 MB compressed; an asset is at most 5 MB\. Select a smaller region\.$/.test(e.message));
   assert.equal(f.rows.size + f.blobs.size, 0);
+});
+
+test('an owner shares an asset with a server; builders there see, view and place it, read-only', async () => {
+  const f = fakes({ 'a:1': 'builder', 'a:2': 'builder', 'a:3': 'viewer', 'b:1': 'builder', 'b:2': 'builder', 'b:4': 'builder', 'c:1': 'viewer' });
+  const a = await save(f.deps, 1, 'stair');
+  f.checked.length = 0;
+  const { shares } = await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.deepEqual(shares, [{ server: 'a', name: 'Server a', created: 0 }]);
+  assert.deepEqual(f.checked, ['a:builder'], 'the owner must build there');
+  await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.equal(f.shares.length, 1, 'sharing again changes nothing');
+  assert.deepEqual(await listShares(f.deps, 1, a.id), { shares });
+  const mine = await listAssets(f.deps, 1);
+  assert.deepEqual(mine.assets.map(x => [x.name, x.mine, x.owner, x.shared]), [['stair', true, undefined, ['a']]]);
+  assert.equal(mine.quota.count, 1);
+
+  // A builder on a: listed read-only with the owner's name, no quota of theirs used; 3D view and place work.
+  f.as(2);
+  const theirs = await listAssets(f.deps, 2);
+  assert.deepEqual(theirs.assets.map(x => [x.id, x.mine, x.owner, x.shared]), [[a.id, false, 'User 1', ['a']]]);
+  assert.deepEqual(theirs.quota, { count: 0, bytes: 0, maxCount: MAX_ASSETS, maxBytes: MAX_BYTES });
+  assert.equal((await getAsset(f.deps, 2, a.id)).mine, false);
+  assert.deepEqual((await assetBlocks(f.deps, 2, a.id) as { palette: string[] }).palette, ['stone', 'air', 'oak_stairs[facing=east]']);
+  f.frames.length = 0;
+  await placeAsset(f.deps, 2, a.id, { server: 'a', world: 'world', origin: [0, 64, 0] });
+  assert.deepEqual(Buffer.from(f.frames[0].frame.args.data, 'base64'), encode(STATES), "the owner's region is placed");
+  // Not on b, where 2 builds but it is not shared.
+  await rejects(placeAsset(f.deps, 2, a.id, { server: 'b', world: 'world', origin: [0, 64, 0] }), 404);
+  assert.equal(f.frames.length, 1);
+  // Owner-only: no share, rename, describe or delete.
+  await rejects(shareAsset(f.deps, 2, a.id, { server: 'b' }), 404);
+  await rejects(unshareAsset(f.deps, 2, a.id, 'a'), 404);
+  await rejects(listShares(f.deps, 2, a.id), 404);
+  await rejects(updateAsset(f.deps, 2, a.id, { description: 'mine now' }), 404);
+  await rejects(deleteAsset(f.deps, 2, a.id), 404);
+  assert.equal(f.rows.get(a.id)?.description, '');
+  assert.equal(f.shares.length, 1);
+
+  // A viewer on a, and a builder on b only, see nothing.
+  for (const u of [3, 4]) {
+    f.as(u);
+    assert.deepEqual((await listAssets(f.deps, u)).assets, []);
+    await rejects(getAsset(f.deps, u, a.id), 404);
+    await rejects(assetBlocks(f.deps, u, a.id), 404);
+  }
+  f.as(3);
+  await rejects(placeAsset(f.deps, 3, a.id, { server: 'a', world: 'world', origin: [0, 64, 0] }), 403);
+
+  // Sharing needs builder on the target server: a viewer there and a non-member are refused.
+  f.as(1);
+  await rejects(shareAsset(f.deps, 1, a.id, { server: 'c' }), 403);
+  await rejects(shareAsset(f.deps, 1, a.id, { server: 'd' }), 404);
+  await rejects(shareAsset(f.deps, 1, a.id, {}), 400);
+
+  // An owner who stops building on a stops sharing it there.
+  f.roles['a:1'] = 'viewer';
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
+  f.roles['a:1'] = 'builder';
+
+  // Unsharing and deleting take it away.
+  await unshareAsset(f.deps, 1, a.id, 'a');
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
+  await rejects(assetBlocks(f.deps, 2, a.id), 404);
+  await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.equal((await listAssets(f.deps, 2)).assets.length, 1);
+  await deleteAsset(f.deps, 1, a.id);
+  assert.deepEqual(f.shares, []);
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
 });
 
 test('a failing usage update does not fail a place that happened', async () => {
