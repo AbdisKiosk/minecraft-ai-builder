@@ -281,6 +281,10 @@ public final class Lessons {
                     }
                     long time = o.has("time") ? o.get("time").getAsLong() : 0;
                     lastId = Math.max(lastId, time);
+                    // Two lessons added in one millisecond get time+1 as an id, so the time alone can repeat an id.
+                    if (id.startsWith("l")) {
+                        try { lastId = Math.max(lastId, Long.parseLong(id.substring(1), 36)); } catch (NumberFormatException ignored) { }
+                    }
                     lessons.add(new Lesson(id, text, origin, List.copyOf(entries), clean(str(o, "by"), MAX_BY), time,
                             o.has("seen") && o.get("seen").getAsBoolean(), o.has("updated") ? o.get("updated").getAsLong() : time));
                 }

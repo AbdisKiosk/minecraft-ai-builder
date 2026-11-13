@@ -5,6 +5,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonPrimitive;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.BlockCatalog;
 import me.abdiskiosk.minecraftaibuilder.common.BlockInfo;
 import me.abdiskiosk.minecraftaibuilder.common.BlockState;
@@ -25,7 +26,6 @@ import me.abdiskiosk.minecraftaibuilder.common.Terrain;
 import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import me.abdiskiosk.minecraftaibuilder.plugin.BuildService;
 import me.abdiskiosk.minecraftaibuilder.plugin.AssetLibrary;
-import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
 import me.abdiskiosk.minecraftaibuilder.plugin.History;
 import me.abdiskiosk.minecraftaibuilder.plugin.Lessons;
 import me.abdiskiosk.minecraftaibuilder.plugin.Markers;
@@ -74,7 +74,7 @@ public final class Tools {
             roof: region=[x1,y,z1,x2,y,z2] (wall footprint, y=eaves), stairs, style=gable|hip, along=x|z, overhang=1, gable=end-wall pattern, ridge
             tree: at, type=oak|birch|spruce|jungle|acacia|dark_oak|cherry|large_oak
             cylinder: base, radius, height, pattern, hollow, radius_z. sphere: center, radius, pattern, hollow, radius_y, radius_z. pyramid: base, size, pattern, hollow. line: from, to, pattern, thickness
-            paste: origin (min corner), rotation, and blueprint={palette:{"S":"stone_bricks","_":"air"},layers:[[row per z] per y]} (rows run along +x; "4S" repeats; '.' keeps the block; row "^" or "3^" repeats the row before, layer ["^"] the layer below), or name=saved, or path=absolute .json/.schem
+            paste: origin (min corner)+rotation or at (anchor)+facing, and blueprint={palette:{"S":"stone_bricks","_":"air"},layers:[[row per z] per y]} (rows run along +x; "4S" repeats; '.' keeps the block; row "^"/"3^" repeats the last row, layer ["^"] the one below), name=saved or path=absolute .json/.schem
             clone: region, to, rotation, flip=x|z, repeat, step=[dx,dy,dz], air
             foundation: region, pattern (ground up to region top). overlay: region, pattern, depth=1|raise. smooth: region, iterations. These see the ground as before the call
             light: region, block=torch; lights dark floors, runs last""";
@@ -84,6 +84,10 @@ public final class Tools {
     private static final int MAX_BLOCKS_PER_OP = 200_000;
     private static final int MAX_ROOF_SIDE = 256;
     private static final int MAX_LISTED_REGIONS = 30;
+    /** Block states a library paste names as left out; more only adds skipped_total. */
+    private static final int MAX_SKIPPED = 10;
+    /** Characters of one skipped state name in a result. */
+    private static final int MAX_SKIPPED_NAME = 80;
     private static final String TELL_PREFIX = "[AIBuilder] ";
     private static final Pattern SAVED_NAME = Pattern.compile("[a-z0-9_-]{1,40}");
 
@@ -92,7 +96,7 @@ public final class Tools {
 
     public static void registerAll(ToolRegistry registry, BuildService service) {
         registry.register(new Tool("get_context",
-                "Call first: players (position/facing/looked-at block), WorldEdit selection, markers, areas, regions, notes, lessons, assets, server version.",
+                "Call first: players (position/facing/looked-at block), selection, markers, areas, regions, notes, lessons, assets, server version.",
                 schema(""), a -> context(a, service)));
 
         registry.register(new Tool("block_info",
@@ -482,7 +486,17 @@ public final class Tools {
         BuildService.JobResult result = service.await(service.submit(a.caller(), ops));
         ToolResult out = jobJson(result, true);
         if (ambiguousCaller(a.caller())) out.data().addProperty("as", a.caller().name());
+        addSkipped(out.data(), a.skipped());
         return out;
+    }
+
+    /** What library pastes left out, capped: the result must not grow with the asset. */
+    static void addSkipped(JsonObject o, Set<String> skipped) {
+        if (skipped.isEmpty()) return;
+        JsonArray list = new JsonArray();
+        skipped.stream().sorted().limit(MAX_SKIPPED).forEach(list::add);
+        o.add("skipped", list);
+        if (skipped.size() > MAX_SKIPPED) o.addProperty("skipped_total", skipped.size());
     }
 
     private static ToolResult decorate(Args a, BuildService service) {
@@ -770,10 +784,15 @@ public final class Tools {
                 yield blocks(a);
             }
             case "paste", "place_blueprint" -> {
-                a.only("place_blueprint", "blueprint", "path", "name", "origin", "rotation");
+                a.only("place_blueprint", "blueprint", "path", "name", "origin", "rotation", "at", "facing");
                 int rotation = a.integer("rotation", 0);
                 if (rotation % 90 != 0) throw new EditException("rotation must be a multiple of 90");
-                yield new Op.Paste(blueprint(a), a.vec("origin"), rotation);
+                if (a.has("origin") == a.has("at")) throw new EditException("give exactly one of \"origin\" or \"at\"");
+                if (a.has("facing") && a.has("rotation")) throw new EditException("give \"facing\" or \"rotation\", not both");
+                if (a.has("facing") && !a.has("at")) throw new EditException("\"facing\" needs \"at\" (where the anchor goes)");
+                AssetLibrary.Asset source = blueprint(a);
+                if (a.has("origin")) yield new Op.Paste(source.blueprint(), a.vec("origin"), rotation);
+                yield source.anchor().paste(source.blueprint(), a.vec("at"), a.str("facing", null), rotation);
             }
             case "smooth" -> {
                 a.only("smooth", "region", "iterations");
@@ -935,7 +954,8 @@ public final class Tools {
         return origin.add(b.get(first).getAsInt(), b.get(first + 1).getAsInt(), b.get(first + 2).getAsInt());
     }
 
-    private static Blueprint blueprint(Args a) {
+    /** The blueprint a paste names; only library assets carry an anchor. */
+    private static AssetLibrary.Asset blueprint(Args a) {
         int given = (a.has("blueprint") ? 1 : 0) + (a.has("path") ? 1 : 0) + (a.has("name") ? 1 : 0);
         if (given != 1) throw new EditException("give exactly one of \"blueprint\", \"path\" or \"name\"");
         JsonObject json;
@@ -945,11 +965,14 @@ public final class Tools {
             String name = savedName(a.str("name"));
             AssetLibrary library = a.service().personalLibrary();
             if (!Files.isRegularFile(savedDir(a.service()).resolve(name + ".json")) && library != null) {
+                AssetLibrary.Asset asset;
                 try {
-                    return library.load(name, a.service().config().maxVolumePerOp());
+                    asset = library.load(name, a.service().config().maxVolumePerOp());
                 } catch (EditException e) {
                     throw new EditException("no local blueprint '" + name + "'; " + e.getMessage(), e);
                 }
+                // Skipped cells are kept, not removed, so the size and with it the anchor stay valid.
+                return new AssetLibrary.Asset(withoutUnknown(asset.blueprint(), name, a), asset.anchor());
             }
             json = readSavedBlueprint(name, a.service());
         } else {
@@ -958,7 +981,7 @@ public final class Tools {
                 json = readBlueprintFile(path);
             } else {
                 Schematic s = a.service().bridge().readSchematic(path, a.service().config().maxVolumePerOp());
-                return Blueprint.ofStates(s.sizeX(), s.sizeY(), s.sizeZ(), s.states(), true);
+                return new AssetLibrary.Asset(Blueprint.ofStates(s.sizeX(), s.sizeY(), s.sizeZ(), s.states(), true), Anchor.NONE);
             }
         }
         if (!json.has("palette") || !json.has("layers")) throw new EditException("blueprint needs palette and layers");
@@ -973,7 +996,36 @@ public final class Tools {
             for (JsonElement row : layer.getAsJsonArray()) rows.add(row.getAsString());
             layers.add(rows);
         }
-        return Blueprint.of(palette, layers);
+        return new AssetLibrary.Asset(Blueprint.of(palette, layers), Anchor.NONE);
+    }
+
+    /**
+     * A library asset may come from a newer Minecraft. Its states this server lacks keep what is there, as promote's
+     * skip unknown blocks does, and are named in the result; a blueprint Claude wrote still fails on them.
+     */
+    private static Blueprint withoutUnknown(Blueprint asset, String name, Args a) {
+        BlockCatalog catalog = a.service().bridge().catalog();
+        Set<String> unknown = new java.util.HashSet<>(), names = new java.util.TreeSet<>();
+        for (String state : asset.palette().values()) {
+            if (RegionCodec.isAir(state)) continue;
+            Set<String> errors = new java.util.HashSet<>();
+            me.abdiskiosk.minecraftaibuilder.common.BlockCheck.checkBlock(catalog, state, errors, new java.util.HashSet<>());
+            if (errors.isEmpty()) continue;
+            unknown.add(state);
+            // A missing block by its name, a bad property value by the whole state.
+            String type = state.indexOf('[') < 0 ? state : state.substring(0, state.indexOf('['));
+            String shown = catalog.info(type).isPresent() ? state : type;
+            // Cut, so a crafted asset cannot push the result past McpEndpoint.MAX_RESULT_CHARS after its edit ran.
+            names.add(shown.length() > MAX_SKIPPED_NAME ? shown.substring(0, MAX_SKIPPED_NAME - 3) + "..." : shown);
+        }
+        if (unknown.isEmpty()) return asset;
+        Blueprint kept = asset.without(unknown::contains);
+        if (kept.palette().values().stream().allMatch(RegionCodec::isAir)) {
+            throw new EditException("this server has none of the blocks of asset '" + name + "': "
+                    + String.join(", ", names.stream().limit(MAX_SKIPPED).toList()));
+        }
+        a.skipped().addAll(names);
+        return kept;
     }
 
     /** An absolute .json, .schem or .schematic path inside {@code safety.blueprint-dirs}, at most 5 MB. */
@@ -1001,7 +1053,8 @@ public final class Tools {
         return service.dataDir().resolve("blueprints");
     }
 
-    private static String savedName(String name) {
+    /** A saved blueprint's or asset's name; also checked by {@code /aibuilder asset save}. */
+    public static String savedName(String name) {
         if (!SAVED_NAME.matcher(name).matches()) throw new EditException("name must be 1-40 of a-z, 0-9, _ and -");
         return name;
     }
@@ -1034,11 +1087,7 @@ public final class Tools {
         if (description.length() > 1000) throw new EditException("description is longer than 1000 characters");
         AssetLibrary library = service.personalLibrary();
         if (library != null) {
-            if (box.volume() > 2_000_000) throw new EditException("assets are limited to 2000000 blocks; save a smaller region");
-            library.check(name); // quota/name failures before loading any chunks
-            byte[] data = service.reading(a.caller().world(), box,
-                    () -> StateArrays.encode(service.read(a.caller().world(), box)));
-            JsonObject result = library.save(name, description, box.sizeX(), box.sizeY(), box.sizeZ(), data);
+            JsonObject result = library.saveRegion(service, a.caller().world(), box, name, description);
             if (Files.isRegularFile(savedDir(service).resolve(name + ".json")))
                 result.addProperty("note", "a local blueprint has this name and takes precedence when pasting on this server");
             return ToolResult.of(result);

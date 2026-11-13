@@ -3,9 +3,12 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.Blueprint;
+import me.abdiskiosk.minecraftaibuilder.common.Box;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 
 import java.io.IOException;
 import java.net.URI;
@@ -25,7 +28,10 @@ import java.util.List;
 import java.util.function.BiFunction;
 import java.util.function.BooleanSupplier;
 
-/** Account-owned pieces, resolved through the current call's grant. Cache hits still require authorization. */
+/**
+ * Account-owned pieces (the caller's own, or shared with this server), resolved through the current call's grant.
+ * Cache hits still require authorization.
+ */
 public final class AssetLibrary {
     public static final int MAX_BYTES = 5 * 1024 * 1024;
     private static final long CACHE_BYTES = 128L * 1024 * 1024;
@@ -59,26 +65,55 @@ public final class AssetLibrary {
         return out;
     }
 
-    public void check(String name) { request.apply("check", named(name)); }
+    /** The most blocks an asset holds (the panel's MAX_REGION_VOLUME). */
+    public static final long MAX_VOLUME = 2_000_000;
+    public static final int MAX_DESCRIPTION = 1000;
 
-    public JsonObject save(String name, String description, int sx, int sy, int sz, byte[] data) {
+    /**
+     * Saves a region into the calling account's library as Claude sees it (with an open draft laid over the world): see
+     * {@link #saveRegion(BiFunction, BuildService, String, Box, String, String, boolean)}.
+     */
+    public JsonObject saveRegion(BuildService service, String world, Box box, String name, String description) {
+        return saveRegion(request, service, world, box, name, description, true);
+    }
+
+    /**
+     * Saves a region of the world as an asset, the one way both {@code save_blueprint} and {@code /aibuilder asset save}
+     * do it: refuses a region over {@link #MAX_VOLUME} blocks, asks the panel to check the name and quota before any
+     * chunk is loaded, reads through {@link BuildService#reading} (so the memory rules apply and {@code max-read-volume}
+     * limits it), and sends at most {@link #MAX_BYTES} of region data.
+     *
+     * @param request whose library: the call's grant (save_blueprint) or the player's link (in game)
+     * @param withDraft with review on, lay the open draft over the world, as Claude's reads do (save_blueprint); false
+     *                  saves the world as players see it (in game, like the panel's Save as asset)
+     */
+    public static JsonObject saveRegion(BiFunction<String, JsonObject, JsonObject> request, BuildService service, String world,
+                                        Box box, String name, String description, boolean withDraft) {
+        if (box.volume() > MAX_VOLUME) throw new EditException("assets are limited to " + MAX_VOLUME + " blocks; save a smaller region");
+        if (description.length() > MAX_DESCRIPTION) throw new EditException("description is longer than " + MAX_DESCRIPTION + " characters");
+        request.apply("check", named(name)); // quota/name failures before loading any chunks
+        byte[] data = service.reading(world, box, () -> StateArrays.encode(service.read(world, box, withDraft)));
         if (data.length > MAX_BYTES) throw new EditException("asset region is larger than 5 MB; save a smaller region");
         JsonObject args = named(name);
         args.addProperty("description", description);
         JsonArray size = new JsonArray();
-        size.add(sx); size.add(sy); size.add(sz);
+        size.add(box.sizeX()); size.add(box.sizeY()); size.add(box.sizeZ());
         args.add("size", size);
         args.addProperty("data", Base64.getEncoder().encodeToString(data));
         return request.apply("save", args);
     }
 
+    /** A library asset's blocks, with the anchor and facing its owner set (each null when not set). */
+    public record Asset(Blueprint blueprint, Anchor anchor) {}
+
     /** Serializes cache writes and eviction, not editing. No world chunks are read here. */
-    public synchronized Blueprint load(String name, long maxVolume) {
+    public synchronized Asset load(String name, long maxVolume) {
         CallContext.Identity caller = CallContext.identity();
         if (caller == null) throw new EditException("personal assets need an authenticated panel caller");
         JsonObject meta = request.apply("get", named(name));
-        String id, sha, url;
+        String id, sha, url, facing = null;
         int sx, sy, sz, length;
+        Vec3 anchor = null;
         try {
             id = meta.get("id").getAsString();
             sha = meta.get("sha256").getAsString();
@@ -87,6 +122,18 @@ public final class AssetLibrary {
             if (size.size() != 3) throw new IllegalStateException("size");
             sx = size.get(0).getAsInt(); sy = size.get(1).getAsInt(); sz = size.get(2).getAsInt();
             length = meta.get("bytes").getAsInt();
+            // Both optional: an older panel, or an asset whose owner set none.
+            if (meta.has("anchor")) {
+                JsonArray a = meta.getAsJsonArray("anchor");
+                if (a.size() != 3) throw new IllegalStateException("anchor");
+                anchor = new Vec3(a.get(0).getAsInt(), a.get(1).getAsInt(), a.get(2).getAsInt());
+                if (anchor.x() < 0 || anchor.y() < 0 || anchor.z() < 0 || anchor.x() >= sx || anchor.y() >= sy || anchor.z() >= sz)
+                    throw new IllegalStateException("anchor");
+            }
+            if (meta.has("facing")) {
+                facing = meta.get("facing").getAsString();
+                if (!Anchor.FACINGS.contains(facing)) throw new IllegalStateException("facing");
+            }
         } catch (RuntimeException e) { // missing fields, wrong types, numbers out of range
             throw new EditException("the panel sent invalid asset metadata");
         }
@@ -97,6 +144,8 @@ public final class AssetLibrary {
         long volume = (long) sx * sy * sz;
         if (volume > Math.min(maxVolume, 2_000_000)) throw new EditException("asset exceeds volume limit");
         if (length < 1 || length > MAX_BYTES) throw new EditException("asset region is larger than 5 MB");
+        // Keyed by the asset id and checksum of this authorized get, never the name: a replaced asset, or another owner's
+        // asset of the same name shared with this server, cannot reuse stale bytes.
         Path file = cache.resolve(Long.toString(caller.user())).resolve(id + "-" + sha + ".bin");
         try {
             byte[] data = null;
@@ -131,7 +180,8 @@ public final class AssetLibrary {
             }
             String[] states = StateArrays.decode(data, volume);
             if (states.length != volume) throw new EditException("asset data does not match its dimensions");
-            return Blueprint.ofStates(sx, sy, sz, states, false); // saved air places air, like local blueprints
+            // Saved air places air, like local blueprints.
+            return new Asset(Blueprint.ofStates(sx, sy, sz, states, false), new Anchor(anchor, facing));
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EditException("asset download interrupted");

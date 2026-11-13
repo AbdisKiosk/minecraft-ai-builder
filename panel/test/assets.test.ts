@@ -2,10 +2,13 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import {
-  AssetError, type AssetRow, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps, getAsset,
-  listAssets, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, solidBlocks, assetBlocks, updateAsset, viewerBlocks,
+  AssetError, type AssetRow, checkAnchor, checkFacing, checkName, checkQuota, checkTags, createAsset, decodeStates, deleteAsset, type Deps,
+  getAsset, listAssets, listShares, MAX_ASSETS, MAX_BYTES, MAX_REGION_BYTES, placeAsset, shareAsset, solidBlocks, assetBlocks,
+  unshareAsset, updateAsset, viewerBlocks,
 } from '../lib/server/assets.ts';
+import { atLeast, type Role } from '../lib/server/roles.ts';
 import { decode } from '../lib/schematic.ts';
+import { anchorColumns, row as fromDb } from '../lib/server/assetRow.ts';
 
 /** What StateArrays.encode writes (palette + runs, gzipped), for a list of states in y, z, x order. */
 function encode(states: string[]): Buffer {
@@ -38,9 +41,11 @@ const BOX = [10, 64, 20, 11, 65, 21];
 
 const user = (id: number) => id;
 
-/** In-memory MySQL, R2 and relay; `roles` is what each user is on each server. */
+/** In-memory MySQL, R2 and relay; `roles` is what each user is on each server ("server:user"). */
 function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'builder', 'a:2': 'builder' }) {
   const rows = new Map<string, AssetRow>();
+  const shares: { asset: string; server: string; by: number }[] = [];
+  const builds = (server: string, u: number) => atLeast(roles[`${server}:${u}`] as Role | undefined, 'builder');
   const blobs = new Map<string, Uint8Array>();
   const frames: { server: string; frame: any }[] = [];
   const checked: string[] = [];
@@ -65,9 +70,35 @@ function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'build
         if (r && r.owner === owner) rows.set(id, { ...r, ...changes });
       },
       async remove(owner, id) {
-        if (rows.get(id)?.owner === owner) rows.delete(id);
+        if (rows.get(id)?.owner !== owner) return;
+        rows.delete(id);
+        for (let i = shares.length - 1; i >= 0; i--) if (shares[i].asset === id) shares.splice(i, 1);
       },
       async touch() {},
+      shares: async owner => shares.filter(s => rows.get(s.asset)?.owner === owner)
+        .map(s => ({ asset: s.asset, server: s.server, name: `Server ${s.server}`, created: 0 })),
+      async share(asset, server, by) {
+        if (!shares.some(s => s.asset === asset && s.server === server)) shares.push({ asset, server, by });
+      },
+      async unshare(asset, server) {
+        const i = shares.findIndex(s => s.asset === asset && s.server === server);
+        if (i >= 0) shares.splice(i, 1);
+      },
+      // The SQL's rule: both the caller and the owner build on the server it is shared with.
+      async sharedWith(u, filter = {}) {
+        const out = new Map<string, AssetRow & { ownerName: string; via: string[] }>();
+        for (const s of shares) {
+          const r = rows.get(s.asset);
+          if (!r || r.owner === u || !builds(s.server, u) || !builds(s.server, r.owner)) continue;
+          if (filter.server !== undefined && s.server !== filter.server) continue;
+          if (filter.name !== undefined && r.name !== filter.name) continue;
+          if (filter.id !== undefined && r.id !== filter.id) continue;
+          const seen = out.get(r.id);
+          if (seen) seen.via.push(s.server);
+          else out.set(r.id, { ...r, ownerName: `User ${r.owner}`, via: [s.server] });
+        }
+        return [...out.values()];
+      },
     },
     files: {
       write: async (owner, id, name, bytes) => { blobs.set(`${owner}/${id}/${name}`, bytes); },
@@ -87,7 +118,7 @@ function fakes(roles: Record<string, string> = { 'a:1': 'builder', 'b:1': 'build
     },
     mcVersion: async () => '1.21.4',
   };
-  return { deps, rows, blobs, frames, checked, as: (id: number) => { me = id; } };
+  return { deps, rows, blobs, frames, checked, shares, roles, as: (id: number) => { me = id; } };
 }
 
 const save = (deps: Deps, owner: number, name: string, extra: Record<string, unknown> = {}) =>
@@ -130,6 +161,7 @@ test('the export data turns into the 3D view blocks, in the asset\'s own coordin
   assert.deepEqual([...diff.after].map(i => diff.palette[i]), STATES);
   assert.throws(() => decodeStates(encode(STATES), 7), /8 blocks/);
   assert.throws(() => decodeStates(gzipSync(Buffer.from('nope')), 8), AssetError);
+  assert.throws(() => decodeStates(encode(['stone[a=' + 'x'.repeat(260) + ']']), 1), /longer than 256/);
 });
 
 test('saving reads the region from the server and stores both files', async () => {
@@ -238,10 +270,137 @@ test('Save as asset names the 2,000,000-block and 5 MB limits and asks for a sma
   assert.equal(f.rows.size + f.blobs.size, 0);
 });
 
+test('an owner shares an asset with a server; builders there see, view and place it, read-only', async () => {
+  const f = fakes({ 'a:1': 'builder', 'a:2': 'builder', 'a:3': 'viewer', 'b:1': 'builder', 'b:2': 'builder', 'b:4': 'builder', 'c:1': 'viewer' });
+  const a = await save(f.deps, 1, 'stair');
+  f.checked.length = 0;
+  const { shares } = await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.deepEqual(shares, [{ server: 'a', name: 'Server a', created: 0 }]);
+  assert.deepEqual(f.checked, ['a:builder'], 'the owner must build there');
+  await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.equal(f.shares.length, 1, 'sharing again changes nothing');
+  assert.deepEqual(await listShares(f.deps, 1, a.id), { shares });
+  const mine = await listAssets(f.deps, 1);
+  assert.deepEqual(mine.assets.map(x => [x.name, x.mine, x.owner, x.shared]), [['stair', true, undefined, ['a']]]);
+  assert.equal(mine.quota.count, 1);
+
+  // A builder on a: listed read-only with the owner's name, no quota of theirs used; 3D view and place work.
+  f.as(2);
+  const theirs = await listAssets(f.deps, 2);
+  assert.deepEqual(theirs.assets.map(x => [x.id, x.mine, x.owner, x.shared]), [[a.id, false, 'User 1', ['a']]]);
+  assert.deepEqual(theirs.quota, { count: 0, bytes: 0, maxCount: MAX_ASSETS, maxBytes: MAX_BYTES });
+  assert.equal((await getAsset(f.deps, 2, a.id)).mine, false);
+  assert.deepEqual((await assetBlocks(f.deps, 2, a.id) as { palette: string[] }).palette, ['stone', 'air', 'oak_stairs[facing=east]']);
+  f.frames.length = 0;
+  await placeAsset(f.deps, 2, a.id, { server: 'a', world: 'world', origin: [0, 64, 0] });
+  assert.deepEqual(Buffer.from(f.frames[0].frame.args.data, 'base64'), encode(STATES), "the owner's region is placed");
+  // Not on b, where 2 builds but it is not shared.
+  await rejects(placeAsset(f.deps, 2, a.id, { server: 'b', world: 'world', origin: [0, 64, 0] }), 404);
+  assert.equal(f.frames.length, 1);
+  // Owner-only: no share, rename, describe or delete.
+  await rejects(shareAsset(f.deps, 2, a.id, { server: 'b' }), 404);
+  await rejects(unshareAsset(f.deps, 2, a.id, 'a'), 404);
+  await rejects(listShares(f.deps, 2, a.id), 404);
+  await rejects(updateAsset(f.deps, 2, a.id, { description: 'mine now' }), 404);
+  await rejects(deleteAsset(f.deps, 2, a.id), 404);
+  assert.equal(f.rows.get(a.id)?.description, '');
+  assert.equal(f.shares.length, 1);
+
+  // A viewer on a, and a builder on b only, see nothing.
+  for (const u of [3, 4]) {
+    f.as(u);
+    assert.deepEqual((await listAssets(f.deps, u)).assets, []);
+    await rejects(getAsset(f.deps, u, a.id), 404);
+    await rejects(assetBlocks(f.deps, u, a.id), 404);
+  }
+  f.as(3);
+  await rejects(placeAsset(f.deps, 3, a.id, { server: 'a', world: 'world', origin: [0, 64, 0] }), 403);
+
+  // Sharing needs builder on the target server: a viewer there and a non-member are refused.
+  f.as(1);
+  await rejects(shareAsset(f.deps, 1, a.id, { server: 'c' }), 403);
+  await rejects(shareAsset(f.deps, 1, a.id, { server: 'd' }), 404);
+  await rejects(shareAsset(f.deps, 1, a.id, {}), 400);
+
+  // An owner who stops building on a stops sharing it there.
+  f.roles['a:1'] = 'viewer';
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
+  f.roles['a:1'] = 'builder';
+
+  // Unsharing and deleting take it away.
+  await unshareAsset(f.deps, 1, a.id, 'a');
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
+  await rejects(assetBlocks(f.deps, 2, a.id), 404);
+  await shareAsset(f.deps, 1, a.id, { server: 'a' });
+  assert.equal((await listAssets(f.deps, 2)).assets.length, 1);
+  await deleteAsset(f.deps, 1, a.id);
+  assert.deepEqual(f.shares, []);
+  assert.deepEqual((await listAssets(f.deps, 2)).assets, []);
+});
+
 test('a failing usage update does not fail a place that happened', async () => {
   const f = fakes();
   const a = await save(f.deps, user(1), 'stair');
   f.deps.store.touch = async () => { throw new Error('database is read-only'); };
   const reply = await placeAsset(f.deps, user(1), a.id, { server: 'a', world: 'world', origin: [0, 64, 0] });
   assert.equal(reply.status, 200);
+});
+
+test('an anchor lies inside the asset and a facing is one of six; empty means none', () => {
+  assert.deepEqual(checkAnchor([0, 0, 0], [3, 2, 1]), [0, 0, 0]);
+  assert.deepEqual(checkAnchor([2, 1, 0], [3, 2, 1]), [2, 1, 0]);
+  for (const none of [undefined, null, '']) assert.equal(checkAnchor(none, [3, 2, 1]), null);
+  for (const bad of [[3, 0, 0], [0, 2, 0], [0, 0, 1], [-1, 0, 0], [0.5, 0, 0], [0, 0], '0 0 0', [0, 0, '0']]) {
+    assert.throws(() => checkAnchor(bad, [3, 2, 1]), (e: unknown) => e instanceof AssetError && e.status === 400
+      && e.message === 'anchor must be [x,y,z] inside the asset, from 0 0 0 to 2 1 0', JSON.stringify(bad));
+  }
+  for (const f of ['north', 'south', 'east', 'west', 'up', 'down']) assert.equal(checkFacing(f), f);
+  for (const none of [undefined, null, '']) assert.equal(checkFacing(none), null);
+  for (const bad of ['North', 'n', 'sideways', 90]) {
+    assert.throws(() => checkFacing(bad), /facing must be one of north, south, east, west, up, down/);
+  }
+});
+
+test('Save as asset stores an anchor and facing, refused before the server reads when out of bounds', async () => {
+  const f = fakes();
+  const plain = await save(f.deps, 1, 'plain');
+  assert.deepEqual([plain.anchor, plain.facing], [null, null], 'none unless given');
+  const a = await save(f.deps, 1, 'stair', { anchor: [1, 0, 1], facing: 'east' });
+  assert.deepEqual([a.anchor, a.facing], [[1, 0, 1], 'east']);
+  assert.deepEqual([f.rows.get(a.id)!.anchor, f.rows.get(a.id)!.facing], [[1, 0, 1], 'east']);
+  const before = f.frames.length;
+  await rejects(save(f.deps, 1, 'out', { anchor: [2, 0, 0] }), 400);
+  await rejects(save(f.deps, 1, 'tilted', { facing: 'northeast' }), 400);
+  assert.equal(f.frames.length, before);
+});
+
+test('Edit sets, changes and clears an anchor and facing on any asset', async () => {
+  const f = fakes();
+  const a = await save(f.deps, 1, 'stair');
+  const b = await updateAsset(f.deps, 1, a.id, { anchor: [1, 1, 0], facing: 'up' });
+  assert.deepEqual([b.anchor, b.facing, b.name], [[1, 1, 0], 'up', 'stair']);
+  const c = await updateAsset(f.deps, 1, a.id, { facing: null });
+  assert.deepEqual([c.anchor, c.facing], [[1, 1, 0], null], 'each is cleared on its own');
+  const d = await updateAsset(f.deps, 1, a.id, { anchor: null });
+  assert.deepEqual([d.anchor, d.facing], [null, null]);
+  await rejects(updateAsset(f.deps, 1, a.id, { anchor: [0, 2, 0] }), 400);
+  await rejects(updateAsset(f.deps, 1, a.id, { facing: 'left' }), 400);
+  f.as(2);
+  await rejects(updateAsset(f.deps, 2, a.id, { anchor: [0, 0, 0] }), 404);
+});
+
+test('a MySQL row reads its anchor only when all three cells are set, and writes NULL for none', () => {
+  const db = {
+    id: 'abcdefghijkm', user_id: 1, name: 'w', description: '', tags: '["oak"]', size_x: 3, size_y: 2, size_z: 1,
+    block_count: 4, mc_version: '1.21.4', bytes: '10', created_at: new Date(1), updated_at: new Date(2),
+    anchor_x: null, anchor_y: null, anchor_z: null, facing: null,
+  };
+  const legacy = fromDb(db);
+  assert.deepEqual([legacy.anchor, legacy.facing, legacy.tags, legacy.bytes], [null, null, ['oak'], 10]);
+  const set = fromDb({ ...db, anchor_x: 2, anchor_y: 1, anchor_z: 0, facing: 'west' });
+  assert.deepEqual([set.anchor, set.facing], [[2, 1, 0], 'west']);
+  assert.equal(fromDb({ ...db, anchor_x: 2, anchor_y: null, anchor_z: 0 }).anchor, null);
+  assert.equal(fromDb({ ...db, facing: 'sideways' }).facing, null);
+  assert.deepEqual(anchorColumns({ anchor: null, facing: null }), [null, null, null, null]);
+  assert.deepEqual(anchorColumns({ anchor: [2, 1, 0], facing: 'down' }), [2, 1, 0, 'down']);
 });

@@ -5,7 +5,8 @@ its own. The library lives on the panel and belongs to the account, so the asset
 Claude uses an asset through the existing `paste` op by name; no new tool is added.
 
 Status: phases 1 and 2 are built (see "Assets" in `panel.md`); the deviations from this plan are listed under phase 2.
-Phase 3 is a plan.
+Phase 3 is built (see "Upload a .schem", "Assets", "Anchor and facing", "Share an asset with a server" and "Save
+assets in game" in `panel.md`); what is left open is listed in `asset-library-phase3-return-handoff.md`.
 
 ## What exists today
 - **Saved blueprints:** `save_blueprint` writes a region to `plugins/AIBuilder/blueprints/<name>.json` on that one
@@ -51,13 +52,28 @@ Built with these deviations:
 
 ## Phase 3: making assets fit
 - **Anchor and facing:** store which block is the attachment point and which way the asset faces, so Claude can rotate
-  a window onto any wall instead of guessing from the min corner.
+  a window onto any wall instead of guessing from the min corner. Built: nullable `anchor_x/y/z` and six-way `facing`
+  (migration `007_asset_anchor.sql`, both NULL for older and uploaded assets), set on Save as asset and Edit, and
+  `paste` `at` + `facing` (`common/Anchor.java`). Gap: only the four horizontal facings turn; an `up`/`down` asset
+  pastes only facing its own way, since `Blueprint` has no vertical flip. The 3D view marks the anchor and facing,
+  Edit picks the anchor with a click there, and Place… takes the anchor's position, but does not turn the asset (the
+  draft import has no rotation).
 - **Version mismatch:** an asset saved on 1.21 and pasted on 1.8 goes through the existing unknown-block handling. The
-  result reports what was skipped.
-- **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. This needs a link between a Minecraft
-  player and a panel account, which does not exist yet.
-- **`.schem` upload** on the Library page.
-- **Sharing an asset with a server** so all its members can use it.
+  result reports what was skipped. Built, report-only (see "Assets" in `panel.md`): Place… warns before a newer asset
+  goes to an older server and lists the states the import left out; `paste name=` of a library asset leaves out the
+  states the server lacks and names them in `skipped`. Nothing is remapped, so a state that exists on both versions
+  with a changed meaning is not detected.
+- **Save in game:** `/aibuilder asset save <name>` from a WorldEdit selection. Built, with the account link it needed
+  (see "Save assets in game" in `panel.md`): a global link from a player UUID to one panel account, made with a
+  one-time code from the panel and `/aibuilder link <code>`, and checked against the builder role on the saving server
+  every time. The save shares `save_blueprint`'s code path (`AssetLibrary.saveRegion`) and the panel's asset rules;
+  the in-game frames (`link`, `unlink`, `player_asset`) are authorized by the link, not by a tool call's grant.
+- **`.schem` upload** on the Library page. Built: Sponge versions 2 and 3, parsed on the panel
+  (`lib/server/schem.ts`) and saved through the same path as every other asset; only the blocks are kept.
+- **Sharing an asset with a server** so all its members can use it. Built for members with the builder role or above
+  (viewers cannot use it), while the owner is a builder there too; ownership and quota stay the owner's. `paste name=`
+  prefers the caller's own asset and refuses a name that several owners shared, naming them (see "Share an asset with
+  a server" in `panel.md`). Migration `008_asset_shares.sql`.
 
 ## Tests and limits
 - **Panel:** `npm test` cases for quota, ownership (one user cannot read another's asset) and the routes.

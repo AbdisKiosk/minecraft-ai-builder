@@ -1,16 +1,22 @@
-// The 3D view: EngineHub's schematic viewer, with the changes marked on top and a click to inspect a block.
-// Loaded only when "3D" is picked, since it brings Babylon.js.
+// The 3D view: EngineHub's schematic viewer, with the changes marked on top, an asset's anchor and facing, and a click
+// to inspect a block. Loaded only when "3D" is picked, since it brings Babylon.js.
 import { renderSchematic, type SchematicHandles } from '@enginehub/schematicwebviewer';
-import { type ArcRotateCamera, Color3, EngineStore, InstancedMesh, Matrix, MeshBuilder, type Scene, StandardMaterial } from '@babylonjs/core';
+import { type ArcRotateCamera, Color3, Color4, EngineStore, InstancedMesh, Matrix, Mesh, MeshBuilder, type Scene, StandardMaterial, Vector3 } from '@babylonjs/core';
+import { anchorInside, type Cell, FACING_STEP } from './anchor';
 import { cells, type Diff, type Kind, toSchematic, type View } from './schematic';
 import { modelOverrides } from './modelResources';
+import type { Facing } from './types';
 
 // The same colours as IsoRenderer and the legend.
 const BACKGROUND = 0x1E2228;
 const MARK: Record<Kind, string> = { ADDED: '#3FD16B', REMOVED: '#E5484D', CHANGED: '#F2C94C' };
+// An asset's anchor cell and facing arrow: a colour none of the change marks use.
+const ANCHOR = '#38BDF8';
 
 export interface Picked {
   pos: [number, number, number];
+  /** The same block from the box's lowest corner (an asset's own coordinates). */
+  cell: Cell;
   before: string;
   after: string;
   kind?: Kind;
@@ -19,6 +25,8 @@ export interface Picked {
 export interface Viewer {
   /** Draws a view; resolves once it shows. A later call replaces an earlier one still loading. */
   show(view: View): Promise<void>;
+  /** Marks an asset's anchor cell (null or outside the box: none) and draws an arrow the way it faces. */
+  setAnchor(cell: Cell | null, facing: Facing | null): void;
   dispose(): void;
 }
 
@@ -72,11 +80,55 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
 
   const scene = (): Scene => current!.handles.getEngine().scenes[0];
 
-  // The viewer centres the schematic on the origin, one unit per block.
-  const centre = (index: number) => {
-    const x = index % width, z = Math.floor(index / width) % length, y = Math.floor(index / (width * length));
-    return [x - width / 2 + 0.5, y - height / 2 + 0.5, z - length / 2 + 0.5];
-  };
+  // The viewer centres the schematic on the origin, one unit per block, with Minecraft's axes (+x east, +z south).
+  const at = (x: number, y: number, z: number): [number, number, number] =>
+    [x - width / 2 + 0.5, y - height / 2 + 0.5, z - length / 2 + 0.5];
+  const centre = (index: number) => at(index % width, Math.floor(index / (width * length)), Math.floor(index / width) % length);
+
+  let anchor: { cell: Cell | null; facing: Facing | null } = { cell: null, facing: null };
+  // The marker in the scene shown now.
+  let anchorMeshes: Mesh[] = [];
+
+  /**
+   * Draws the anchor marker into a scene and returns its meshes. They go in rendering group 1, drawn after the blocks
+   * with the depth cleared, so the marker shows even when the anchor cell is hidden inside the asset.
+   */
+  function drawAnchor(s: Scene): Mesh[] {
+    const meshes: Mesh[] = [];
+    const { facing } = anchor;
+    const cell = anchor.cell && anchorInside(anchor.cell, [width, height, length]) ? anchor.cell : null;
+    const add = (mesh: Mesh, alpha: number) => {
+      const material = new StandardMaterial(mesh.name, s);
+      material.emissiveColor = Color3.FromHexString(ANCHOR);
+      material.disableLighting = true;
+      material.alpha = alpha;
+      mesh.material = material;
+      mesh.isPickable = false;
+      mesh.renderingGroupId = 1;
+      meshes.push(mesh);
+    };
+    // Without an anchor the arrow starts at the middle of the asset's side it faces.
+    const from = cell ? new Vector3(...at(...cell)) : Vector3.Zero();
+    if (cell) {
+      const box = MeshBuilder.CreateBox('anchor-cell', { size: 1.06 }, s);
+      box.position.copyFrom(from);
+      add(box, 0.3);
+      box.enableEdgesRendering();
+      box.edgesWidth = 6;
+      box.edgesColor = Color4.FromHexString(ANCHOR + 'FF');
+    }
+    if (facing) {
+      const step = new Vector3(...FACING_STEP[facing]);
+      const half = cell ? 0.5 : (Math.abs(step.x) * width + Math.abs(step.y) * height + Math.abs(step.z) * length) / 2;
+      const start = from.add(step.scale(half)), neck = start.add(step.scale(1.4)), tip = start.add(step.scale(2));
+      add(MeshBuilder.CreateTube('anchor-shaft', { path: [start, neck], radius: 0.07, tessellation: 12, cap: Mesh.CAP_ALL }, s), 1);
+      add(MeshBuilder.CreateTube('anchor-head', {
+        path: [neck, tip], radiusFunction: i => i === 0 ? 0.25 : 0, tessellation: 16, cap: Mesh.CAP_START,
+      }, s), 1);
+    }
+    s.createOrUpdateSelectionOctree();
+    return meshes;
+  }
 
   function mark(s: Scene, view: View) {
     const byKind = new Map<Kind, number[]>();
@@ -126,6 +178,7 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
     const index = (y * length + z) * width + x;
     onPick({
       pos: [diff.origin[0] + x, diff.origin[1] + y, diff.origin[2] + z],
+      cell: [x, y, z],
       before: diff.palette[diff.before[index]],
       after: diff.palette[diff.after[index]],
       kind: diff.kinds.get(index),
@@ -166,10 +219,12 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
       return;
     }
     const s = handles.getEngine().scenes[0];
+    let marker: Mesh[];
     try {
       // The library's Intermediate performance preset makes every model/instance unpickable by default.
       for (const mesh of s.meshes) mesh.isPickable = mesh.isVisible && mesh.isEnabled();
       if (view.mode === 'changes') mark(s, view);
+      marker = drawAnchor(s);
       // Keep the camera where the user left it.
       if (current) {
         const was = scene().activeCamera as ArcRotateCamera, now = s.activeCamera as ArcRotateCamera;
@@ -189,6 +244,8 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
     canvas.addEventListener('pointerup', onUp);
     holder.replaceChildren(canvas);
     current = { canvas, handles };
+    // The old scene's marker went with that scene.
+    anchorMeshes = marker;
     onPick(null);
   }
 
@@ -199,6 +256,12 @@ export function createViewer(holder: HTMLElement, diff: Diff, jarUrl: string, on
       const next = loading.then(() => draw(view, mine));
       loading = next.catch(() => {});
       return next;
+    },
+    setAnchor(cell, facing) {
+      anchor = { cell, facing };
+      if (!current) return;
+      anchorMeshes.forEach(m => m.dispose(false, true));
+      anchorMeshes = drawAnchor(scene());
     },
     dispose() {
       disposed = true;

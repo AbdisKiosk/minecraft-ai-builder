@@ -225,22 +225,30 @@ class Builder:
         return self._queue("blocks", blocks=[list(i) for i in items], origin=_pos(origin) if origin else None)
 
     def paste(self, blueprint: dict | str | os.PathLike | None = None, origin: Vec | None = None,
-              rotation: int = 0, name: str | None = None):
+              rotation: int = 0, name: str | None = None, at: Vec | None = None, facing: str | None = None):
         """Queues a blueprint paste: a dict, a path, or name= of one saved with save_blueprint.
 
         A .json path is read here, so the file never has to reach the server's disk; a .schem/.schematic path
         is read by the server's WorldEdit, so it must be a file the server can see.
+
+        Give origin (the min corner after rotation) or at: where a library asset's anchor block goes. facing
+        ("north", "east", "south", "west", or the asset's own "up"/"down") turns an asset that has a stored facing,
+        instead of rotation. Without an anchor, at is the min corner.
         """
-        if origin is None:
-            raise AIBuilderError("paste needs an origin")
+        if (origin is None) == (at is None):
+            raise AIBuilderError("paste needs origin or at, not both")
+        if facing is not None and rotation:
+            raise AIBuilderError("paste takes facing or rotation, not both")
+        where = {"origin": _pos(origin)} if origin is not None else {"at": _pos(at)}
+        turn = {"facing": facing} if facing is not None else {"rotation": rotation}
         if name is not None:
-            return self._queue("paste", name=name, origin=_pos(origin), rotation=rotation)
+            return self._queue("paste", name=name, **where, **turn)
         if not isinstance(blueprint, dict):
             path = Path(blueprint)
             if path.suffix in (".schem", ".schematic"):
-                return self._queue("paste", path=str(path.resolve()), origin=_pos(origin), rotation=rotation)
+                return self._queue("paste", path=str(path.resolve()), **where, **turn)
             blueprint = json.loads(path.read_text())
-        return self._queue("paste", blueprint=blueprint, origin=_pos(origin), rotation=rotation)
+        return self._queue("paste", blueprint=blueprint, **where, **turn)
 
     def clone(self, region, to: Vec, rotation: int = 0, flip: str | None = None, repeat: int = 1,
               step: Vec | None = None, air: bool = False):

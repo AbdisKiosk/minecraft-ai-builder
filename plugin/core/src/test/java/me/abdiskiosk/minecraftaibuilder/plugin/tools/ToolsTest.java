@@ -387,6 +387,71 @@ class ToolsTest {
     }
 
     @Test
+    void pasteAtPutsTheAnchorThereAndFacingTurnsTheAsset() throws Exception {
+        // A 3x1x2 library asset (x, y, z) whose anchor is cell 2,0,0, facing north. Its bytes are already in the cache,
+        // so the library resolves it through "get" without a download.
+        // States the fake server knows, so the version-mismatch skip leaves them all in.
+        String S = "oak_stairs[facing=north]", P = "oak_stairs[facing=east]";
+        String[] states = {S, S, P, S, S, S};
+        byte[] data = StateArrays.encode(states);
+        String sha = java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data));
+        Files.createDirectories(dataDir.resolve("asset-cache/7"));
+        Files.write(dataDir.resolve("asset-cache/7/abcdefgh2345-" + sha + ".bin"), data);
+        String[] stored = {"[2,0,0]", "\"north\""};
+        service.setAssetLibrary(new AssetLibrary(dataDir, (op, args) -> JsonParser.parseString("{\"id\":\"abcdefgh2345\",\"sha256\":\"" + sha
+                + "\",\"bytes\":" + data.length + ",\"size\":[3,1,2],\"url\":\"http://127.0.0.1:1/unused\""
+                + (stored[0] == null ? "" : ",\"anchor\":" + stored[0]) + (stored[1] == null ? "" : ",\"facing\":" + stored[1]) + "}").getAsJsonObject()));
+        CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), () -> {
+            Op.Paste north = (Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10]}"));
+            assertEquals(new Vec3(8, 64, 10), north.origin());
+            assertEquals(0, north.rotation());
+            Op.Paste east = (Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"facing\":\"east\"}"));
+            assertEquals(90, east.rotation());
+            assertEquals(new Vec3(9, 64, 8), east.origin()); // the anchor turns to 1,0,2
+            Op.Paste batched = (Op.Paste) Tools.batchOps(args("{\"origin\":[100,0,0],\"ops\":[{\"op\":\"paste\",\"name\":\"window\","
+                    + "\"at\":[10,64,10],\"facing\":\"west\"}]}")).get(0);
+            assertEquals(new Vec3(110, 64, 10), batched.origin(), "at is an offset from the batch origin, like origin");
+            assertEquals(270, batched.rotation());
+            assertEquals("give \"facing\" or \"rotation\", not both",
+                    assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"east\",\"rotation\":90}"))).getMessage());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"up\"}")))
+                    .getMessage().startsWith("this asset faces north; paste turns only between north, south, east and west"));
+
+            // Saved before anchors: at is the minimum corner, and facing has nothing to turn from.
+            stored[0] = null; stored[1] = null;
+            assertEquals(new Vec3(10, 64, 10),
+                    ((Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"rotation\":90}"))).origin());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"east\"}")))
+                    .getMessage().startsWith("this blueprint has no stored facing; use origin and rotation"));
+
+            // A floor piece faces up: it turns with rotation, never with a horizontal facing.
+            stored[0] = "[1,0,1]"; stored[1] = "\"up\"";
+            assertEquals(new Vec3(9, 64, 9), ((Op.Paste) single("paste", args("{\"name\":\"window\",\"at\":[10,64,10],\"facing\":\"up\"}"))).origin());
+            assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"window\",\"at\":[0,0,0],\"facing\":\"south\"}")))
+                    .getMessage().startsWith("this asset faces up;"));
+            return null;
+        });
+    }
+
+    @Test
+    void pasteTakesOriginOrAtAndFacingOnlyWithAnAnchoredAsset() {
+        world.put(new Vec3(0, 64, 0), "stone");
+        call("save_blueprint", "{\"name\":\"hut-1\",\"region\":[0,64,0,1,64,0]}");
+        assertEquals("give exactly one of \"origin\" or \"at\"",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"origin\":[0,0,0],\"at\":[0,0,0]}"))).getMessage());
+        assertEquals("give exactly one of \"origin\" or \"at\"",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\"}"))).getMessage());
+        assertEquals("\"facing\" needs \"at\" (where the anchor goes)",
+                assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"origin\":[0,0,0],\"facing\":\"east\"}"))).getMessage());
+        // A server blueprint has no anchor: at places its minimum corner, and facing has nothing to turn from.
+        Op.Paste at = (Op.Paste) single("paste", args("{\"name\":\"hut-1\",\"at\":[5,70,5],\"rotation\":180}"));
+        assertEquals(new Vec3(5, 70, 5), at.origin());
+        assertEquals(180, at.rotation());
+        assertTrue(assertThrows(EditException.class, () -> single("paste", args("{\"name\":\"hut-1\",\"at\":[5,70,5],\"facing\":\"east\"}")))
+                .getMessage().startsWith("this blueprint has no stored facing"));
+    }
+
+    @Test
     void authenticatedSavesUseTheLibraryAndLocalNamesStillWin() throws IOException {
         java.util.List<String> operations = new java.util.ArrayList<>();
         service.setAssetLibrary(new AssetLibrary(dataDir, (op, data) -> {
@@ -479,6 +544,17 @@ class ToolsTest {
         // 30 x (name 40 + size 15 + description 80 + JSON punctuation and escapes) = 5,201 characters, about 1.5k tokens.
         assertEquals(5_201, added);
         assertTrue(added <= 5_500, "get_context's asset listing is capped at 5,500 characters; it was " + added);
+
+        // Shared assets as the panel sends them (assetRelay.ts): a 16-character owner in "by" and the description cut to
+        // 56 characters, so the worst case stays the same size.
+        for (com.google.gson.JsonElement e : assets) {
+            JsonObject a = e.getAsJsonObject();
+            a.addProperty("description", "\"quoted\" \\ " + "d".repeat(45));
+            a.addProperty("by", "o".repeat(16));
+        }
+        int shared = CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)),
+                () -> registry.call("get_context", new JsonObject()).data()).toString().length() - plain.toString().length();
+        assertEquals(added, shared, "a shared entry is no longer than an own one");
     }
 
     @Test
@@ -733,5 +809,86 @@ class ToolsTest {
         assertEquals(31, listed.size());
         assertTrue(listed.has("plot0"));
         assertEquals(10, listed.get("(more, use @name)").getAsInt());
+    }
+
+    /** A library whose one asset, "window", holds these states in a row along x, served over HTTP as a paste fetches it. */
+    private <T> T withAsset(String[] states, java.util.function.Supplier<T> work) throws Exception {
+        byte[] data = StateArrays.encode(states);
+        com.sun.net.httpserver.HttpServer storage = com.sun.net.httpserver.HttpServer.create(new java.net.InetSocketAddress("127.0.0.1", 0), 0);
+        storage.createContext("/asset", exchange -> {
+            exchange.sendResponseHeaders(200, data.length);
+            exchange.getResponseBody().write(data);
+            exchange.close();
+        });
+        storage.start();
+        try {
+            JsonObject meta = new JsonObject();
+            meta.addProperty("id", "abcdefgh2345");
+            meta.addProperty("sha256", java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(data)));
+            meta.addProperty("bytes", data.length);
+            meta.add("size", JsonParser.parseString("[" + states.length + ",1,1]"));
+            meta.addProperty("url", "http://127.0.0.1:" + storage.getAddress().getPort() + "/asset");
+            service.setAssetLibrary(new AssetLibrary(dataDir, (op, args) -> meta));
+            return CallContext.withIdentity(new CallContext.Identity(7, "a".repeat(64)), work);
+        } finally {
+            storage.stop(0);
+        }
+    }
+
+    @Test
+    void libraryPastesLeaveOutStatesThisServerLacksAndSayWhich() throws Exception {
+        // Saved on a newer server: a block this one lacks, and a property value it does not have.
+        String[] states = {"oak_stairs[facing=east]", "copper_bulb[lit=true]", "oak_stairs[facing=up]", "air", "copper_bulb[lit=false]"};
+        withAsset(states, () -> {
+            Args a = args("{\"name\":\"window\",\"origin\":[0,64,0]}");
+            Op.Paste paste = (Op.Paste) single("paste", a);
+            assertEquals(List.of("0,0,0=oak_stairs[facing=east]", "3,0,0=air"), cells(paste), "left-out cells keep what is there");
+            assertEquals(List.of("copper_bulb", "oak_stairs[facing=up]"), a.skipped().stream().sorted().toList(),
+                    "a missing block by name, a bad value by state");
+            // A blueprint Claude wrote is still refused as a whole.
+            String refused = error("build", "{\"ops\":[{\"op\":\"paste\",\"origin\":[0,64,0],"
+                    + "\"blueprint\":{\"palette\":{\"c\":\"copper_bulb\"},\"layers\":[[\"c\"]]}}]}");
+            assertTrue(refused.contains("unknown block 'copper_bulb'"), refused);
+            return null;
+        });
+    }
+
+    @Test
+    void aLongUnknownStateIsCutInTheSkippedList() throws Exception {
+        String longValue = "oak_stairs[facing=" + "x".repeat(3000) + "]";
+        withAsset(new String[]{"oak_stairs[facing=east]", longValue}, () -> {
+            Args a = args("{\"name\":\"window\",\"origin\":[0,64,0]}");
+            single("paste", a);
+            String shown = a.skipped().iterator().next();
+            assertEquals(80, shown.length());
+            assertTrue(shown.startsWith("oak_stairs[facing=xxx") && shown.endsWith("..."), shown);
+            return null;
+        });
+    }
+
+    @Test
+    void theSkippedListInAResultIsCapped() throws Exception {
+        String[] states = new String[14];
+        states[0] = "oak_stairs[facing=east]";
+        for (int i = 1; i < states.length; i++) states[i] = "new_block_" + (char) ('a' + i);
+        withAsset(states, () -> {
+            // Every paste of a batch adds to the call's list.
+            Args a = args("{\"ops\":[{\"op\":\"paste\",\"name\":\"window\",\"origin\":[0,64,0]},"
+                    + "{\"op\":\"paste\",\"name\":\"window\",\"origin\":[0,70,0]}]}");
+            assertEquals(2, Tools.batchOps(a).size());
+            JsonObject result = new JsonObject();
+            Tools.addSkipped(result, a.skipped());
+            assertEquals(10, result.getAsJsonArray("skipped").size());
+            assertEquals("new_block_b", result.getAsJsonArray("skipped").get(0).getAsString(), "sorted");
+            assertEquals(13, result.get("skipped_total").getAsInt());
+            JsonObject clean = new JsonObject();
+            Tools.addSkipped(clean, java.util.Set.of());
+            assertEquals("{}", clean.toString());
+            return null;
+        });
+        String[] none = {"copper_bulb", "air"};
+        String message = assertThrows(EditException.class, () -> withAsset(none,
+                () -> single("paste", args("{\"name\":\"window\",\"origin\":[0,64,0]}"))), "air alone is not a paste").getMessage();
+        assertEquals("this server has none of the blocks of asset 'window': copper_bulb", message);
     }
 }

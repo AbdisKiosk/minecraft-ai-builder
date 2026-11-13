@@ -275,25 +275,121 @@ not to a server, so they can be placed on every server where the user is a build
   panel reads the blocks through the same `draft export` frame as promote, so `promote.max-volume` limits it, and it
   saves the world as it is, not an open draft. A region that is only air is refused.
 - The Assets page shows each asset with its size, block count and the Minecraft version it was saved on, a 3D view in
-  the asset's own coordinates, and Edit, Delete and **Place…**, which puts it into a draft on a chosen server, world
-  and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+  the asset's own coordinates, and Share, Edit, Delete and **Place…**, which puts it into a draft on a chosen server,
+  world and corner through the `draft import` frame (as promote does). Nothing is placed until that draft is approved.
+  Assets others shared with a server you build on show their owner and only 3D view and Place.
+- Other Minecraft versions: **Place…** warns when the asset was saved on a newer version than the chosen server
+  reports, or when either version is unknown (`lib/mcVersion.ts`). The warning is advisory; the import still refuses
+  block states the server does not have unless **leave out blocks that server does not have** is ticked, and then the
+  dialog lists the states it left out (the first 20 and a count) before opening the draft. Those cells keep what is in
+  the world. Only states the server does not know are caught: nothing is renamed or remapped, and a state that exists
+  on both versions but means something else on the older one is placed as it is.
+- **Upload .schem** on the Assets page (any signed-in user, no server role): a WorldEdit `.schem` of at most 8 MB, with
+  a name (prefilled from the file name), description and tags as above. See "Upload a .schem" below.
 - Limits per user: 200 assets and 256 MB (`lib/server/assets.ts`). Each asset is at most 2,000,000 blocks and 5 MB
   of compressed region data, whether saved on the panel or by Claude. Nobody can see, change or place another user's
-  asset; saving and placing need the builder role on the server, as promote does.
+  asset unless it is shared with a server they build on (see "Share an asset with a server" below); saving and
+  placing need the builder role on the server, as promote does.
 - Storage: one MySQL row per asset (`assets`), and in R2 under `users/<user>/assets/<id>/` the export frame's data
   (`region.bin`, which the import frame takes back) and the 3D view's blocks (`blocks.json.gz`). The export leaves out
   properties that equal a block's default, so the browser fills them in from the client jar's blockstates for the 3D
   view; a wrong guess changes only how the preview draws a block, never what is placed. Migration
   `006_asset_usage.sql` adds `last_used_at`, which orders the list Claude sees.
 
+### Anchor and facing
+
+An asset can say where it attaches and which way it faces, so Claude can put a window on any wall with `paste` `at` +
+`facing` instead of working out its lowest corner.
+
+- **Anchor**: one cell of the asset, zero-based from its lowest corner (`0 0 0` to size − 1), e.g. the window's bottom
+  middle block in the wall. **Facing**: `north`, `south`, `east`, `west`, `up` or `down`, the way the asset faces away
+  from the wall or floor it attaches to.
+- Both are optional and independent; each is null when not set. Every asset saved before anchors existed and every
+  uploaded `.schem` has neither: nothing is invented for them (migration `007_asset_anchor.sql` adds nullable
+  `anchor_x`, `anchor_y`, `anchor_z` and `facing`), so they keep placing by their lowest corner.
+- **Save as asset** starts the anchor at `0 0 0` and the facing at none; clear the anchor to save without one. The
+  map does not know which way the player looks, so the facing is never guessed, and the region is not read until Save,
+  so there is no 3D view to click there. **Edit** sets, changes or clears both on any asset, uploads included
+  (`PATCH /api/assets/<id>` with `anchor: [x,y,z] | null`, `facing: string | null`); on a wide enough screen, and when
+  the asset's Minecraft version is known, it shows the asset in 3D, and clicking a block there makes it the anchor.
+- The card lists both. The 3D view (on the page and in Edit, as typed) outlines the anchor cell in blue, drawn over
+  the blocks so it shows even inside the asset, and a blue arrow sticks out of it the way the asset faces (up/down point
+  up/down); with a facing but no anchor the arrow starts at the middle of that side of the asset.
+- **Place…** on an asset with an anchor asks where the **anchor position** goes (the default) or the **lowest corner**,
+  and sends corner = position − anchor (`lib/anchor.ts`); without an anchor it takes the lowest corner as before. It
+  never turns the asset: the draft import (`draft import` → `Drafts#importRegion`) pastes with rotation 0 and has no
+  rotation argument, so the asset goes in as saved, facing its stored way. Turning to a facing is Claude's `paste`
+  `at` + `facing` only.
+- The relay's asset `get` answer carries `anchor` and `facing` when set; older plugins ignore them. The relay `save`
+  accepts them too, though the plugin does not send them. The `get_context` listing leaves them out (its size cap).
+
+### Share an asset with a server
+
+**Share…** on one of your own assets lists the servers where you are a builder, admin or owner. Sharing with one lets
+every member there with at least the builder role use the asset without copying it: they see it on their Assets page
+(with your name, under **Shared with me**), open its 3D view, place it into a draft on that server, and Claude can
+paste it there by name. Viewers cannot. `GET`, `POST {server}` and `DELETE ?server=` on `/api/assets/<id>/shares`
+do the same from a script; migration `008_asset_shares.sql` adds the `asset_shares` table.
+
+- It stays your asset: only you share, unshare, rename, describe or delete it, and it counts against your quota alone;
+  using a shared asset costs a recipient nothing. A recipient's place or paste does not reorder your list.
+- A share counts only while both you and the member using it have the builder role or above on that server. Lose it
+  (or leave) and the share stops working until you have it again; it still shows in your Share dialog so you can
+  remove it. Unsharing, deleting the asset, or deleting the server or your account takes it away at once.
+- Placing a shared asset works only into a draft on a server it is shared with, never on another server the recipient
+  builds on.
+- Names for `paste name=` (which has no owner part): the caller's own asset wins. Otherwise, if exactly one asset of
+  that name is shared with this server, that one is used; if several owners shared one of the same name, the paste
+  fails with a message naming them, rather than picking one. `get_context` lists the caller's own assets first, then
+  shared ones (marked `by` with a short form of the owner's name), still at most 30 in all; a shared name hidden by an
+  own asset is left out.
+- Security: the plugin's asset requests carry the per-call grant as before. The panel takes the caller from the grant
+  and the server from the relay socket, checks the builder role there again, and serves a shared asset only if it is
+  shared with that very server. The download URL is signed for the owner's file, valid for 60 seconds as before.
+  `save` and `check` stay in the caller's own library.
+
+### Upload a .schem
+
+`POST /api/assets/upload` takes a multipart form with `file`, `name`, `description` and `tags` (comma-separated) and
+answers 201 with the asset. The file is parsed on the panel (`lib/server/schem.ts`) and saved through the same code as
+an asset saved from a server, so quota, name, ownership and the 3D view work the same and the asset can be placed or
+pasted by Claude like any other.
+
+- Supported: Sponge schematic versions 2 and 3, which WorldEdit 7 writes. Refused, each with its own message: MCEdit
+  `.schematic`, Sponge version 1, Litematica, and anything that is not gzipped NBT.
+- Only block states are kept; block entities (sign text, chest contents), entities and biomes are dropped. The
+  schematic's `Offset` is ignored: the asset starts at 0 0 0, in the same orientation as a saved region. States lose the
+  `minecraft:` namespace; other namespaces stay as written; `cave_air` and `void_air` become `air`.
+- The Minecraft version comes from `DataVersion` through a table of releases (1.13 to 1.21.10, and 26.3). Any other
+  data version is stored as unknown, so the 3D view is not shown for it.
+- Bounds, since the file comes from a browser: 8 MB uploaded (by `Content-Length` before reading, while reading and
+  after), 64 MB unpacked, the asset limits (2,000,000 blocks, 5 MB of region data), 65,536 palette entries, 256
+  characters per state, NBT nested at most 64 deep. Lengths in the file are checked against the bytes left before
+  anything is read from them. A palette index the palette lacks, block data shorter or longer than the region, and
+  data after the end are refused. Next.js buffers request bodies through the proxy up to 10 MB, above the 8 MB bound.
+
 ### Assets in Claude's calls
 
 Every MCP and REST call through `/s/<server>/` carries the account of its access token, so Claude and SDK scripts use
 that account's library on every server where it is a builder.
 
-- `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters.
+- `get_context` lists the caller's 30 most recently used assets: name, size and description cut to 80 characters,
+  then, while there is room, those shared with this server, with `by` (the owner's name, at most 16 characters) and
+  the description cut to 56 characters, so a shared entry is no longer than an own one.
   If the library cannot be reached, it says so in `assets_error` and the rest of the context is still returned.
-- `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library.
+- `paste` with `name=` looks in the server's saved blueprints first, then in the caller's library, then in the assets
+  shared with this server (see "Share an asset with a server").
+- A library asset may hold block states this server does not have (it was saved on a newer version). `paste` leaves
+  those cells as they are in the world and places the rest; the result names them in `skipped` (a missing block by
+  its name, a bad property value by the whole state; at most 10, sorted, with `skipped_total` when there are more).
+  An asset with nothing but such states and air is refused. Blueprints Claude writes, saved blueprints and files are
+  still refused as a whole on an unknown state. As in the panel, nothing is remapped.
+- `paste` takes `origin` (the lowest corner after `rotation`) or `at`, the world position of the asset's anchor. With
+  `at`, `facing` (instead of `rotation`) turns the asset from its stored facing: quarter turns clockwise seen from
+  above, as WorldEdit's `//rotate`, and the anchor cell turns with it. Only `north`, `east`, `south` and `west` turn:
+  an asset that faces `up` or `down` takes only its own facing (there is no vertical flip), and a horizontal one
+  cannot be made to face up or down. `facing` on a blueprint without a stored facing is refused with a pointer to
+  `origin` + `rotation`; `at` on one without an anchor places its lowest corner there, like `origin`.
 - `save_blueprint` (with an optional `description`) saves to the caller's library only, never on the server. A save
   that fails, for example on quota or a taken name, is not saved on the server instead.
 - Ownership: for each tool call the panel gives the plugin a random grant that ends with the call (at most 6 minutes).
@@ -302,7 +398,9 @@ that account's library on every server where it is a builder.
 - Saves go up the relay as base64. A paste fetches a download URL from R2 that is valid for 60 seconds; the plugin
   checks the file's SHA-256. There is no per-user download rate limit.
 - Cache: `plugins/AIBuilder/asset-cache/<user>/`, at most 128 MB per server in all (oldest files go first), not
-  configurable. Every paste asks the panel again before using a cached file, so a deleted asset cannot be pasted.
+  configurable. Files are named by asset id and SHA-256, never by name, so a renamed or replaced asset, or another
+  owner's of the same name, never reuses old bytes. Every paste asks the panel again before using a cached file, so a
+  deleted or unshared asset cannot be pasted.
 - Without R2 there is no library: the relay `welcome` frame carries `assets: false` and calls carry no grant. Calls
   then work as they do without the panel: `save_blueprint` saves on the server, `paste` with `name=` looks only in the
   server's saved blueprints, and `get_context` has neither `assets` nor `assets_error`. A library that exists but
@@ -310,6 +408,62 @@ that account's library on every server where it is a builder.
 - Compatibility: the new frame fields are additive and the protocol version is unchanged. A new plugin with an older
   panel gets no account, so it behaves as before (server blueprints only). An older plugin with a new panel ignores
   the grant and never uses the library.
+
+### Save assets in game
+
+A player saves a WorldEdit selection into their own library from the game, and lists that library, after linking their
+Minecraft account to their panel account once.
+
+1. **Link.** On the panel, **Access tokens** (top bar) → **Minecraft account** → **Make a link code** shows a command
+   such as `/aibuilder link ABCD-EFGH`. Type it in game, within ten minutes, on a server where you are a builder. The
+   card then lists the linked player (name and UUID) with **Unlink**.
+2. **Save.** Select a region with WorldEdit and run `/aibuilder asset save <name> [description]`. The asset is saved
+   as if Claude had saved it with `save_blueprint`: the same name rules, quota, 2,000,000-block and 5 MB limits, and
+   the server's `max-read-volume`. The world is read through the plugin's large-read queue and memory check, and the
+   panel checks the name and quota before any chunk is loaded. A selection that is not a cuboid saves its bounding
+   box. The save reads the world as it is, as players see it and as the panel's **Save as asset** reads it: with review
+   on, an open draft is left out (unlike `save_blueprint`, which saves what Claude sees, draft included). A selection
+   over either limit is refused at once, before the panel is asked.
+3. **List.** `/aibuilder asset list` shows the library in chat, as `get_context` lists it for Claude: your own assets
+   first, then those shared with this server ("shared by" names the owner), each with its size and the start of its
+   description. Chat shows at most 15; the rest are on the **Assets** page.
+4. **Unlink.** `/aibuilder unlink` in game (on a server where the linked account is a member), or **Unlink** on the
+   panel.
+
+Rules:
+
+- The commands need the `aibuilder.asset` permission (default: op; give it to your builders with a permissions plugin)
+  and a player. Everything else under `/aibuilder` still needs `aibuilder.admin`. Tab completion offers only the
+  subcommands the sender may run.
+- Every refusal is one line that says what to do: link first (it names the panel page), get the builder role, pick
+  another name, free some quota, select a smaller region, or ask the server's owner to update or set up the panel.
+- A link is global: one Minecraft account belongs to at most one panel account, and an account links at most five.
+  It is not tied to the server it was made on, but linking, every save and every list need the **builder** role on the
+  server the command runs on, checked again each time. A save never falls back to the server's own blueprints: without a link
+  it fails and names the panel page and `/aibuilder link`.
+- Codes: 8 characters from an alphabet without look-alikes (no I, O, 0 or 1), case, spaces and dashes ignored. Each is
+  single use, valid for ten minutes, and spent by its first use, even a refused one. Making a new code cancels the
+  unused one. A user can make at most five codes in ten minutes. Only the SHA-256 of a code is stored
+  (`minecraft_link_codes`, migration `009_minecraft_links.sql`), and the panel never logs a code. A server can try at
+  most twenty codes a minute.
+- The server log: Minecraft logs every command a player types, so the plugin installs a Log4j filter
+  (`CommandLogFilter`, `LinkCodeMask`) that drops `... issued server command: /aibuilder link <code>` and logs the line
+  again as `/aibuilder link ********`. If it cannot (a server without Log4j core), it warns at startup; there, make a
+  new code on the panel whenever a link fails, since a code the plugin could not send stays valid.
+- Storage: `minecraft_links` (player UUID, user, last-known player name, when linked). Deleting the user deletes its
+  links.
+- Saves and lists need object storage, like the rest of the library. A panel from before account links answers nothing
+  to these frames, so the plugin does not send them: without `links: true` in the relay `welcome`, the commands say the
+  panel does not support account linking yet. A panel with links but from before in-game lists refuses the `list`
+  operation, and `/aibuilder asset list` says the panel needs an update.
+
+**Trust.** The plugin reports the player's UUID, and the panel cannot check it: a malicious server operator could
+claim a linked player's UUID. That only reaches the library of an account that is a builder on that very server
+(someone the server's owner chose to let build there), and only to add assets to it and to see the names, sizes and
+descriptions it lists (in-game requests cannot fetch, change or delete assets, so no blocks leave the panel). The
+server is always the one the relay socket authenticated with its token, never a frame field, and the plugin never names
+a user. A server can unlink a UUID only when the linked account is a builder on that
+server.
 
 ## Drafts: approve edits before they are placed
 

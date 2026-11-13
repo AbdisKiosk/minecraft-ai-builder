@@ -372,7 +372,17 @@ public final class BuildService {
         return sync(() -> bridge.selection(caller.id()));
     }
 
+    /** The region as Claude sees it: with review on, as the open draft would leave it. */
     public String[] read(String world, Box box) {
+        return read(world, box, true);
+    }
+
+    /**
+     * {@link #read}, with the same limits and memory check.
+     *
+     * @param withDraft false reads the world as it is, without the open draft (what players see; an in-game save)
+     */
+    public String[] read(String world, Box box, boolean withDraft) {
         checkWorld(world);
         if (box.volume() > config.maxReadVolume()) {
             throw new EditException("region is " + box.volume() + " blocks; max read is " + config.maxReadVolume()
@@ -381,6 +391,7 @@ public final class BuildService {
         if (box.volume() > READ_SLAB && !RESERVED.get() && !Bukkit.isPrimaryThread()) {
             memory.check(readCost(world, List.of(box)), "read " + box.volume() + " blocks", readAdvice(box));
         }
+        if (!withDraft) return readWorld(world, box);
         return readNow(world, box);
     }
 

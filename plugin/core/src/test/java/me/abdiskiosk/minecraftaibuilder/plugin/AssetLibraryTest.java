@@ -3,8 +3,10 @@ package me.abdiskiosk.minecraftaibuilder.plugin;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.sun.net.httpserver.HttpServer;
+import me.abdiskiosk.minecraftaibuilder.common.Anchor;
 import me.abdiskiosk.minecraftaibuilder.common.EditException;
 import me.abdiskiosk.minecraftaibuilder.common.StateArrays;
+import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -63,7 +65,7 @@ class AssetLibraryTest {
 
     @Test void cacheIsScopedByOwnerAndNeverBypassesAuthorization() throws Exception {
         AssetLibrary library = library();
-        var blueprint = as(1, () -> library.load("window", 100));
+        var blueprint = as(1, () -> library.load("window", 100)).blueprint();
         assertEquals(4, blueprint.cellCount(), "saved air is preserved");
         assertTrue(blueprint.palette().containsValue("oak_stairs[facing=east]"));
         as(1, () -> library.load("window", 100));
@@ -76,6 +78,32 @@ class AssetLibraryTest {
         allowed.set(false);
         assertThrows(EditException.class, () -> as(1, () -> library.load("window", 100)));
         assertNull(CallContext.identity());
+    }
+
+    @Test void anchorAndFacingComeWithTheBlocksAndAreCheckedAgainstTheSize() throws Exception {
+        library();
+        AssetLibrary.Asset legacy = as(1, () -> new AssetLibrary(dir, (op, args) -> uncheckedMetadata()).load("window", 100));
+        assertEquals(new Anchor(null, null), legacy.anchor(), "an older panel, or an asset without one");
+        JsonObject meta = metadata();
+        JsonArray cell = new JsonArray(); cell.add(1); cell.add(1); cell.add(0); meta.add("anchor", cell);
+        meta.addProperty("facing", "south");
+        AssetLibrary.Asset anchored = as(1, () -> new AssetLibrary(dir, (op, args) -> meta).load("window", 100));
+        assertEquals(new Anchor(new Vec3(1, 1, 0), "south"), anchored.anchor());
+        // The asset is 2x2x1: z=1 lies outside it, as does a facing the plugin does not know.
+        for (String[] bad : new String[][]{{"anchor", "[1,1,1]"}, {"anchor", "[0,0]"}, {"anchor", "[-1,0,0]"}, {"facing", "\"sideways\""}}) {
+            JsonObject m = metadata();
+            m.add(bad[0], com.google.gson.JsonParser.parseString(bad[1]));
+            EditException e = assertThrows(EditException.class, () -> as(1, () -> new AssetLibrary(dir, (op, args) -> m).load("window", 100)));
+            assertEquals("the panel sent invalid asset metadata", e.getMessage(), bad[1]);
+        }
+    }
+
+    private JsonObject uncheckedMetadata() {
+        try {
+            return metadata();
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     @Test void corruptCacheIsReplacedButOversizedDimensionsDoNotDownload() throws Exception {
@@ -137,6 +165,61 @@ class AssetLibraryTest {
         assertEquals("invalid asset download URL", e.getMessage());
         assertEquals(0, downloads.get());
         assertTrue(!Files.exists(dir.resolve("asset-cache/1")) || Files.list(dir.resolve("asset-cache/1")).noneMatch(p -> p.toString().endsWith(".bin")));
+    }
+
+    /** The panel answers `get` for a name with whichever asset that caller may use now: own, shared, or a replacement. */
+    @Test void cacheIsKeyedByAssetIdAndChecksumAndEveryPasteIsReauthorized() throws Exception {
+        byte[] oak = data, spruce = StateArrays.encode(new String[]{"spruce_planks", "air", "stone", "air"});
+        storage = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        for (var e : java.util.Map.of("/oak", oak, "/spruce", spruce).entrySet()) {
+            storage.createContext(e.getKey(), exchange -> {
+                downloads.incrementAndGet();
+                exchange.sendResponseHeaders(200, e.getValue().length);
+                exchange.getResponseBody().write(e.getValue()); exchange.close();
+            });
+        }
+        storage.start();
+        var answer = new java.util.concurrent.atomic.AtomicReference<JsonObject>();
+        AssetLibrary library = new AssetLibrary(dir, (op, args) -> {
+            requests.incrementAndGet();
+            if (answer.get() == null) throw new EditException("no asset 'window' in your library or shared with this server");
+            return answer.get();
+        });
+        java.util.function.BiFunction<String, byte[], JsonObject> asset = (id, bytes) -> {
+            try {
+                JsonObject meta = metadata();
+                meta.addProperty("id", id);
+                meta.addProperty("sha256", HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes)));
+                meta.addProperty("bytes", bytes.length);
+                meta.addProperty("url", "http://127.0.0.1:" + storage.getAddress().getPort() + (bytes == oak ? "/oak" : "/spruce"));
+                return meta;
+            } catch (Exception e) { throw new IllegalStateException(e); }
+        };
+
+        // User 2 pastes owner 1's 'window', shared with this server; the file is named by asset id and checksum.
+        answer.set(asset.apply("abcdefgh2345", oak));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("oak_stairs[facing=east]"));
+        assertEquals(1, downloads.get());
+        String oakSha = answer.get().get("sha256").getAsString();
+        assertTrue(Files.isRegularFile(dir.resolve("asset-cache/2/abcdefgh2345-" + oakSha + ".bin")));
+
+        // The owner replaces it under the same name (a new asset id): the old bytes are never used.
+        answer.set(asset.apply("zyxwvuts2345", spruce));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("spruce_planks"));
+        assertEquals(2, downloads.get());
+
+        // Same id with changed content (another checksum): downloaded again, not served from the cache.
+        answer.set(asset.apply("abcdefgh2345", spruce));
+        assertTrue(as(2, () -> library.load("window", 100)).blueprint().palette().containsValue("spruce_planks"));
+        assertEquals(3, downloads.get());
+
+        // Unshared or deleted: the panel refuses, and the cached file is not used.
+        answer.set(null);
+        int before = requests.get();
+        EditException e = assertThrows(EditException.class, () -> as(2, () -> library.load("window", 100)));
+        assertTrue(e.getMessage().contains("shared with this server"), e.getMessage());
+        assertEquals(before + 1, requests.get());
+        assertEquals(3, downloads.get());
     }
 
     @Test void listingIsValidatedAndCapped() {

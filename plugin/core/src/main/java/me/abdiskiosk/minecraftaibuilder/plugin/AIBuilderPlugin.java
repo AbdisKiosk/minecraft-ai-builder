@@ -48,6 +48,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
     /** Runs the background correction checks, one at a time. */
     private java.util.concurrent.ExecutorService checks;
     private BuildService service;
+    private AccountCommands accounts;
 
     @Override
     public void onEnable() {
@@ -65,6 +66,13 @@ public final class AIBuilderPlugin extends JavaPlugin {
             getLogger().warning("config.yml still has an http: section. It is no longer used and can be deleted: "
                     + "the plugin opens no port, and Claude Code connects through the panel (relay:).");
         }
+        try {
+            // The masked line is logged by this plugin's logger, which is not the command logger the filter drops from.
+            CommandLogFilter.install(line -> getLogger().info(line));
+        } catch (Throwable e) {
+            getLogger().warning("Could not hide link codes from the server log (" + e.getClass().getSimpleName()
+                    + "): /aibuilder link codes appear in it; a code that failed to link should be replaced on the panel.");
+        }
         config = PluginConfig.load(getConfig());
 
         try {
@@ -76,6 +84,9 @@ public final class AIBuilderPlugin extends JavaPlugin {
         }
 
         service = new BuildService(this, bridge, config, getDataFolder().toPath());
+        accounts = new AccountCommands(this, service, () -> relay, getLogger());
+        org.bukkit.command.PluginCommand command = getCommand("aibuilder");
+        if (command != null) command.setTabCompleter(this);
         if (getServer().getPluginManager().isPluginEnabled("WorldGuard") && getConfig().getBoolean("worldguard.enabled", true)) {
             boolean protect = getConfig().getBoolean("worldguard.protect", false);
             try {
@@ -134,6 +145,7 @@ public final class AIBuilderPlugin extends JavaPlugin {
 
     @Override
     public void onDisable() {
+        LinkCodeMask.active = false; // the filter stays in Log4j (it cannot be removed) but lets every line through
         if (relay != null) relay.stop();
         if (checks != null) checks.shutdownNow();
         if (map != null) map.close();
@@ -184,6 +196,17 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage("AIBuilder is not running; check the server log.");
             return true;
         }
+        // Players with aibuilder.asset may link and save without aibuilder.admin, which everything else needs.
+        if (args.length > 0 && AccountCommands.COMMANDS.contains(args[0].toLowerCase(Locale.ROOT))) {
+            accounts.run(sender, args);
+            return true;
+        }
+        if (!sender.hasPermission("aibuilder.admin")) {
+            sender.sendMessage(sender.hasPermission(AccountCommands.PERMISSION)
+                    ? "You can use /aibuilder link <code>, /aibuilder unlink, /aibuilder asset save <name> [description] and /aibuilder asset list."
+                    : "You need aibuilder.admin for this.");
+            return true;
+        }
         if (args.length > 0 && args[0].equalsIgnoreCase("stats")) {
             if (args.length > 1 && args[1].equalsIgnoreCase("reset")) {
                 mcp.stats().reset();
@@ -215,6 +238,18 @@ public final class AIBuilderPlugin extends JavaPlugin {
             sender.sendMessage("Claude Code and scripts connect through the panel, with an access token from Connect Claude on this server's page.");
         }
         return true;
+    }
+
+    /** Only what the sender may run; see {@link Completions}. */
+    @Override
+    public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+        if (service == null) return List.of();
+        Player player = sender instanceof Player p ? p : null;
+        return Completions.complete(args, player != null, sender::hasPermission, () -> {
+            Markers markers = service.markers();
+            List<String> worlds = player != null ? List.of(player.getWorld().getName()) : markers.worlds();
+            return worlds.stream().flatMap(w -> markers.list(w).keySet().stream()).toList();
+        }, () -> drafts == null ? List.of() : drafts.openSummaries().stream().map(d -> d.get("world").getAsString()).toList());
     }
 
     /** mark, unmark, marks and note: how a player points at places and leaves word for Claude. */

@@ -7,6 +7,8 @@ import { ArchiveError, commit, uploadUrls } from './archive';
 import { AssetGrants, assetRequest } from './assetRelay';
 import { AssetError } from './assets';
 import { exec } from './db';
+import { linkDeps } from './minecraftLinkStore';
+import { AttemptLimit, failure, linkPlayer, playerAssetRequest, unlinkPlayer } from './minecraftLinks';
 import { configured as r2Configured, downloadUrl } from './r2';
 import { atLeast } from './roles';
 import { bearer } from './tokens';
@@ -171,6 +173,8 @@ export class RelayHub {
   private readonly wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 * 1024 });
   private readonly live = new Map<string, Connection>();
   private readonly states = new Map<string, ServerState>();
+  /** Link attempts per server, so a server's operator cannot guess codes; kept across reconnects. */
+  private readonly linkAttempts = new Map<string, AttemptLimit>();
   private readonly emitter = new EventEmitter();
   private readonly sweeper: NodeJS.Timeout;
 
@@ -235,6 +239,11 @@ export class RelayHub {
       case 'asset':
         if (c.ready && this.live.get(c.serverId) === c) this.asset(c, frame);
         return;
+      case 'link':
+      case 'unlink':
+      case 'player_asset':
+        if (c.ready && this.live.get(c.serverId) === c) this.player(c, frame);
+        return;
       case 'event': {
         if (!c.ready) return;
         const s = this.state(c.serverId);
@@ -270,7 +279,8 @@ export class RelayHub {
     s.connected(frame);
     console.info(`relay: server ${c.serverId} connected (${frame.mc ?? '?'} ${frame.bridge ?? '?'}, ${frame.plugin ?? '?'})`);
     // History goes to R2 when it is configured: the plugin then uploads each entry (see archive.ts).
-    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured() }));
+    // links: this panel takes link, unlink and player_asset frames (/aibuilder link, asset save and asset list in game).
+    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured(), links: true }));
     exec('UPDATE servers SET info = ?, last_seen_at = NOW() WHERE id = ?', [JSON.stringify(s.info), c.serverId])
       .catch(e => console.warn('relay: could not save server info', e.message));
     this.emit({ type: 'server', server: c.serverId, state: s.toJson() });
@@ -319,6 +329,46 @@ export class RelayHub {
       status = e instanceof AssetError ? e.status : 500;
       body = { error: e instanceof AssetError ? e.message : 'the panel could not access the asset library; try again later' };
       if (!(e instanceof AssetError)) console.warn('relay asset request failed', e);
+    }
+    if (c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ t: 'answer', id: frame.id, status, body }));
+  }
+
+  /**
+   * A player's request from the game: link, unlink, or an in-game asset list or save (player_asset). The server is this
+   * socket's, never a frame field; the account comes from the player's link (minecraftLinks.ts), not from a tool
+   * call's grant, so the grant path in asset() is untouched. Link codes are credentials: never log the frame.
+   */
+  private async player(c: Connection, frame: Json) {
+    if (typeof frame.id !== 'number') return;
+    let status = 200, body: unknown;
+    try {
+      const deps = linkDeps();
+      if (frame.t === 'link') {
+        let limit = this.linkAttempts.get(c.serverId);
+        if (!limit) this.linkAttempts.set(c.serverId, limit = new AttemptLimit());
+        limit.take();
+        body = await linkPlayer(deps, c.serverId, frame);
+      } else if (frame.t === 'unlink') {
+        body = await unlinkPlayer(deps, c.serverId, frame);
+      } else {
+        if (!r2Configured()) throw new AssetError(503, 'the panel asset library needs object storage configured');
+        // Lazy loading avoids the storage adapter's hub/route import cycle during process startup.
+        const { store, files } = await import('./assetStore');
+        body = await playerAssetRequest(deps, user => ({
+          store, files,
+          async requireRole(server, needed) {
+            const role = await roleOf(user, server);
+            if (!role || !atLeast(role, needed)) throw new AssetError(403, 'asset access needs builder membership on this server');
+          },
+          relay: async () => { throw new Error('nested export not supported'); },
+          mcVersion: async () => null,
+        }), c.serverId, this.state(c.serverId).info.mc ?? null, frame, downloadUrl);
+      }
+    } catch (e) {
+      const known = failure(e);
+      status = known?.status ?? 500;
+      body = { error: known?.error ?? 'the panel could not do that; try again later' };
+      if (!known) console.warn(`relay ${frame.t} request from ${c.serverId} failed`, (e as Error)?.message ?? e);
     }
     if (c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ t: 'answer', id: frame.id, status, body }));
   }

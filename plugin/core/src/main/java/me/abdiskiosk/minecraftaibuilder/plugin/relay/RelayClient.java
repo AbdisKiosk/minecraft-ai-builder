@@ -30,6 +30,7 @@ import java.net.http.WebSocket;
 import java.nio.ByteBuffer;
 import java.time.Duration;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
@@ -38,6 +39,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiFunction;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
@@ -53,6 +55,8 @@ public final class RelayClient implements BuildService.JobListener {
     private static final long MAX_BACKOFF = 60;
     private static final long PROGRESS_EVERY_MS = 250;
     private static final String REFUSED = "the panel refused: ";
+    /** How long a player waits for the panel; an in-game save sends up to 5 MB. */
+    private static final Duration ACCOUNT_TIMEOUT = Duration.ofSeconds(60);
 
     private final URI uri;
     private final String token;
@@ -77,6 +81,9 @@ public final class RelayClient implements BuildService.JobListener {
     /** The panel on this connection keeps history in object storage. */
     private volatile boolean archive;
     private volatile boolean assets;
+    /** A welcome arrived on this connection, and whether it offered account links (link, unlink, player_asset). */
+    private volatile boolean welcomed;
+    private volatile boolean links;
 
     private volatile WebSocket socket;
     private volatile boolean stopped;
@@ -155,23 +162,31 @@ public final class RelayClient implements BuildService.JobListener {
 
     private void connect() {
         if (stopped) return;
+        Listener listener = new Listener();
         http.newWebSocketBuilder()
                 .header("Authorization", "Bearer " + token)
                 .connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(uri, new Listener())
+                .buildAsync(uri, listener)
                 .whenComplete((ws, error) -> {
                     if (error != null) {
                         failed(describe(error));
                         return;
                     }
+                    boolean closedEarly;
                     synchronized (this) {
                         socket = ws;
                         sendChain = CompletableFuture.completedFuture(null);
                         backoff = 1;
+                        closedEarly = listener.closedEarly;
                     }
                     lastHeard = System.currentTimeMillis();
                     if (!status.startsWith("connected")) logger.info("Relay connected to " + uri);
                     status = "connected to " + uri;
+                    // The panel closed it (a rejected token, say) before this ran, when closed() could not tell it was ours.
+                    if (closedEarly) {
+                        closed(ws, listener.earlyCode, listener.earlyReason);
+                        return;
+                    }
                     sendHello();
                 });
     }
@@ -180,6 +195,8 @@ public final class RelayClient implements BuildService.JobListener {
         socket = null;
         archive = false;
         assets = false;
+        welcomed = false;
+        links = false;
         for (CompletableFuture<JsonObject> f : answers.values()) f.completeExceptionally(new IllegalStateException("disconnected"));
         answers.clear();
         if (stopped) return;
@@ -348,6 +365,8 @@ public final class RelayClient implements BuildService.JobListener {
 
     private void welcome(JsonObject frame) {
         assets = frame.has("assets") && frame.get("assets").getAsBoolean();
+        links = frame.has("links") && frame.get("links").getAsBoolean();
+        welcomed = true;
         if (history == null || !frame.has("archive") || !frame.get("archive").getAsBoolean()) return;
         archive = true;
         history.archiveTo(this::scheduleUploads);
@@ -381,6 +400,62 @@ public final class RelayClient implements BuildService.JobListener {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new EditException("asset request interrupted");
+        }
+    }
+
+    // ---- players: account links and in-game saves ----
+    // These block until the panel answers (at most ACCOUNT_TIMEOUT), so callers run them off the server thread.
+
+    /** Links the player to the panel account that made {@code code}; answers {"linked":true,"already":bool}. */
+    public JsonObject link(UUID player, String name, String code) {
+        JsonObject frame = playerFrame(RelayProtocol.LINK, player, name);
+        frame.addProperty("code", code);
+        return ask(frame);
+    }
+
+    /** Removes the player's link; answers {"unlinked":true}. */
+    public JsonObject unlink(UUID player, String name) {
+        return ask(playerFrame(RelayProtocol.UNLINK, player, name));
+    }
+
+    /**
+     * The library of the panel account the player is linked to, as {@link AssetLibrary#saveRegion} takes it: only
+     * {@code list}, {@code check} and {@code save}. The panel finds the account from the link; the plugin never names
+     * one. Throws at once when this panel cannot take in-game requests, before anything is read.
+     */
+    public BiFunction<String, JsonObject, JsonObject> playerLibrary(UUID player, String name) {
+        playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
+        if (!assets) throw new EditException("the panel has no asset library yet (it needs object storage); ask its owner to set one up");
+        return (op, args) -> {
+            JsonObject frame = playerFrame(RelayProtocol.PLAYER_ASSET, player, name);
+            frame.addProperty("op", op);
+            frame.add("args", args);
+            return ask(frame);
+        };
+    }
+
+    private JsonObject playerFrame(String type, UUID player, String name) {
+        if (socket == null || !welcomed) throw new EditException("this server is not connected to the panel right now; try again in a moment");
+        if (!links) throw new EditException("this panel does not support account linking yet; ask its owner to update it");
+        JsonObject frame = new JsonObject();
+        frame.addProperty("t", type);
+        JsonObject who = new JsonObject();
+        who.addProperty("uuid", player.toString());
+        who.addProperty("name", name);
+        frame.add("player", who);
+        return frame;
+    }
+
+    private JsonObject ask(JsonObject frame) {
+        try {
+            return answered(frame, ACCOUNT_TIMEOUT);
+        } catch (IOException e) {
+            String msg = e.getMessage();
+            // The panel's own words tell the player what to do; a dropped or silent connection is worth another try.
+            throw new EditException(msg.startsWith(REFUSED) ? msg.substring(REFUSED.length()) : msg + "; try again in a moment");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new EditException("interrupted");
         }
     }
 
@@ -448,6 +523,10 @@ public final class RelayClient implements BuildService.JobListener {
 
     /** Asks the panel and waits for its answer's body; fails unless the answer is 2xx. */
     private JsonObject answered(JsonObject ask) throws IOException, InterruptedException {
+        return answered(ask, Duration.ofSeconds(60));
+    }
+
+    private JsonObject answered(JsonObject ask, Duration timeout) throws IOException, InterruptedException {
         long id = nextAsk.getAndIncrement();
         ask.addProperty("id", id);
         CompletableFuture<JsonObject> f = new CompletableFuture<>();
@@ -455,7 +534,7 @@ public final class RelayClient implements BuildService.JobListener {
         send(ask);
         JsonObject answer;
         try {
-            answer = f.get(60, TimeUnit.SECONDS);
+            answer = f.get(timeout.toMillis(), TimeUnit.MILLISECONDS);
         } catch (java.util.concurrent.ExecutionException e) {
             throw new IOException("disconnected from the panel");
         } catch (java.util.concurrent.TimeoutException e) {
@@ -639,6 +718,10 @@ public final class RelayClient implements BuildService.JobListener {
 
     private final class Listener implements WebSocket.Listener {
         private final StringBuilder buffer = new StringBuilder();
+        /** A close that came before connect() made this socket current; guarded by the RelayClient. */
+        private boolean closedEarly;
+        private int earlyCode;
+        private String earlyReason;
 
         @Override
         public void onOpen(WebSocket ws) {
@@ -674,6 +757,13 @@ public final class RelayClient implements BuildService.JobListener {
 
         @Override
         public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
+            synchronized (RelayClient.this) {
+                if (socket != ws && !closedEarly && !stopped) {
+                    closedEarly = true;
+                    earlyCode = code;
+                    earlyReason = reason;
+                }
+            }
             closed(ws, code, reason);
             return null;
         }

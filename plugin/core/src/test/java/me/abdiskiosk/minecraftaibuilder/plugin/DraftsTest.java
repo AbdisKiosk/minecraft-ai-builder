@@ -65,6 +65,33 @@ class DraftsTest {
         assertNull(d.open("world"));
     }
 
+    /** The refusal the panel's Promote and Place dialogs both show names their shared checkbox, not one dialog. */
+    @Test
+    void anImportOfUnknownBlocksSaysWhichAndHowToPlaceTheRest() throws Exception {
+        var catalog = (me.abdiskiosk.minecraftaibuilder.common.BlockCatalog) Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{me.abdiskiosk.minecraftaibuilder.common.BlockCatalog.class},
+                (p, m, a) -> switch (m.getName()) {
+                    case "info" -> java.util.Optional.empty(); // this server has no blocks at all
+                    case "suggest", "search" -> List.of();
+                    case "describe" -> "test";
+                    default -> false;
+                });
+        WorldEditBridge bridge = (WorldEditBridge) Proxy.newProxyInstance(WorldEditBridge.class.getClassLoader(),
+                new Class<?>[]{WorldEditBridge.class}, (p, m, a) -> switch (m.getName()) {
+                    case "name" -> "fake";
+                    case "catalog" -> catalog;
+                    default -> null;
+                });
+        Drafts d = new Drafts(new BuildService(null, bridge, null, Files.createTempDirectory("drafts")),
+                new Drafts.Settings(true, 100, 2, 1000), new History.Settings(true, 1000, 10, 1 << 20, 4096, 1000),
+                Logger.getAnonymousLogger());
+        String data = java.util.Base64.getEncoder().encodeToString(
+                me.abdiskiosk.minecraftaibuilder.common.StateArrays.encode(new String[]{"copper_bulb", "air"}));
+        EditException e = assertThrows(EditException.class, () -> d.importRegion("world", A, 2, 1, 1, data, true, false, "asset x"));
+        assertEquals("1 block state does not exist on this server: copper_bulb. Tick \"leave out blocks\" to place the rest without them.",
+                e.getMessage());
+    }
+
     @Test
     void undoTakesTheNewestEditOut() throws Exception {
         Drafts d = drafts(Files.createTempDirectory("drafts"), 100);
