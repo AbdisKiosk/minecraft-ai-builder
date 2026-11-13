@@ -7,7 +7,7 @@
     python3 tools/mcp_cli.py report [log.jsonl]        # per-tool totals of a logged session
 
 The server is AIBUILDER_URL (its address on the panel, https://<panel>/s/<server>) and AIBUILDER_TOKEN (your access token
-for that server, from Connect Claude on its page in the panel); the plugin itself listens on nothing.
+for that server, from Connect your AI on its page in the panel); the plugin itself listens on nothing.
 With AIBUILDER_LOG=<file.jsonl> every call appends {tool, arg_chars, result_chars, image_px, tokens, args, result}.
 Images are written to AIBUILDER_IMAGES (default: the system temp directory) and their path is printed.
 
@@ -31,7 +31,7 @@ from pathlib import Path
 def _server() -> tuple[str, str]:
     url, token = os.environ.get("AIBUILDER_URL"), os.environ.get("AIBUILDER_TOKEN")
     if not url or not token:
-        sys.exit("set AIBUILDER_URL (https://<panel>/s/<server>) and AIBUILDER_TOKEN (that server's access token, from Connect Claude in the panel)")
+        sys.exit("set AIBUILDER_URL (https://<panel>/s/<server>) and AIBUILDER_TOKEN (that server's access token, from Connect your AI in the panel)")
     return url.rstrip("/"), token
 
 
