@@ -1,6 +1,8 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { roleOf, serverExists } from './access';
+import { featureRefusal } from '../plans';
 import { accessForToken } from './accessTokens';
+import { PAYMENT_REQUIRED, serverLimits } from './billing';
 import { hub, type Json } from './hub';
 import { atLeast } from './roles';
 import { bearer } from './tokens';
@@ -38,6 +40,11 @@ export async function handlePluginProxy(req: IncomingMessage, res: ServerRespons
   // Same answer for "no such server" and "not yours", so tokens can't probe for server ids.
   if (!role) return send(res, 404, { error: `unknown server '${serverId}'` });
   if (!atLeast(role, 'builder')) return send(res, 403, { error: `your role on '${serverId}' is ${role}; building needs builder` });
+
+  if (rest !== 'mcp') {
+    const refused = featureRefusal(await serverLimits(serverId), 'restApi');
+    if (refused) return send(res, PAYMENT_REQUIRED, { error: refused + ' MCP works on every plan.' });
+  }
 
   let frame: Json;
   if (rest === 'mcp') {

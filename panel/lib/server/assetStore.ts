@@ -3,6 +3,8 @@ import { anchorColumns, COLUMNS, row, type Db } from './assetRow';
 import {
   AssetError, assetPrefix, fileKey, SHARE_ROLE, type AssetFiles, type AssetStore, type Changes, type Deps, type SharedRow,
 } from './assets';
+import { featureRefusal } from '../plans';
+import { limitsFor, PAYMENT_REQUIRED } from './billing';
 import { exec, one, query, transaction } from './db';
 import { hub } from './hub';
 import { relayError } from './plugin-proxy';
@@ -126,11 +128,18 @@ export const files: AssetFiles = {
   removeAll: async (owner, id) => { await removePrefix(assetPrefix(owner, id)); },
 };
 
+/** Refuses saving, uploading and sharing on a plan without the asset library; what is already there stays usable. */
+export async function allowSave(userId: number): Promise<void> {
+  const refused = featureRefusal(await limitsFor(userId), 'assets');
+  if (refused) throw new AssetError(PAYMENT_REQUIRED, refused);
+}
+
 /** The real dependencies for a signed-in user. */
 export function deps(user: UserRow): Deps {
   return {
     store,
     files,
+    allowSave,
     requireRole: (serverId, role) => requireRole(user, serverId, role),
     relay: (serverId, frame) => hub().request(serverId, frame, RELAY_TIMEOUT_MS),
     async mcVersion(serverId) {

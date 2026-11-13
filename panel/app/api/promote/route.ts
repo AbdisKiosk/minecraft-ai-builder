@@ -1,3 +1,5 @@
+import { featureRefusal } from '../../../lib/plans';
+import { PAYMENT_REQUIRED, serverLimits } from '../../../lib/server/billing';
 import { hub } from '../../../lib/server/hub';
 import { relayError } from '../../../lib/server/plugin-proxy';
 import { body, HttpError, json, requireRole, requireUser, route } from '../../../lib/server/route';
@@ -22,6 +24,13 @@ export const POST = route(async req => {
   }
   await requireRole(user, b.from, 'builder');
   await requireRole(user, b.to, 'builder');
+  // Copying within one server is a draft like any other; between two, both owners' plans must allow it.
+  if (b.from !== b.to) {
+    for (const server of [b.from, b.to]) {
+      const refused = featureRefusal(await serverLimits(server), 'promote');
+      if (refused) throw new HttpError(PAYMENT_REQUIRED, refused);
+    }
+  }
 
   const min = [Math.min(box[0], box[3]), Math.min(box[1], box[4]), Math.min(box[2], box[5])];
   const size = [Math.abs(box[3] - box[0]) + 1, Math.abs(box[4] - box[1]) + 1, Math.abs(box[5] - box[2]) + 1];

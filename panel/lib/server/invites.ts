@@ -1,4 +1,6 @@
+import { memberRefusal } from '../plans';
 import { membersOf } from './access';
+import { serverLimits } from './billing';
 import { exec, one, transaction } from './db';
 import { hub } from './hub';
 import { atLeast, type Role } from './roles';
@@ -40,6 +42,10 @@ export async function acceptInvite(token: string, userId: number): Promise<{ ser
     const current = await one<{ role: Role }>('SELECT role FROM memberships WHERE server_id = ? AND user_id = ? FOR UPDATE',
       [r.server_id, userId], c);
     if (!current) {
+      // The owner's plan may have filled up since the invite was made.
+      const members = await one<{ n: number }>('SELECT COUNT(*) AS n FROM memberships WHERE server_id = ?', [r.server_id], c);
+      const refused = memberRefusal(await serverLimits(r.server_id), Number(members?.n ?? 0));
+      if (refused) return { error: `This server is full: ${refused}` };
       await exec('INSERT INTO memberships (server_id, user_id, role) VALUES (?, ?, ?)', [r.server_id, userId, r.role], c);
     } else if (!atLeast(current.role, r.role)) {
       await exec('UPDATE memberships SET role = ? WHERE server_id = ? AND user_id = ?', [r.role, r.server_id, userId], c);

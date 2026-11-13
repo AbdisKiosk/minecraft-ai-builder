@@ -1,4 +1,6 @@
 import { exec, one, transaction } from '../../../lib/server/db';
+import { serverRefusal } from '../../../lib/plans';
+import { limitsFor, PAYMENT_REQUIRED } from '../../../lib/server/billing';
 import { hub } from '../../../lib/server/hub';
 import { baseUrl, body, HttpError, json, requireUser, route } from '../../../lib/server/route';
 import { relaySecret } from '../../../lib/server/relayToken';
@@ -20,6 +22,8 @@ export const POST = route(async req => {
   if (!name || name.length > 64) throw new HttpError(400, 'give a name of 1 to 64 characters');
   const owned = await one<{ n: number }>('SELECT COUNT(*) AS n FROM servers WHERE owner_id = ?', [user.id]);
   if ((owned?.n ?? 0) >= MAX_OWNED) throw new HttpError(409, `you can own at most ${MAX_OWNED} servers`);
+  const refused = serverRefusal(await limitsFor(user.id), owned?.n ?? 0);
+  if (refused) throw new HttpError(PAYMENT_REQUIRED, refused);
 
   const id = shortId(10);
   const seed = newSeed();

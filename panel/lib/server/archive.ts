@@ -102,18 +102,22 @@ export async function hasArchive(serverId: string): Promise<boolean> {
 const LISTED = ['types', 'changes', 'listed'];
 
 /** Newest first, like the plugin's list: {entries, total}; `before` is an entry id to page from. */
-export async function list(serverId: string, limit: number, before: string | null) {
+/** `since` (epoch milliseconds) leaves out older entries and counts them in `closed`: the plan's history window. */
+export async function list(serverId: string, limit: number, before: string | null, since: number | null = null) {
+  const from = since ?? 0;
   let rows;
   if (before) {
     const b = await one<{ time_ms: number }>('SELECT time_ms FROM history WHERE server_id = ? AND entry_id = ?', [serverId, before]);
     rows = !b ? [] : await query<{ entry_id: string; detail: unknown; files: string }>(
-      `SELECT entry_id, detail, files FROM history WHERE server_id = ? AND (time_ms < ? OR (time_ms = ? AND entry_id < ?))
-        ORDER BY time_ms DESC, entry_id DESC LIMIT ?`, [serverId, b.time_ms, b.time_ms, before, limit]);
+      `SELECT entry_id, detail, files FROM history WHERE server_id = ? AND time_ms >= ? AND (time_ms < ? OR (time_ms = ? AND entry_id < ?))
+        ORDER BY time_ms DESC, entry_id DESC LIMIT ?`, [serverId, from, b.time_ms, b.time_ms, before, limit]);
   } else {
     rows = await query<{ entry_id: string; detail: unknown; files: string }>(
-      'SELECT entry_id, detail, files FROM history WHERE server_id = ? ORDER BY time_ms DESC, entry_id DESC LIMIT ?', [serverId, limit]);
+      'SELECT entry_id, detail, files FROM history WHERE server_id = ? AND time_ms >= ? ORDER BY time_ms DESC, entry_id DESC LIMIT ?',
+      [serverId, from, limit]);
   }
-  const total = await one<{ n: number }>('SELECT COUNT(*) AS n FROM history WHERE server_id = ?', [serverId]);
+  const total = await one<{ n: number; closed: number }>(
+    'SELECT COALESCE(SUM(time_ms >= ?), 0) AS n, COALESCE(SUM(time_ms < ?), 0) AS closed FROM history WHERE server_id = ?', [from, from, serverId]);
   return {
     entries: rows.map(r => {
       const d = { ...row(r).detail };
@@ -121,6 +125,7 @@ export async function list(serverId: string, limit: number, before: string | nul
       return d;
     }),
     total: Number(total?.n ?? 0),
+    closed: Number(total?.closed ?? 0),
   };
 }
 

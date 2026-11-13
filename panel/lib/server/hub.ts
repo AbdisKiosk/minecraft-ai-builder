@@ -314,9 +314,9 @@ export class RelayHub {
       const user = c.assets.owner(frame.assetKey);
       if (!r2Configured()) throw new AssetError(503, 'the panel asset library needs object storage configured');
       // Lazy loading avoids the storage adapter's hub/route import cycle during process startup.
-      const { store, files } = await import('./assetStore');
+      const { store, files, allowSave } = await import('./assetStore');
       body = await assetRequest({
-        store, files,
+        store, files, allowSave,
         async requireRole(server, needed) {
           c.assets.owner(frame.assetKey);
           const role = await roleOf(user, server);
@@ -353,9 +353,9 @@ export class RelayHub {
       } else {
         if (!r2Configured()) throw new AssetError(503, 'the panel asset library needs object storage configured');
         // Lazy loading avoids the storage adapter's hub/route import cycle during process startup.
-        const { store, files } = await import('./assetStore');
+        const { store, files, allowSave } = await import('./assetStore');
         body = await playerAssetRequest(deps, user => ({
-          store, files,
+          store, files, allowSave,
           async requireRole(server, needed) {
             const role = await roleOf(user, server);
             if (!role || !atLeast(role, needed)) throw new AssetError(403, 'asset access needs builder membership on this server');
