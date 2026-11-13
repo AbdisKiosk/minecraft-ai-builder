@@ -1,5 +1,4 @@
-import Logo from '../components/Logo';
-import { PLUGIN_JAR_HREF } from '../lib/pluginJar';
+import { LandingFooter, LandingNav, SIGN_UP_HREF } from '../components/Landing';
 import { auth0 } from '../lib/server/auth0';
 
 export const dynamic = 'force-dynamic';
@@ -29,13 +28,7 @@ export default async function Home() {
   const session = await auth0.getSession();
   return (
     <div className="landing">
-      <nav className="landing-nav">
-        <a className="brand" href="/"><Logo />AIBuilder</a>
-        {session ? <a className="button" href="/dashboard">Open dashboard</a> : <>
-          <a className="button ghost" href="/auth/login?returnTo=/dashboard">Log in</a>
-          <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Sign up</a>
-        </>}
-      </nav>
+      <LandingNav signedIn={!!session} />
 
       <section className="hero">
         <div>
@@ -44,7 +37,7 @@ export default async function Home() {
             and undo anything with one click. Setup takes a few minutes: no ports to open, no config files to edit.</p>
           <div className="cta">
             {session ? <a className="button" href="/dashboard">Open dashboard</a>
-              : <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Get started free</a>}
+              : <a className="button" href={SIGN_UP_HREF}>Get started free</a>}
             <a className="button ghost" href="#how">How it works</a>
           </div>
         </div>
@@ -67,7 +60,7 @@ export default async function Home() {
         <li><span><b>Paste one command into Claude Code</b> and ask it to build.</span></li>
       </ol>
 
-      <footer>AIBuilder · Not affiliated with Mojang or Microsoft. · <a href={PLUGIN_JAR_HREF}>Plain plugin jar</a> for setting it up by hand</footer>
+      <LandingFooter />
     </div>
   );
 }

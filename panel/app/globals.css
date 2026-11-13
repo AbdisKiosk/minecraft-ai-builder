@@ -220,11 +220,36 @@ td.right { text-align: right; }
 .steps li::before { content: counter(step); flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center;
   background: var(--accent); color: var(--accent-text); font-weight: 650; font-size: 13px; }
 .landing footer { margin-top: 56px; color: var(--muted); font-size: 13px; }
+.landing-nav .nav-link { color: var(--text); font-weight: 550; margin-right: 8px; }
+.pricing-head { padding: 48px 0 24px; text-align: center; }
+.pricing-head h1 { font-size: clamp(30px, 5vw, 42px); line-height: 1.1; letter-spacing: -.025em; margin: 0 0 14px; }
+.pricing-head .lead { font-size: 17px; color: var(--muted); max-width: 36em; margin: 0 auto; }
+.pricing-offer { margin: 0 0 24px; padding: 12px 16px; border-radius: var(--radius); text-align: center;
+  background: color-mix(in srgb, var(--accent) 12%, transparent); border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent); }
+.plans { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; align-items: start; }
+.plan { padding: 24px; }
+.plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--shadow); }
+.plan h2 { display: flex; align-items: center; gap: 8px; font-size: 17px; margin: 0 0 8px; }
+.plan-price { margin: 0 0 4px; color: var(--muted); }
+.plan-price b { font-size: 36px; letter-spacing: -.02em; color: var(--text); }
+.plan .button { display: block; text-align: center; margin: 16px 0 20px; padding: 9px 14px; }
+.plan .button.disabled { color: var(--muted); cursor: default; }
+.plan .button.disabled:hover { background: transparent; }
+.plan-built-on { margin: 0 0 8px; font-weight: 550; }
+.plan ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.plan li { position: relative; padding-left: 24px; }
+.plan li::before { content: "✓"; position: absolute; left: 2px; color: var(--accent); font-weight: 700; }
+.plan li.extra { font-weight: 600; }
+.plan li.missing { color: var(--muted); }
+.plan li.missing::before { content: "✕"; color: var(--muted); font-weight: 400; }
+.pricing-note { margin: 24px 0 0; text-align: center; font-size: 13px; }
 .invite-card { max-width: 440px; margin: 72px auto; }
 @media (max-width: 760px) {
   .hero { grid-template-columns: 1fr; padding: 24px 0 40px; gap: 28px; }
   .hero-art { aspect-ratio: auto; }
   .features { grid-template-columns: 1fr; }
+  .plans { grid-template-columns: 1fr; }
+  .pricing-head { padding: 24px 0 20px; }
   .landing { padding: 0 16px 48px; }
 }
 
