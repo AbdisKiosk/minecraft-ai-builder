@@ -17,7 +17,7 @@ export default function AddLesson({ server, max, initial = '', entry, full, onSa
   const submit = async (ev: FormEvent) => {
     ev.preventDefault();
     if (!text.trim()) return;
-    if (full && !confirm(`There are already ${max} lessons. Saving this one replaces Claude's oldest, or the oldest of all when people wrote every one. Save it?`)) return;
+    if (full && !confirm(`There are already ${max} lessons. Saving this one replaces the AI's oldest, or the oldest of all when people wrote every one. Save it?`)) return;
     setBusy(true);
     setError('');
     try {

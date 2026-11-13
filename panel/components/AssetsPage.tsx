@@ -276,7 +276,7 @@ function PlaceAssetDialog({ asset, servers, onClose }: { asset: LibraryAsset; se
           {by === 'anchor' && asset.anchor && <p className="muted" style={{ margin: 0 }}>The anchor is block
             {' '}<span className="mono">{asset.anchor.join(' ')}</span> of the asset
             {corner && <>, so its lowest corner goes at <span className="mono">{corner.join(' ')}</span></>}.
-            {asset.facing && <> It is placed as saved, facing {asset.facing}: the panel does not turn assets (ask Claude to
+            {asset.facing && <> It is placed as saved, facing {asset.facing}: the panel does not turn assets (ask the AI to
               paste it with a facing for that).</>}</p>}
           <label className="check"><input type="checkbox" name="air" defaultChecked /> place air too (clears what is in the way)</label>
           <label className="check"><input type="checkbox" name="skipUnknown" /> leave out blocks that server does not have</label>

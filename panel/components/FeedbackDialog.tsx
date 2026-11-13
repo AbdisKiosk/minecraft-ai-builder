@@ -33,7 +33,7 @@ export default function FeedbackDialog({ server, id, onClose }: { server: string
       <Modal className="form-dialog" onClose={onClose}>
         <form method="dialog">
           <div className="dialog-head"><h2>Thanks</h2></div>
-          <p style={{ margin: 0 }}>Claude reads it at the start of its next session on this server.
+          <p style={{ margin: 0 }}>The AI reads it at the start of its next session on this server.
             {remember && <> It is also saved as a lesson; see <a href={lessonsHref(server)} onClick={onClose}>Lessons</a>.</>}</p>
           <div className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
             <button type="submit" data-autofocus>Close</button>
@@ -47,7 +47,7 @@ export default function FeedbackDialog({ server, id, onClose }: { server: string
     <Modal className="form-dialog" onClose={onClose}>
       <form onSubmit={submit}>
         <div className="dialog-head"><h2>Do you want to give feedback on this build?</h2></div>
-        <label>What should Claude do differently?
+        <label>What should the AI do differently?
           <textarea value={text} onChange={ev => setText(ev.target.value)} maxLength={300} rows={4} data-autofocus
             placeholder="Floors should be spruce, not oak. Keep towers below 30 blocks." /></label>
         <label className="check"><input type="checkbox" checked={remember} onChange={ev => setRemember(ev.target.checked)} />

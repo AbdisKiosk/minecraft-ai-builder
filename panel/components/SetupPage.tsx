@@ -79,11 +79,11 @@ export default function SetupPage({ server }: { server: Server }) {
           {owner && !connected && <Troubleshooting server={server} />}
         </Step>
 
-        <Step n={3} title="Connect Claude">
+        <Step n={3} title="Connect your AI">
           {can(server.role, 'builder') ? <>
-            {!connected && <p className="muted">You can do this now. Claude can build once your server has connected.</p>}
+            {!connected && <p className="muted">You can do this now. Your AI can build once your server has connected.</p>}
             <ConnectClaude server={server} />
-          </> : <p className="muted">You&apos;re a viewer on this server, so Claude can&apos;t build here as you. Ask an admin for the
+          </> : <p className="muted">You&apos;re a viewer on this server, so an AI can&apos;t build here as you. Ask an admin for the
             builder role.</p>}
         </Step>
       </ol>

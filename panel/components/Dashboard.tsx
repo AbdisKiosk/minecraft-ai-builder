@@ -47,7 +47,7 @@ function Welcome({ onCreated }: { onCreated: () => Promise<void> }) {
   return (
     <div className="welcome">
       <section className="card welcome-card">
-        <h1>Let&apos;s get Claude building on your Minecraft server</h1>
+        <h1>Let&apos;s get AI building on your Minecraft server</h1>
         <p className="lead">Name your server and you&apos;ll get a plugin that&apos;s already set up for it. Drop it in, restart,
           and you&apos;re connected. No ports, no config files.</p>
         <AddServerForm onCreated={onCreated} big />
@@ -55,7 +55,7 @@ function Welcome({ onCreated }: { onCreated: () => Promise<void> }) {
       <ol className="overview">
         <li><b>Add your server</b><span>Give it a name. You get a ready-made plugin file.</span></li>
         <li><b>Install the plugin</b><span>Put it in your server&apos;s plugins folder and restart. We&apos;ll see it connect.</span></li>
-        <li><b>Connect Claude</b><span>Paste one command into Claude Code, then ask it to build.</span></li>
+        <li><b>Connect your AI</b><span>Give your AI assistant the server&apos;s address, then ask it to build.</span></li>
       </ol>
       <p className="muted center">Joining a friend&apos;s server instead? Ask them for an invite link.</p>
     </div>

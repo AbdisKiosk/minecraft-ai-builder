@@ -43,7 +43,7 @@ export default function ShareAssetDialog({ asset, servers, onClose, onChanged }:
     <Modal className="form-dialog" onClose={onClose}>
       <div className="dialog-head"><h2>Share {asset.name}</h2></div>
       <p className="muted" style={{ margin: 0 }}>Builders, admins and the owner of a server you share with can see this asset,
-        place it into a draft and let Claude paste it there by name. Viewers cannot. Only you can change, share or delete it,
+        place it into a draft and let the AI paste it there by name. Viewers cannot. Only you can change, share or delete it,
         and it still counts against your library&apos;s quota.</p>
       {!shares ? (!error && <p className="muted">Loading…</p>)
         : !targets.length && !stale.length ? <p className="error">You are not a builder on any server.</p> : <>

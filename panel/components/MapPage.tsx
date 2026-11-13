@@ -91,7 +91,7 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
   };
 
   const removeArea = async (name: string) => {
-    if (!confirm(`Remove the area "${name}"? Claude can no longer use @${name}.`)) return;
+    if (!confirm(`Remove the area "${name}"? The AI can no longer use @${name}.`)) return;
     try {
       await api(`${serverApi(id)}/map/areas/${enc(world)}/${enc(name)}`, { method: 'DELETE' });
       if (selected === name) setSelected(null);
@@ -478,8 +478,8 @@ const MapSide = memo(function MapSide({ index, selected, builder, onSelect, onFl
           </ul>
         ) : (
           <p className="muted">{builder
-            ? 'None yet. Press Mark area, then click two corners on the map (or drag). Claude sees areas in get_context and can build in "@name".'
-            : 'None yet. Builders mark areas for Claude to build in.'}</p>
+            ? 'None yet. Press Mark area, then click two corners on the map (or drag). The AI sees areas in get_context and can build in "@name".'
+            : 'None yet. Builders mark areas for the AI to build in.'}</p>
         )}
       </section>
       {(players.length > 0 || markers.length > 0 || index.spawn) && (
@@ -505,7 +505,7 @@ const MapSide = memo(function MapSide({ index, selected, builder, onSelect, onFl
         <p className="muted small-print">Drawn from <code>{index.source}</code>, {num(index.regions.length)} region
           file{index.regions.length === 1 ? '' : 's'}.</p>
       )}
-      <p className="muted small-print">Drag to move, scroll or pinch to zoom. The map shows what the server has saved; Claude&apos;s edits show
+      <p className="muted small-print">Drag to move, scroll or pinch to zoom. The map shows what the server has saved; the AI&apos;s edits show
         right away, other changes after the next autosave.</p>
     </aside>
   );
@@ -553,7 +553,7 @@ function NewAreaDialog({ serverId, world, rect, taken, onClose, onSaved }:
         <p className="muted" style={{ margin: 0 }}>
           <span className="mono">x {rect.x1}…{rect.x2}, z {rect.z1}…{rect.z2}</span> · {num(width)} × {num(depth)} blocks in {world}</p>
         <label>Name <input type="text" name="name" defaultValue={suggestion} maxLength={24} pattern="[a-zA-Z0-9_\-]{1,24}" required data-autofocus />
-          <span className="muted" style={{ fontWeight: 400 }}>Claude uses it as the region &quot;@name&quot;.</span></label>
+          <span className="muted" style={{ fontWeight: 400 }}>The AI uses it as the region &quot;@name&quot;.</span></label>
         <label>What should go here? <textarea name="note" maxLength={300} rows={3} placeholder="A market square with stalls, facing the river" /></label>
         <label className="check"><input type="checkbox" checked={auto} onChange={e => setAuto(e.target.checked)} />
           Height from the ground: the lowest surface up to 32 blocks above the highest</label>

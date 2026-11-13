@@ -5,7 +5,7 @@ import { diffHref, draftHref } from '../lib/routes';
 import { can, type Lesson, type Server } from '../lib/types';
 import AddLesson, { MAX_LESSON as MAX_TEXT } from './AddLesson';
 import { Badge } from './shared';
-const ORIGIN: Record<Lesson['origin'], string> = { feedback: 'feedback', claude: 'Claude', manual: 'written here' };
+const ORIGIN: Record<Lesson['origin'], string> = { feedback: 'feedback', claude: 'the AI', manual: 'written here' };
 
 /** Where a lesson came from: a history entry (h…) or a draft (d…). */
 function EntryLink({ server, id }: { server: string; id: string }) {
@@ -69,7 +69,7 @@ export default function LessonsPage({ server: s }: { server: Server }) {
     if (await act(() => api(`${base}/${encodeURIComponent(e.id)}`, { method: 'PATCH', body: JSON.stringify({ text: e.text }) }))) setEditing(null);
   };
   const remove = (l: Lesson) => {
-    if (!confirm(`Delete this lesson? Claude stops reading it from its next session.\n\n${l.text}`)) return;
+    if (!confirm(`Delete this lesson? The AI stops reading it from its next session.\n\n${l.text}`)) return;
     act(() => api(`${base}/${encodeURIComponent(l.id)}`, { method: 'DELETE' }));
   };
 
@@ -77,7 +77,7 @@ export default function LessonsPage({ server: s }: { server: Server }) {
     <>
       <div className="page-head"><div>
         <h1>Lessons</h1>
-        <p className="muted" style={{ margin: '8px 0 0' }}>Claude reads these at the start of every session on {s.name}. They apply as soon
+        <p className="muted" style={{ margin: '8px 0 0' }}>The AI reads these at the start of every session on {s.name}. They apply as soon
           as they are saved: edit or delete a wrong one here.</p>
       </div>{lessons && <span className="muted">{lessons.length} of {max}</span>}</div>
       <div className="stack">
@@ -129,7 +129,7 @@ export default function LessonsPage({ server: s }: { server: Server }) {
         {admin && lessons && (
           <section className="card"><h2>Add a lesson</h2>
             <AddLesson server={server} max={max} full={lessons.length >= max} onSaved={load} />
-            <p className="muted">One short rule per lesson. The list holds {max}: when it is full, a new lesson replaces the oldest one Claude
+            <p className="muted">One short rule per lesson. The list holds {max}: when it is full, a new lesson replaces the oldest one the AI
               wrote, or the oldest of all when people wrote every one.</p>
           </section>
         )}

@@ -28,10 +28,10 @@ export function AnchorFields({ anchor, facing, onAnchor, onFacing, pickable }: {
           {FACINGS.map(f => <option key={f}>{f}</option>)}
         </select></label>
       </div>
-      <p className="muted" style={{ margin: 0 }}>The anchor is the block Claude puts at a given spot, and Place… can put it
+      <p className="muted" style={{ margin: 0 }}>The anchor is the block the AI puts at a given spot, and Place… can put it
         at a spot too (0 0 0 is the lowest corner; {pickable ? 'click a block in the 3D view to pick it, shown in blue'
           : 'after saving, Edit lets you pick it by clicking a block in the 3D view'}). Facing is the way the piece faces, away
-        from the wall or floor it sits on; Claude turns it to face north, south, east or west. Leave both empty to place by
+        from the wall or floor it sits on; the AI turns it to face north, south, east or west. Leave both empty to place by
         the lowest corner.</p>
     </>
   );
