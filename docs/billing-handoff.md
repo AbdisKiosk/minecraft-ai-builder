@@ -4,13 +4,14 @@ Where the Stripe work stands on the `pricing-page` branch, for whoever picks it 
 
 ## Where the branch is
 
-`pricing-page` holds two commits that are not on `main` and not pushed:
+`pricing-page` is pushed and holds these commits that are not on `main`:
 
 - `43ab536` Add plans and enforce their limits in the panel
 - `ce8b71f` Sell Pro through Stripe Checkout, with a Billing page
+- this handoff, and after it the webhook's unit tests and the billing docs
 
 Everything before them (the pricing page, "AI" instead of Claude, Connect your AI) was merged as pull request 11.
-`panel/` typechecks and its 119 tests pass. The plugin and the SDK are untouched by the two commits.
+`panel/` typechecks and its 133 tests pass. The plugin and the SDK are untouched.
 
 ## What is built
 
@@ -56,19 +57,31 @@ In a browser against the dev database and Stripe's sandbox:
 
 ## What is not done
 
-1. **The webhook has never run.** It is written but untested: there is no `STRIPE_WEBHOOK_SECRET` and the Stripe CLI is
-   not installed. Until it runs, a change made in the portal (cancel, card failure) does not reach the panel. To test:
-   `brew install stripe/stripe-cli/stripe`, the owner runs `stripe login`, then
-   `stripe listen --forward-to localhost:3000/api/billing/webhook` prints the secret for `.env.development.local`.
-   Cancel in the portal and check the Billing page says "Cancelled: the plan ends on …".
+1. ~~The webhook has never run.~~ Done on 2026-11-13 against the sandbox, with `stripe listen` forwarding to a local
+   panel: a subscription made, set to cancel at the period end, resumed and ended through Stripe's API each delivered
+   an event that the panel answered 200, and the account's row followed (Pro and active, `plan_cancels` 1, back to 0,
+   then Free and `canceled`). An unsigned delivery is answered 400. The logic is also unit tested
+   (`test/billing.test.ts`, `planState` in `test/plans.test.ts`). Not seen yet: the Billing page's "Cancelled: the plan
+   ends on …" line in a browser. `stripe listen --api-key <test key>` needs no `stripe login`.
 2. **Review mode and WorldGuard protection are not enforced.** The pricing page lists them under Pro and Studio, but
    both are settings in the plugin's own `config.yml`, which the panel does not control. Enforcing them means the
    panel telling the plugin its plan over the relay (`RelayProtocol` and `hub.ts` together) and the plugin refusing.
    Until then the pricing page promises a limit that does not exist.
-3. **Not exercised in a browser**: the member limit, the asset library refusal, the promote refusal between two
-   servers and the history window. Each is covered only by the unit tests of its rule. The history check also skips
-   entries the plugin has not archived yet.
-4. **Docs**: `docs/panel.md` and `CLAUDE.md` do not mention billing yet. `panel/.env.example` does.
+3. ~~Not exercised in a browser.~~ Done on 2026-11-13 with a signed-in session against the real routes, on a local
+   database seeded with a full server, a second owner and backdated history:
+   - Free: a second server, an invite on a full server, saving an asset, promote between two servers, opening and
+     reverting a history entry older than 7 days, and the REST API each answer 402 with the reason; accepting an
+     invite into a server that filled up answers 410 "This server is full"; the history list leaves the old entries
+     out and counts them in `closed`. MCP and promote within one server are not refused.
+   - After subscribing (webhook), every one of those is allowed, and the Billing page shows Pro with its renewal date.
+   - Cancelling in the Customer Portal makes the Billing page say "Cancelled: the plan ends on …".
+   - Still unseen: the note under a server's history, which needs a connected plugin, and a member limit hit by a
+     real second account (the second member was a seeded row). The history check also skips entries the plugin has
+     not archived yet.
+   - Found and fixed: a member who is not the owner was told to "Upgrade on the Billing page" for the REST API and
+     for promote, though only the owner's plan counts. They are now pointed to the owner, and the note under a
+     server's history links to Billing for the owner only.
+4. ~~Docs~~ Done: "Billing" in `docs/panel.md`, and a line in `CLAUDE.md`.
 5. **Studio cannot be bought.** `STRIPE_PRICE_STUDIO` is read, but checkout only sells Pro.
 6. **Going live** is the owner's: live keys in production, the webhook endpoint registered in Stripe for
    `checkout.session.completed` and `customer.subscription.created/updated/deleted`, terms, refund and privacy pages,
@@ -84,7 +97,13 @@ In a browser against the dev database and Stripe's sandbox:
 - Existing accounts over the Free limits keep what they have.
 - Wording: "AI", not Claude; "temporary discount", not early tester pricing.
 
-## The dev setup on this machine
+## The dev setup on the machine the work started on
+
+A second machine that continued the work has its own: `panel/.env.development.local` with the Stripe test key, the
+webhook secret and a `DATABASE_URL` for MySQL 8.4 in Docker (`aibuilder-dev-mysql`, port 3307 on localhost only,
+database `aibuilder_dev`), holding made-up accounts and servers for the tests. Its dev Minecraft server
+(`plugin/core/run/1.21.11/`) connects to the local panel as server "Dev A", and the project's local `aibuilder` MCP
+entry points at `http://localhost:3000/s/<that server>/mcp`.
 
 - **Never start the panel with `panel/.env.local` alone: its `DATABASE_URL` is production**, and the panel runs
   migrations on startup. `panel/.env.development.local` (git-ignored, read first by `npm run dev`) overrides it with a
@@ -102,5 +121,5 @@ In a browser against the dev database and Stripe's sandbox:
 
 ## Suggested order
 
-Webhook test (1), then docs (4), then open a pull request for the two commits. Plugin-side enforcement (2) is a
+Open a pull request. Plugin-side enforcement (2) is a
 change of its own and touches the relay protocol.

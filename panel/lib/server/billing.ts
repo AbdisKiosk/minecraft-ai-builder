@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import { grants, isPlan, limitsOf, planOfPrice, UNLIMITED, type Limits, type PlanId } from '../plans';
+import { customerOfEvent, isPlan, limitsOf, planState, UNLIMITED, type Limits, type PlanId } from '../plans';
 import type { UserRow } from './access';
 import { exec, one } from './db';
 
@@ -128,13 +128,10 @@ export async function ownsCheckout(user: UserRow, sessionId: string): Promise<bo
  */
 export async function syncCustomer(customer: string): Promise<void> {
   const subs = (await stripe().subscriptions.list({ customer, status: 'all', limit: 20 })).data;
-  const sub = subs.find(s => grants(s.status)) ?? subs.sort((a, b) => b.created - a.created)[0];
-  const item = sub?.items.data[0];
-  const plan: PlanId = sub && item && grants(sub.status) ? planOfPrice(item.price, process.env.STRIPE_PRICE_STUDIO) : 'free';
+  const s = planState(subs, process.env.STRIPE_PRICE_STUDIO);
   await exec(
     'UPDATE users SET plan = ?, stripe_subscription = ?, plan_status = ?, plan_renews_at = ?, plan_cancels = ? WHERE stripe_customer = ?',
-    [plan, sub?.id ?? null, sub?.status ?? null, item ? new Date(item.current_period_end * 1000) : null,
-      sub?.cancel_at_period_end || sub?.cancel_at ? 1 : 0, customer]);
+    [s.plan, s.subscription, s.status, s.renews === null ? null : new Date(s.renews), s.cancels ? 1 : 0, customer]);
 }
 
 /** Brings the account's plan up to date with Stripe, e.g. when the user comes back from Checkout. */
@@ -145,9 +142,11 @@ export async function syncUser(userId: number): Promise<void> {
 
 /**
  * Handles a webhook delivery: checks Stripe's signature, then syncs the customer the event is about.
+ * @param sync how a customer is synced; tests replace it
  * @returns false when the signature is wrong
  */
-export async function handleWebhook(payload: string, signature: string | null): Promise<boolean> {
+export async function handleWebhook(payload: string, signature: string | null,
+    sync: (customer: string) => Promise<void> = syncCustomer): Promise<boolean> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not set');
   let event: Stripe.Event;
@@ -156,10 +155,7 @@ export async function handleWebhook(payload: string, signature: string | null): 
   } catch {
     return false;
   }
-  if (event.type === 'checkout.session.completed' || event.type.startsWith('customer.subscription.')) {
-    const customer = (event.data.object as { customer?: unknown }).customer;
-    const id = typeof customer === 'string' ? customer : (customer as { id?: string } | null)?.id;
-    if (id) await syncCustomer(id);
-  }
+  const customer = customerOfEvent(event);
+  if (customer) await sync(customer);
   return true;
 }

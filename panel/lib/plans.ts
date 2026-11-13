@@ -56,6 +56,51 @@ export function planOfPrice(price: { id: string; product: unknown }, studio: str
   return studio && (studio === price.id || studio === product) ? 'studio' : 'pro';
 }
 
+/** The fields of a Stripe subscription the panel reads. */
+export interface Subscription {
+  id: string;
+  status: string;
+  /** When it was made, in epoch seconds. */
+  created: number;
+  cancel_at_period_end: boolean;
+  cancel_at: number | null;
+  items: { data: { current_period_end: number; price: { id: string; product: unknown } }[] };
+}
+
+/** What an account's row keeps of its subscriptions. */
+export interface PlanState {
+  plan: PlanId;
+  subscription: string | null;
+  status: string | null;
+  /** When the paid period ends, in epoch milliseconds. */
+  renews: number | null;
+  cancels: boolean;
+}
+
+/**
+ * What a customer's subscriptions grant: the plan of one that still grants, else Free with the newest one's status
+ * (so the row says "canceled" rather than nothing).
+ */
+export function planState(subs: readonly Subscription[], studio: string | undefined): PlanState {
+  const sub = subs.find(s => grants(s.status)) ?? [...subs].sort((a, b) => b.created - a.created)[0];
+  const item = sub?.items.data[0];
+  return {
+    plan: sub && item && grants(sub.status) ? planOfPrice(item.price, studio) : 'free',
+    subscription: sub?.id ?? null,
+    status: sub?.status ?? null,
+    renews: item ? item.current_period_end * 1000 : null,
+    cancels: !!(sub?.cancel_at_period_end || sub?.cancel_at),
+  };
+}
+
+/** The Stripe customer a webhook event is about, when it is one that can change a plan. */
+export function customerOfEvent(event: { type: string; data: { object: unknown } }): string | null {
+  if (event.type !== 'checkout.session.completed' && !event.type.startsWith('customer.subscription.')) return null;
+  const customer = (event.data.object as { customer?: unknown } | null)?.customer;
+  const id = typeof customer === 'string' ? customer : (customer as { id?: unknown } | null)?.id;
+  return typeof id === 'string' && id ? id : null;
+}
+
 // ---- what a plan refuses, in the words the panel shows ----
 
 const UPGRADE = 'Upgrade on the Billing page of the panel.';
@@ -80,11 +125,17 @@ const FEATURES = {
 } as const;
 export type Feature = keyof typeof FEATURES;
 
-/** Why the plan does not allow a feature, or null when it does. */
-export function featureRefusal(limits: Limits, feature: Feature): string | null {
+/**
+ * Why the plan does not allow a feature, or null when it does.
+ * @param ownerOf for a server's plan when the caller is not its owner: the server's name. Only the owner can
+ *   upgrade a server, so a member is pointed to them rather than to their own Billing page.
+ */
+export function featureRefusal(limits: Limits, feature: Feature, ownerOf?: string): string | null {
   if (limits[feature]) return null;
   const plan = (['pro', 'studio'] as const).find(p => limitsOf(p)[feature]);
-  return `${FEATURES[feature]} is part of the ${PLANS[plan ?? 'studio'].name} plan. ${UPGRADE}`;
+  const part = `${FEATURES[feature]} is part of the ${PLANS[plan ?? 'studio'].name} plan`;
+  if (ownerOf === undefined) return `${part}. ${UPGRADE}`;
+  return `${part}, which the owner of '${ownerOf}' is not on. Only the owner can upgrade it, on the Billing page of the panel.`;
 }
 
 /** The time before which history is closed on this plan, in epoch milliseconds, or null when all of it is open. */

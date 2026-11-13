@@ -42,7 +42,7 @@ export async function handlePluginProxy(req: IncomingMessage, res: ServerRespons
   if (!atLeast(role, 'builder')) return send(res, 403, { error: `your role on '${serverId}' is ${role}; building needs builder` });
 
   if (rest !== 'mcp') {
-    const refused = featureRefusal(await serverLimits(serverId), 'restApi');
+    const refused = featureRefusal(await serverLimits(serverId), 'restApi', role === 'owner' ? undefined : serverId);
     if (refused) return send(res, PAYMENT_REQUIRED, { error: refused + ' MCP works on every plan.' });
   }
 

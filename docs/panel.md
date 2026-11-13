@@ -135,6 +135,48 @@ and viewers. A member can be changed or removed only by someone ranked above the
 An access token (`aibc_`) builds on one server as its user, so treat it like an SSH key. A server token (`aibs_`) only
 lets a server connect as itself.
 
+## Billing
+
+The panel can sell plans through Stripe. It does so only when `STRIPE_SECRET_KEY` is set: without it the panel sells
+nothing and limits nothing, which is how a self-hosted panel runs.
+
+`lib/plans.ts` holds the plans (Free, Pro, Studio), their prices and limits, and the words of every refusal; the
+pricing page reads its numbers from it. While `PRO_INCLUDES_STUDIO` is true, Pro allows what Studio does: that is the
+temporary discount, and the constant is the one switch that ends it. Only Pro is sold for now.
+
+The account that owns a server pays, and the server has its owner's plan; members use it. Only the owner can upgrade
+a server: a member who meets one of its limits is pointed to the owner, not to their own Billing page. A refusal
+answers 402 with the reason:
+
+| Limit | Refused where |
+|---|---|
+| Servers an account owns | adding a server |
+| Members of a server | making an invite, and again when it is accepted |
+| History window | older entries are left out of the list and counted as closed; opening or reverting one is refused |
+| Asset library | saving, uploading and sharing, from the panel, from the AI and in game; existing assets stay usable |
+| REST API | `/s/<server>/api/*`; MCP is in every plan |
+| Promote | between two servers; within one server it is allowed |
+
+Nothing is deleted on a downgrade or a failed payment: what is over the limit stays and only more is refused. While
+Stripe retries a card (`past_due`) the plan is kept. Review mode and WorldGuard protection are settings in the
+plugin's `config.yml`, which the panel does not control: no plan limits them yet.
+
+**Billing** in the dashboard (shown only when the panel sells plans) has the account's plan and two links:
+`/api/billing/checkout` redirects to Stripe Checkout, which returns to `/api/billing/return`, and `/api/billing/portal`
+opens Stripe's Customer Portal to change the card or cancel. The plan is kept on the user's row (`users.plan`,
+`plan_status`, `plan_renews_at`, `plan_cancels`). Every path that changes it (`return` and the webhook) calls
+`syncCustomer` in `lib/server/billing.ts`, which asks Stripe for the customer's subscriptions and stores what they
+grant (`planState` in `lib/plans.ts`), so events may arrive late, twice or out of order.
+
+To set it up:
+
+- `STRIPE_SECRET_KEY`, and `STRIPE_PRICE_PRO`: the Pro price (`price_…`) or its product (`prod_…`, whose default
+  price is used).
+- Register `POST /api/billing/webhook` in Stripe for `checkout.session.completed` and
+  `customer.subscription.created`, `.updated` and `.deleted`, and set its signing secret as `STRIPE_WEBHOOK_SECRET`.
+  Without the webhook a change made in the portal (a cancellation, a card that fails) does not reach the panel.
+  Locally, `stripe listen --forward-to localhost:3000/api/billing/webhook` forwards events and prints the secret.
+
 ## History
 
 Every edit job reads the blocks it will touch before it starts and again when it finishes, and stores the

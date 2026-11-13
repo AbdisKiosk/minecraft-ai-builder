@@ -22,12 +22,11 @@ export const POST = route(async req => {
       || (b.origin != null && !origin) || (b.toWorld !== undefined && typeof b.toWorld !== 'string')) {
     throw new HttpError(400, 'give from, to, world, box [x1,y1,z1,x2,y2,z2] and optionally toWorld, origin [x,y,z], air, skipUnknown');
   }
-  await requireRole(user, b.from, 'builder');
-  await requireRole(user, b.to, 'builder');
+  const roles = { [b.from]: await requireRole(user, b.from, 'builder'), [b.to]: await requireRole(user, b.to, 'builder') };
   // Copying within one server is a draft like any other; between two, both owners' plans must allow it.
   if (b.from !== b.to) {
     for (const server of [b.from, b.to]) {
-      const refused = featureRefusal(await serverLimits(server), 'promote');
+      const refused = featureRefusal(await serverLimits(server), 'promote', roles[server] === 'owner' ? undefined : server);
       if (refused) throw new HttpError(PAYMENT_REQUIRED, refused);
     }
   }

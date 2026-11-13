@@ -215,7 +215,8 @@ function History({ id, server }: { id: string; server: Server }) {
       </tbody></table></div>
       <p>{last && entries!.length < total && <button className="ghost small" onClick={() => load(last.id)}>Load older</button>}</p>
       {closed > 0 && <p className="muted small-print">{closed} older edit{closed === 1 ? ' is' : 's are'} stored but closed on the
-        owner&apos;s plan. <a href={billingHref}>Billing</a> shows how to open them.</p>}
+        owner&apos;s plan. {server.role === 'owner' ? <><a href={billingHref}>Billing</a> shows how to open them.</>
+          : 'Only the owner can upgrade it.'}</p>}
     </section>
   );
 }
