@@ -54,7 +54,7 @@ export default async function Pricing() {
 
       <header className="pricing-head">
         <h1>Pricing</h1>
-        <p className="lead">You bring your own Claude. AIBuilder connects it to your server and keeps every edit
+        <p className="lead">You bring your own AI. AIBuilder connects it to your server and keeps every edit
           reviewable and undoable.</p>
       </header>
 
@@ -81,8 +81,8 @@ export default async function Pricing() {
         ))}
       </section>
 
-      <p className="pricing-note muted">Prices are in US dollars. Claude itself is not included: you connect your own
-        Claude Code.</p>
+      <p className="pricing-note muted">Prices are in US dollars. The AI itself is not included: you connect your
+        own assistant.</p>
 
       <LandingFooter />
     </div>
