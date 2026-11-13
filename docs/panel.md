@@ -83,18 +83,19 @@ For a dev server (`./gradlew :core:runServer` in `plugin/`), run the panel local
 there and put the downloaded jar's settings, or the jar itself, in `plugin/core/run/<version>/plugins/`; the relay URL is
 `ws://127.0.0.1:3000`. Claude Code, `tools/mcp_cli.py` and the SDK then use `AIBUILDER_URL=http://127.0.0.1:3000/s/<server>`.
 
-## Connect Claude Code
+## Connect an AI assistant
 
-Each user has one access token (`aibc_`) per server, and it opens that server only. **Connect Claude** (on the setup
-page and the server page) makes it the first time and shows one command with it inside:
+Each user has one access token (`aibc_`) per server, and it opens that server only. **Connect your AI** (on the setup
+page and the server page) makes it the first time and shows the server's MCP address and the `Authorization: Bearer` header for any assistant
+that can use MCP servers, and one command that gives Claude Code both:
 
 ```bash
 claude mcp add --transport http --scope user minecraft-<server name> https://panel.example.com/s/<server>/mcp --header "Authorization: Bearer aibc_..."
 ```
 
-Like relay tokens, access tokens are derived from a stored seed (`lib/server/accessTokens.ts`), so the command can be
-shown again: Connect Claude shows the same one every time, and **Access tokens** lists a user's tokens with **Show
-command** and **Revoke**. **Make a new token** replaces it; the old one stops working. A token goes when its user leaves
+Like relay tokens, access tokens are derived from a stored seed (`lib/server/accessTokens.ts`), so the details can be
+shown again: Connect your AI shows the same ones every time, and **Access tokens** lists a user's tokens with **Show
+details** and **Revoke**. **Make a new token** replaces it; the old one stops working. A token goes when its user leaves
 the server, and is refused there while their role is below builder.
 
 In this repository, `mcp.json` works for one server as it is:

@@ -1,5 +1,4 @@
-import Logo from '../components/Logo';
-import { PLUGIN_JAR_HREF } from '../lib/pluginJar';
+import { LandingFooter, LandingNav, SIGN_UP_HREF } from '../components/Landing';
 import { auth0 } from '../lib/server/auth0';
 
 export const dynamic = 'force-dynamic';
@@ -29,22 +28,16 @@ export default async function Home() {
   const session = await auth0.getSession();
   return (
     <div className="landing">
-      <nav className="landing-nav">
-        <a className="brand" href="/"><Logo />AIBuilder</a>
-        {session ? <a className="button" href="/dashboard">Open dashboard</a> : <>
-          <a className="button ghost" href="/auth/login?returnTo=/dashboard">Log in</a>
-          <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Sign up</a>
-        </>}
-      </nav>
+      <LandingNav signedIn={!!session} />
 
       <section className="hero">
         <div>
-          <h1>Let Claude build on your Minecraft server.</h1>
-          <p className="lead">Tell Claude what to build and watch it appear on your Paper server. Review edits before they land
+          <h1>Let AI build on your Minecraft server.</h1>
+          <p className="lead">Tell your AI what to build and watch it appear on your Paper server. Review edits before they land
             and undo anything with one click. Setup takes a few minutes: no ports to open, no config files to edit.</p>
           <div className="cta">
             {session ? <a className="button" href="/dashboard">Open dashboard</a>
-              : <a className="button" href="/auth/login?screen_hint=signup&returnTo=/dashboard">Get started free</a>}
+              : <a className="button" href={SIGN_UP_HREF}>Get started free</a>}
             <a className="button ghost" href="#how">How it works</a>
           </div>
         </div>
@@ -52,9 +45,9 @@ export default async function Home() {
       </section>
 
       <section className="features">
-        <div className="card"><h2>Live jobs</h2><p>Every fill, paste and roof Claude makes shows up as it runs, with progress for big edits.</p></div>
+        <div className="card"><h2>Live jobs</h2><p>Every fill, paste and roof the AI makes shows up as it runs, with progress for big edits.</p></div>
         <div className="card"><h2>History you can undo</h2><p>Before and after pictures of each edit, a 3D view, and revert that works even after a restart.</p></div>
-        <div className="card"><h2>Review mode</h2><p>Keep Claude&apos;s edits in a draft until you approve them, then place exactly what you previewed.</p></div>
+        <div className="card"><h2>Review mode</h2><p>Keep the AI&apos;s edits in a draft until you approve them, then place exactly what you previewed.</p></div>
         <div className="card"><h2>Build together</h2><p>Invite friends as admins, builders or viewers with a link. Each person uses their own access token.</p></div>
         <div className="card"><h2>Many servers</h2><p>Staging and live, creative and survival: promote a region from one server to another.</p></div>
         <div className="card"><h2>1.8 to today</h2><p>Works with WorldEdit 6 and 7 and FastAsyncWorldEdit, from Minecraft 1.8 to the newest release.</p></div>
@@ -64,10 +57,10 @@ export default async function Home() {
         <li><span><b>Create an account and name your server.</b> You get a copy of the plugin that&apos;s already set up for it.</span></li>
         <li><span><b>Drop it into your server&apos;s <code>plugins</code> folder</b>, next to WorldEdit, and restart. The page shows
           the moment it connects.</span></li>
-        <li><span><b>Paste one command into Claude Code</b> and ask it to build.</span></li>
+        <li><span><b>Connect your AI assistant</b> with one command and ask it to build.</span></li>
       </ol>
 
-      <footer>AIBuilder · Not affiliated with Mojang or Microsoft. · <a href={PLUGIN_JAR_HREF}>Plain plugin jar</a> for setting it up by hand</footer>
+      <LandingFooter />
     </div>
   );
 }

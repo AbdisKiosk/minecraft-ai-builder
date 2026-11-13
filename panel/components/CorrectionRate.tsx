@@ -18,8 +18,8 @@ export default function CorrectionRate({ server: s }: { server: Server }) {
     {!s.online ? <p className="muted">Checks are kept on the server. Reconnect it to see current measurements.</p>
       : error ? <p className="muted">{error.includes('unknown history op') ? 'Update the plugin to see correction-rate measurements.' : error}</p>
       : !data ? <p className="muted">Loading measurements…</p>
-      : !series.points.length ? <p className="muted">No tracked Claude builds yet.</p> : <>
-        <p>{series.checked} of the latest {series.points.length} tracked Claude builds checked.
+      : !series.points.length ? <p className="muted">No tracked AI builds yet.</p> : <>
+        <p>{series.checked} of the latest {series.points.length} tracked AI builds checked.
           {series.rate !== null && <> <b>{percent(series.rate)}</b> of checked builds&apos; original blocks were corrected.</>}</p>
         <svg viewBox="0 0 800 190" role="img" aria-label="Correction rate per build, oldest on the left, from zero to one hundred percent"
           style={{ width: '100%', maxHeight: 240 }}>

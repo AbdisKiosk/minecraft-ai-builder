@@ -29,10 +29,10 @@ export async function handlePluginProxy(req: IncomingMessage, res: ServerRespons
   const access = token ? await accessForToken(token) : null;
   if (!access) {
     res.setHeader('WWW-Authenticate', 'Bearer');
-    return send(res, 401, { error: "missing or wrong access token (copy this server's command from Connect Claude on its page in the panel)" });
+    return send(res, 401, { error: "missing or wrong access token (copy this server's details from Connect your AI on its page in the panel)" });
   }
   if (access.serverId !== serverId) {
-    return send(res, 403, { error: "this access token is for another server; each server has its own (Connect Claude on the server's page)" });
+    return send(res, 403, { error: "this access token is for another server; each server has its own (Connect your AI on the server's page)" });
   }
   const role = await roleOf(access.userId, serverId);
   // Same answer for "no such server" and "not yours", so tokens can't probe for server ids.

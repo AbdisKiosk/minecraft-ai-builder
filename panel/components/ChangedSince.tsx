@@ -68,8 +68,8 @@ export default function ChangedSince({ server: s, entry: e, base }: { server: Se
         <Modal className="form-dialog" onClose={() => setSaving(false)}>
           <div style={{ display: 'grid', gap: 12 }}>
             <div className="dialog-head"><h2>Save as lesson</h2></div>
-            <p className="muted" style={{ margin: 0 }}>Claude reads it at the start of every session on this server; it is
-              linked to {e.id}. When the list is full, it replaces the oldest lesson Claude wrote.</p>
+            <p className="muted" style={{ margin: 0 }}>The AI reads it at the start of every session on this server; it is
+              linked to {e.id}. When the list is full, it replaces the oldest lesson the AI wrote.</p>
             <AddLesson server={s.id} max={12} initial={lessonFrom(c)} entry={e.id}
               onSaved={() => { setSaving(false); setSaved(true); }} onCancel={() => setSaving(false)} />
           </div>

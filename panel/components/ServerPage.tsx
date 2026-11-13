@@ -30,8 +30,8 @@ export default function ServerPage({ server, servers }: { server: Server; server
           {!fresh && <a className="button ghost small" href={lessonsHref(id)}>Lessons</a>}
           {builder && !fresh && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
           {builder && <button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
-            {connect ? 'Hide' : 'Connect Claude'}</button>}</div></div>
-      {connect && <section className="card"><h2>Connect Claude</h2><ConnectClaude server={server} /></section>}
+            {connect ? 'Hide' : 'Connect your AI'}</button>}</div></div>
+      {connect && <section className="card"><h2>Connect your AI</h2><ConnectClaude server={server} /></section>}
       {fresh && (
         <a className="card finish-setup big" href={setupHref(id)}>
           <b>{can(server.role, 'owner') ? 'Finish setting up this server' : 'This server hasn\u2019t connected yet'}</b>
@@ -149,7 +149,7 @@ function Drafts({ id, server }: { id: string; server: Server }) {
   const rows = list.drafts.slice(0, 10);
   return (
     <>
-      {list.review && <p className="muted">Review is on: Claude&apos;s edits wait here until someone approves them.</p>}
+      {list.review && <p className="muted">Review is on: the AI&apos;s edits wait here until someone approves them.</p>}
       {rows.length ? (
         <div className="table-wrap"><table>
           <thead><tr><th>Started</th><th>World</th><th>Edits</th><th>Changes</th><th>Status</th></tr></thead>

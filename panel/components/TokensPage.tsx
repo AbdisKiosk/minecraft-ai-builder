@@ -2,9 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, message, serverApi } from '../lib/api';
 import { ago } from '../lib/format';
 import { serverHref } from '../lib/routes';
-import { claudeCommand, type AccessToken } from './ConnectClaude';
+import { ConnectionDetails, type AccessToken } from './ConnectClaude';
 import MinecraftAccount from './MinecraftAccount';
-import { CopyButton } from './shared';
 
 interface Row { server: string; name: string; created: number; lastUsed: number | null }
 
@@ -33,8 +32,8 @@ export default function TokensPage() {
   };
 
   const revoke = async (row: Row) => {
-    if (!confirm(`Revoke your token for "${row.name}"? Claude Code and scripts using it stop working there. `
-      + 'You can make a new one with Connect Claude on the server’s page.')) return;
+    if (!confirm(`Revoke your token for "${row.name}"? Your AI assistant and scripts using it stop working there. `
+      + 'You can make a new one with Connect your AI on the server’s page.')) return;
     try {
       await api(`${serverApi(row.server)}/access-token`, { method: 'DELETE' });
       setShown(({ [row.server]: _, ...rest }) => rest);
@@ -47,14 +46,14 @@ export default function TokensPage() {
   return (
     <>
       <div className="page-head"><div><h1>Access tokens</h1>
-        <div className="muted">You have one token per server. It lets Claude Code and build scripts build as you on that server
-          only. Get one with <b>Connect Claude</b> on a server&apos;s page.</div></div></div>
+        <div className="muted">You have one token per server. It lets your AI assistant and build scripts build as you on that server
+          only. Get one with <b>Connect your AI</b> on a server&apos;s page.</div></div></div>
       {error && <p className="error">{error}</p>}
       <section className="card"><div className="table-wrap"><table>
         <thead><tr><th>Server</th><th>Made</th><th>Last used</th><th /></tr></thead>
         <tbody>
           {!rows ? <tr><td colSpan={4} className="muted">Loading…</td></tr>
-            : !rows.length ? <tr><td colSpan={4} className="empty">No tokens yet. Open a server and press Connect Claude.</td></tr>
+            : !rows.length ? <tr><td colSpan={4} className="empty">No tokens yet. Open a server and press Connect your AI.</td></tr>
             : rows.map(r => {
               const token = shown[r.server];
               return [
@@ -62,15 +61,14 @@ export default function TokensPage() {
                   <td><a href={serverHref(r.server)}>{r.name}</a></td>
                   <td>{ago(r.created)}</td><td>{r.lastUsed ? ago(r.lastUsed) : 'never'}</td>
                   <td className="right"><span className="toolbar" style={{ margin: 0, justifyContent: 'flex-end' }}>
-                    <button className="ghost small" onClick={() => show(r)}>{r.server in shown ? 'Hide' : 'Show command'}</button>
+                    <button className="ghost small" onClick={() => show(r)}>{r.server in shown ? 'Hide' : 'Show details'}</button>
                     <button className="ghost small" onClick={() => revoke(r)}>Revoke</button>
                   </span></td>
                 </tr>,
                 r.server in shown && (
-                  <tr key={r.server + '/command'}><td colSpan={4}>
-                    {token ? <div className="command"><pre>{claudeCommand({ id: r.server, name: r.name }, token)}</pre>
-                      <CopyButton text={claudeCommand({ id: r.server, name: r.name }, token)} label="Copy command" /></div>
-                      : <p className="muted">This token can&apos;t be shown any more. Make a new one with Connect Claude on
+                  <tr key={r.server + '/details'}><td colSpan={4}>
+                    {token ? <ConnectionDetails server={{ id: r.server, name: r.name }} token={token} />
+                      : <p className="muted">This token can&apos;t be shown any more. Make a new one with Connect your AI on
                         the <a href={serverHref(r.server)}>server&apos;s page</a>.</p>}
                   </td></tr>
                 ),

@@ -10,7 +10,7 @@ interface Invite { id: string; role: Role; by: string | null; created: number; e
 const ROLE_TEXT: Record<Role, string> = {
   owner: 'everything, including deleting the server',
   admin: 'approve drafts, revert edits, invite builders and viewers',
-  builder: 'build with Claude Code and scripts, promote regions',
+  builder: 'build with an AI assistant and scripts, promote regions',
   viewer: 'see jobs, history and drafts',
 };
 
