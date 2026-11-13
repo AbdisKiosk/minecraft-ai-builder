@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, downloadPlugin, message, serverApi } from '../lib/api';
 import { ago, boxText, dateTime, num, OFFLINE } from '../lib/format';
-import { diffHref, draftHref, go, lessonsHref, mapHref, setupHref } from '../lib/routes';
+import { billingHref, diffHref, draftHref, go, lessonsHref, mapHref, setupHref } from '../lib/routes';
 import { can, type DraftSummary, type HistorySummary, type Server } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
@@ -10,7 +10,7 @@ import ConnectClaude from './ConnectClaude';
 import CorrectionRate from './CorrectionRate';
 import { Badge, Jobs, ServerMeta, Stats } from './shared';
 
-interface HistoryPage { entries: HistorySummary[]; total: number }
+interface HistoryPage { entries: HistorySummary[]; total: number; /** Older edits the owner's plan keeps closed. */ closed?: number }
 interface DraftList { drafts: DraftSummary[]; review?: boolean }
 
 export default function ServerPage({ server, servers }: { server: Server; servers: Servers }) {
@@ -170,6 +170,7 @@ function Drafts({ id, server }: { id: string; server: Server }) {
 function History({ id, server }: { id: string; server: Server }) {
   const [entries, setEntries] = useState<HistorySummary[] | null>(null);
   const [total, setTotal] = useState(0);
+  const [closed, setClosed] = useState(0);
   const [error, setError] = useState('');
   const request = useRef(0);
 
@@ -182,6 +183,7 @@ function History({ id, server }: { id: string; server: Server }) {
       if (mine !== request.current) return;
       setEntries(old => (before && old ? [...old, ...page.entries] : page.entries));
       setTotal(page.total);
+      setClosed(page.closed ?? 0);
       setError('');
     } catch (ex) {
       if (mine === request.current && !before) setError(message(ex));
@@ -212,6 +214,9 @@ function History({ id, server }: { id: string; server: Server }) {
           ))}
       </tbody></table></div>
       <p>{last && entries!.length < total && <button className="ghost small" onClick={() => load(last.id)}>Load older</button>}</p>
+      {closed > 0 && <p className="muted small-print">{closed} older edit{closed === 1 ? ' is' : 's are'} stored but closed on the
+        owner&apos;s plan. {server.role === 'owner' ? <><a href={billingHref}>Billing</a> shows how to open them.</>
+          : 'Only the owner can upgrade it.'}</p>}
     </section>
   );
 }

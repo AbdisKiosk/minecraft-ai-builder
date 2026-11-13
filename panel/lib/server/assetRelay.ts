@@ -96,6 +96,7 @@ export async function assetRequest(deps: Deps, user: number, server: string, mc:
     return { id: row.id, size: row.size, bytes: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex'), url, ...placement(row) };
   }
   if (frame.op === 'check') {
+    await deps.allowSave?.(user);
     checkQuota(await deps.store.usage(user), 1, 0);
     if (await deps.store.byName(user, name)) throw new AssetError(409, `you already have an asset named '${name}'`);
     return {};

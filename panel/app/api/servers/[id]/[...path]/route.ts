@@ -1,5 +1,7 @@
 import type { NextRequest } from 'next/server';
+import { historyCutoff, historyRefusal, type Limits } from '../../../../../lib/plans';
 import * as archive from '../../../../../lib/server/archive';
+import { PAYMENT_REQUIRED, serverLimits } from '../../../../../lib/server/billing';
 import { hub, type Json } from '../../../../../lib/server/hub';
 import { relayError } from '../../../../../lib/server/plugin-proxy';
 import { body, forward, HttpError, json, requireRole, requireUser, route } from '../../../../../lib/server/route';
@@ -58,28 +60,41 @@ export const GET = route<P>(async (req, { id, path }) => {
   if (!o) throw new HttpError(404, 'not found');
   const user = await requireUser();
   await requireRole(user, id, o.needs);
-  if (o.frame.t === 'history') {
-    const archived = await fromArchive(id, o.frame);
-    if (archived) return archived;
-  }
-  return forward(id, o.frame, TIMEOUT_MS);
+  if (o.frame.t !== 'history') return forward(id, o.frame, TIMEOUT_MS);
+  const limits = await serverLimits(id);
+  const archived = await fromArchive(id, o.frame, limits);
+  if (archived) return archived;
+  const reply = await forward(id, o.frame, TIMEOUT_MS);
+  return o.frame.op === 'list' ? withoutClosed(reply, historyCutoff(limits, Date.now())) : reply;
 });
+
+/** A plugin's own history list without the entries the plan's history window has closed. */
+async function withoutClosed(reply: Response, cutoff: number | null): Promise<Response> {
+  if (cutoff === null || !reply.ok) return reply;
+  const b = await reply.json() as { entries?: { time?: unknown }[]; total?: number };
+  if (!Array.isArray(b?.entries)) return json(b, reply.status);
+  const entries = b.entries.filter(e => !(Number(e.time) < cutoff));
+  const closed = b.entries.length - entries.length;
+  return json({ ...b, entries, total: Math.max(0, Number(b.total ?? entries.length) - closed), closed }, reply.status);
+}
 
 const NOT_KEPT = 'The server is offline, and this entry was archived without its pictures (it is older than the archive, or too large to draw).';
 const OFFLINE_VIEW = 'The server is offline. Only the default picture (isometric, from the south-east) is kept; other views need the server online.';
 
 /** The archive's answer to a history request, or null to ask the plugin. */
-async function fromArchive(serverId: string, frame: Json): Promise<Response | null> {
+async function fromArchive(serverId: string, frame: Json, limits: Limits): Promise<Response | null> {
   const args = frame.args as Json;
   // Measurements are live plugin metadata, not the edit-time copy in the R2 archive.
   if (frame.op === 'correctionStats') return null;
   if (frame.op === 'list') {
     // A plugin that never archived (an old one) still lists its own history.
     if (!(await archive.hasArchive(serverId)) && hub().online(serverId)) return null;
-    return json(await archive.list(serverId, args.limit ?? 50, args.before ?? null));
+    return json(await archive.list(serverId, args.limit ?? 50, args.before ?? null, historyCutoff(limits, Date.now())));
   }
   const row = await archive.entry(serverId, String(args.id));
   if (!row) return null;
+  const closed = historyRefusal(limits, Number(row.detail.time) || Date.now(), Date.now());
+  if (closed) return json({ error: closed }, PAYMENT_REQUIRED);
   if (frame.op === 'get') return json(row.detail);
   const online = hub().online(serverId);
   if (frame.op === 'blocks') {
@@ -109,7 +124,12 @@ export const POST = route<P>(async (req, { id, path }) => {
   const user = await requireUser();
   await requireRole(user, id, o.needs);
   if ('by' in o.frame.args) o.frame.args.by = `panel: ${user.name || user.email || 'user ' + user.id}`.slice(0, 80);
-  if (o.frame.t === 'history') return revert(id, o.frame);
+  if (o.frame.t === 'history') {
+    const row = await archive.entry(id, itemId);
+    const closed = row && historyRefusal(await serverLimits(id), Number(row.detail.time) || Date.now(), Date.now());
+    if (closed) throw new HttpError(PAYMENT_REQUIRED, closed);
+    return revert(id, o.frame);
+  }
   return forward(id, o.frame, TIMEOUT_MS);
 });
 

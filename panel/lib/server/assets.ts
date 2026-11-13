@@ -134,6 +134,8 @@ export interface Deps {
   relay(serverId: string, frame: Json): Promise<Reply>;
   /** The Minecraft version a server reports, or null. */
   mcVersion(serverId: string): Promise<string | null>;
+  /** Throws an AssetError (402) when the user's plan has no asset library; without it every user has one. */
+  allowSave?(userId: number): Promise<void>;
 }
 
 // ---- checks ----
@@ -356,6 +358,7 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
   const description = checkDescription(b.description);
   const tags = checkTags(b.tags);
   await deps.requireRole(server, PROMOTE_ROLE);
+  await deps.allowSave?.(userId);
   // Refuse early what will be refused anyway, before the server reads the region.
   const size: [number, number, number] = [Math.abs(box[3] - box[0]) + 1, Math.abs(box[4] - box[1]) + 1, Math.abs(box[5] - box[2]) + 1];
   const anchor = checkAnchor(b.anchor, size), facing = checkFacing(b.facing);
@@ -373,6 +376,7 @@ export async function createAsset(deps: Deps, userId: number, b: Json): Promise<
 
 /** Shared by panel exports and authenticated relay saves; bytes and dimensions are never trusted. */
 export async function saveAssetData(deps: Deps, userId: number, b: Json, region: Uint8Array, mc: string | null): Promise<Asset> {
+  await deps.allowSave?.(userId);
   const name = checkName(b.name), description = checkDescription(b.description), tags = checkTags(b.tags);
   const dimensions = ints(b.size, 3);
   if (!dimensions || dimensions.some(n => n < 1)) throw new AssetError(400, 'give the asset dimensions as three positive whole numbers');
@@ -450,6 +454,7 @@ export async function shareAsset(deps: Deps, userId: number, id: unknown, b: Jso
   const row = await owned(deps, userId, id);
   const server = checkServer(b.server);
   await deps.requireRole(server, SHARE_ROLE);
+  await deps.allowSave?.(userId);
   await deps.store.share(row.id, server, userId);
   return listShares(deps, userId, row.id);
 }

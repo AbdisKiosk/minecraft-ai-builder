@@ -1,3 +1,5 @@
+import { memberRefusal } from '../../../../../lib/plans';
+import { PAYMENT_REQUIRED, serverLimits } from '../../../../../lib/server/billing';
 import { exec, query } from '../../../../../lib/server/db';
 import { baseUrl, body, HttpError, json, requireRole, requireUser, route } from '../../../../../lib/server/route';
 import { grantable, isRole, type Role } from '../../../../../lib/server/roles';
@@ -27,6 +29,9 @@ export const POST = route<P>(async (req, { id }) => {
   const mine = await requireRole(user, id, 'admin');
   const { role } = await body(req);
   if (!isRole(role) || !grantable(mine).includes(role)) throw new HttpError(400, `give one of: ${grantable(mine).join(', ')}`);
+  const members = await query<{ n: number }>('SELECT COUNT(*) AS n FROM memberships WHERE server_id = ?', [id]);
+  const refused = memberRefusal(await serverLimits(id), Number(members[0]?.n ?? 0));
+  if (refused) throw new HttpError(PAYMENT_REQUIRED, refused);
   const open = await query<{ n: number }>(
     'SELECT COUNT(*) AS n FROM invites WHERE server_id = ? AND used_at IS NULL AND expires_at > NOW()', [id]);
   if ((open[0]?.n ?? 0) >= MAX_OPEN) throw new HttpError(409, `at most ${MAX_OPEN} open invites; revoke some first`);
