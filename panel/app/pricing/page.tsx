@@ -19,7 +19,7 @@ interface Plan {
   featured?: boolean;
 }
 
-// The plans as sold to early testers. Nothing here is enforced by the panel yet.
+// The plans on sale now. Nothing here is enforced by the panel yet.
 const PLANS: Plan[] = [
   {
     name: 'Free',
@@ -53,24 +53,24 @@ export default async function Pricing() {
       <LandingNav signedIn={signedIn} />
 
       <header className="pricing-head">
-        <h1>Early tester pricing</h1>
+        <h1>Pricing</h1>
         <p className="lead">You bring your own Claude. AIBuilder connects it to your server and keeps every edit
           reviewable and undoable.</p>
       </header>
 
-      <p className="pricing-offer"><b>For a limited time, Pro includes everything in Studio.</b> $10 a month gets
-        early testers the whole product.</p>
+      <p className="pricing-offer"><b>Temporary discount: Pro includes everything in Studio.</b> For a limited time,
+        $10 a month gets you the whole product.</p>
 
       <section className="plans">
         {PLANS.map(plan => (
           <div key={plan.name} className={plan.featured ? 'card plan featured' : 'card plan'}>
-            <h2>{plan.name}{plan.featured && <span className="badge running">Early access</span>}</h2>
+            <h2>{plan.name}{plan.featured && <span className="badge running">Discount</span>}</h2>
             <p className="plan-price"><b>${plan.price}</b>{plan.price > 0 && <span> / month</span>}</p>
             <p className="muted">{plan.blurb}</p>
             {plan.name === 'Studio'
               ? <span className="button ghost disabled" aria-disabled="true">Included in Pro for now</span>
               : <a className={plan.featured ? 'button' : 'button ghost'} href={startHref}>
-                {plan.price ? 'Get early access' : 'Get started free'}</a>}
+                {plan.price ? 'Get Pro' : 'Get started free'}</a>}
             {plan.builtOn && <p className="plan-built-on">{plan.builtOn}</p>}
             <ul>
               {plan.features.map(feature => <li key={feature}>{feature}</li>)}
