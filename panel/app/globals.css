@@ -305,6 +305,12 @@ input[type=text]:focus-visible, button:focus-visible, .button:focus-visible, sum
 .howto { margin: 0; padding-left: 20px; display: grid; gap: 12px; }
 .howto li::marker { color: var(--muted); font-weight: 600; }
 .step-action { margin: 10px 0 0; }
+.connect-lead { margin: 10px 0 6px; }
+.connect-details { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 12px; align-items: center; margin: 0; }
+.connect-details dt { color: var(--muted); }
+.connect-details dd { margin: 0; display: flex; gap: 8px; align-items: center; min-width: 0; }
+.connect-details code { flex: 1; min-width: 0; overflow-wrap: anywhere; background: var(--surface-2); padding: 4px 8px; border-radius: 6px; }
+.connect-details button { flex: none; }
 .small-print { font-size: 12.5px; }
 .command { display: flex; gap: 8px; align-items: flex-start; margin: 10px 0 6px; }
 .command pre { flex: 1; min-width: 0; margin: 0; background: var(--render-bg); color: #e6edf3; padding: 12px 14px; border-radius: 8px;
