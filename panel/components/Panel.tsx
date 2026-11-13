@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, type ReactNode } from 'react';
-import { assetsHref, parseRoute, serverHref, tokensHref, useHash } from '../lib/routes';
+import { assetsHref, billingHref, parseRoute, serverHref, tokensHref, useHash } from '../lib/routes';
 import { usePanel } from '../lib/usePanel';
 import AssetsPage from './AssetsPage';
+import BillingPage from './BillingPage';
 import Dashboard from './Dashboard';
 import DiffPage from './DiffPage';
 import DraftPage from './DraftPage';
@@ -14,7 +15,7 @@ import SetupPage from './SetupPage';
 import TokensPage from './TokensPage';
 
 type Crumb = [label: string, href?: string];
-export interface Me { name: string | null; email: string | null; picture: string | null }
+export interface Me { name: string | null; email: string | null; picture: string | null; /** The panel sells plans. */ billing: boolean }
 
 export default function Panel({ me }: { me: Me }) {
   const { servers, loaded, error, live, reload } = usePanel();
@@ -38,6 +39,9 @@ export default function Panel({ me }: { me: Me }) {
     } else if (route.page === 'assets') {
       crumbs.push(['Servers', '#/'], ['Assets']);
       page = <AssetsPage servers={servers} />;
+    } else if (route.page === 'billing') {
+      crumbs.push(['Servers', '#/'], ['Billing']);
+      page = <BillingPage />;
     } else {
       const server = servers.get(route.server);
       const name = server ? server.name : route.server;
@@ -83,6 +87,7 @@ export default function Panel({ me }: { me: Me }) {
           aria-label={live ? 'Live updates on' : 'Reconnecting'} />
         <a className="button ghost small" href={tokensHref}>Access tokens</a>
         <a className="button ghost small" href={assetsHref}>Assets</a>
+        {me.billing && <a className="button ghost small" href={billingHref}>Billing</a>}
         <span className="me hide-sm" title={me.email || ''}>
           {me.picture && <img src={me.picture} alt="" referrerPolicy="no-referrer" />}{me.name || me.email}
         </span>

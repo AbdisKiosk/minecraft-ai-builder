@@ -10,7 +10,8 @@ export type Route =
   | { page: 'draft'; server: string; id: string }
   | { page: 'map'; server: string; world: string | null }
   | { page: 'lessons'; server: string }
-  | { page: 'assets' };
+  | { page: 'assets' }
+  | { page: 'billing' };
 
 export const tokensHref = '#/tokens';
 export const serverHref = (server: string) => `#/s/${encodeURIComponent(server)}`;
@@ -20,6 +21,7 @@ export const draftHref = (server: string, id: string) => `${serverHref(server)}/
 export const lessonsHref = (server: string) => `${serverHref(server)}/lessons`;
 export const mapHref = (server: string, world?: string) => `${serverHref(server)}/map${world ? '/' + encodeURIComponent(world) : ''}`;
 export const assetsHref = '#/assets';
+export const billingHref = '#/billing';
 
 export function parseRoute(hash: string): Route {
   const parts = hash.replace(/^#\/?/, '').split('/').map(p => {
@@ -35,6 +37,7 @@ export function parseRoute(hash: string): Route {
     return { page: 'server', server: parts[1] };
   }
   if (parts[0] === 'assets') return { page: 'assets' };
+  if (parts[0] === 'billing') return { page: 'billing' };
   return { page: 'dashboard' };
 }
 
