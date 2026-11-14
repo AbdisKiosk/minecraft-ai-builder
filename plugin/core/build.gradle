@@ -1,3 +1,4 @@
+import com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar
 import xyz.jpenilla.runpaper.task.RunServer
 
 plugins {
@@ -33,25 +34,75 @@ def commit = providers.environmentVariable('GIT_COMMIT').orElse(providers.exec {
     ignoreExitValue = true
 }.standardOutput.asText).map { it.trim().replaceFirst(/^([0-9a-f]{7})[0-9a-f]{33}$/, '$1') }.getOrElse('')
 
-shadowJar {
+// The plugin jar, in three steps. Only the last one writes to build/libs, which the panel serves from.
+//   1. downgradeJar, in every module: its classes as Java 8 bytecode (see the root build.gradle).
+//   2. bundleJar: those four jars and Gson in one, Gson relocated.
+//   3. shadeDowngradedApi: adds the stand-ins the Java 8 bytecode calls for the newer JDK methods it used.
+def modules = [':common', ':bridge-we6', ':bridge-we7']
+modules.each { evaluationDependsOn(it) }
+def intermediates = layout.buildDirectory.dir('modules')
+
+tasks.named('jar') { destinationDirectory = intermediates }
+tasks.named('downgradeJar') {
+    inputFile = tasks.named('jar').flatMap { it.archiveFile } // not the shadowJar it would pick by default
+    destinationDirectory = intermediates
+}
+tasks.named('shadowJar') { enabled = false } // the Java 17 classes; bundleJar takes its place
+
+def bundleJar = tasks.register('bundleJar', ShadowJar) {
+    group = 'build'
+    description = 'The Java 8 classes of every module and Gson in one jar.'
+    destinationDirectory = intermediates
     archiveBaseName = 'AIBuilder'
-    archiveClassifier = ''
-    if (commit ==~ /[0-9A-Za-z.-]+/) archiveVersion = "${project.version}+${commit}"
-    // Each commit names its own jar; drop the earlier ones so build/libs holds only this build's.
-    doFirst { delete fileTree(destinationDirectory) { include 'AIBuilder-*.jar' } }
+    archiveClassifier = 'bundle'
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(tasks.named('downgradeJar').map { zipTree(it.archiveFile) })
+    modules.each { m -> from(project(m).tasks.named('downgradeJar').map { zipTree(it.archiveFile) }) }
+    configurations = [project.configurations.runtimeClasspath]
+    dependencies { modules.each { m -> exclude(project(m)) } }
     relocate 'com.google.gson', 'me.abdiskiosk.minecraftaibuilder.libs.gson'
     exclude 'META-INF/maven/**', 'META-INF/proguard/**', 'META-INF/versions/**/module-info.class', 'module-info.class', 'com/google/errorprone/**'
 }
 
-tasks.named('build') { dependsOn shadowJar }
-tasks.named('jar') { enabled = false }
+def pluginJar = tasks.named('shadeDowngradedApi') {
+    inputFile = bundleJar.flatMap { it.archiveFile }
+    archiveBaseName = 'AIBuilder'
+    archiveClassifier = ''
+    if (commit ==~ /[0-9A-Za-z.-]+/) archiveVersion = "${project.version}+${commit}"
+    shadePath = 'me/abdiskiosk/minecraftaibuilder/libs/'
+    // Each commit names its own jar; drop the earlier ones so build/libs holds only this build's.
+    doFirst { delete fileTree(destinationDirectory) { include 'AIBuilder-*.jar' } }
+}
 
-// Dev servers: ./gradlew :core:runServer (1.21.11), :core:runLatest (26.3), :core:runLegacy (1.8.8).
+// Java 8 loads class files up to version 52. This does not catch a JDK class the downgrader has no stand-in for
+// (java.net.http.WebSocket was one): such a class only fails when a Java 8 server first uses it.
+def checkJava8 = tasks.register('checkJava8') {
+    group = 'verification'
+    description = 'Fails if a class in the plugin jar is newer than Java 8 bytecode.'
+    def jar = pluginJar.flatMap { it.archiveFile }
+    inputs.file(jar)
+    doLast {
+        new java.util.zip.ZipFile(jar.get().asFile).withCloseable { zip ->
+            zip.entries().findAll { it.name.endsWith('.class') }.each { e ->
+                int major = zip.getInputStream(e).withCloseable { new DataInputStream(it).with { d -> d.skipBytes(6); d.readUnsignedShort() } }
+                if (major > 52) throw new GradleException("${e.name} is class file version ${major}; Java 8 loads 52 at most")
+            }
+        }
+    }
+}
+tasks.named('check') { dependsOn checkJava8 }
+
+tasks.named('build') { dependsOn pluginJar }
+
+// Dev servers: ./gradlew :core:runServer (1.21.11), :core:runLatest (26.3), :core:run262 (26.2), :core:runLegacy (1.8.8).
 // Each run directory needs eula=true accepted by you on first start.
 def launcher = { int v -> javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(v) } }
 
+runPaper.disablePluginJarDetection()
+
 tasks.named('runServer', RunServer) {
     minecraftVersion('1.21.11')
+    pluginJars.from(pluginJar.flatMap { it.archiveFile })
     javaLauncher = launcher(21)
     runDirectory = layout.projectDirectory.dir('run/1.21.11')
     downloadPlugins {
@@ -64,16 +115,28 @@ tasks.register('runLatest', RunServer) {
     group = 'run paper'
     minecraftVersion('26.3')
     javaLauncher = launcher(25)
-    pluginJars.from(tasks.shadowJar.archiveFile)
+    pluginJars.from(pluginJar.flatMap { it.archiveFile })
     runDirectory = layout.projectDirectory.dir('run/26.3')
     downloadPlugins { modrinth('worldedit', 'YFnqiUlL') } // 7.4.6 bukkit
+}
+
+tasks.register('run262', RunServer) {
+    group = 'run paper'
+    minecraftVersion('26.2')
+    javaLauncher = launcher(25)
+    pluginJars.from(pluginJar.flatMap { it.archiveFile })
+    runDirectory = layout.projectDirectory.dir('run/26.2')
+    downloadPlugins {
+        modrinth('worldedit', 'YFnqiUlL') // 7.4.6 bukkit
+        modrinth('worldguard', 'TtfwTyi6') // 7.0.19, for the regions in get_context
+    }
 }
 
 tasks.register('runLegacy', RunServer) {
     group = 'run paper'
     // WorldEdit 6.1.x is not on Modrinth; drop worldedit-bukkit-6.1.9.jar into run/1.8.8/plugins yourself.
     minecraftVersion('1.8.8')
-    javaLauncher = launcher(17)
-    pluginJars.from(tasks.shadowJar.archiveFile)
+    javaLauncher = launcher(8)
+    pluginJars.from(pluginJar.flatMap { it.archiveFile })
     runDirectory = layout.projectDirectory.dir('run/1.8.8')
 }

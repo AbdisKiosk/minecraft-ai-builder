@@ -2,6 +2,7 @@ plugins {
     id 'java'
     id 'com.gradleup.shadow' version '9.6.1' apply false
     id 'xyz.jpenilla.run-paper' version '3.0.2' apply false
+    id 'xyz.wagyourtail.jvmdowngrader' version '2.0.1' apply false
 }
 
 allprojects {
@@ -23,6 +24,10 @@ subprojects {
     java {
         toolchain { languageVersion = JavaLanguageVersion.of(21) }
     }
+
+    // The source is Java 17. JvmDowngrader then rewrites each module's jar to Java 8 bytecode (downgradeJar), against
+    // that module's own compile classpath, and :core bundles those jars into the plugin. Tests run the Java 17 classes.
+    apply plugin: 'xyz.wagyourtail.jvmdowngrader'
 
     tasks.withType(JavaCompile).configureEach {
         options.release = 17

@@ -12,15 +12,12 @@ import me.abdiskiosk.minecraftaibuilder.common.Vec3;
 
 import java.io.IOException;
 import java.net.URI;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
+import java.net.HttpURLConnection;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.time.Duration;
 import java.util.Base64;
 import java.util.Comparator;
 import java.util.HexFormat;
@@ -35,12 +32,12 @@ import java.util.function.BooleanSupplier;
 public final class AssetLibrary {
     public static final int MAX_BYTES = 5 * 1024 * 1024;
     private static final long CACHE_BYTES = 128L * 1024 * 1024;
+    private static final long DOWNLOAD_SECONDS = 45;
     private final Path cache;
     /** The most assets get_context lists; the panel sends no more, and a faulty answer cannot grow the result. */
     public static final int MAX_LISTED = 30;
     private final BiFunction<String, JsonObject, JsonObject> request;
     private final BooleanSupplier available;
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
 
     public AssetLibrary(Path dir, BiFunction<String, JsonObject, JsonObject> request) {
         this(dir, request, () -> true);
@@ -161,10 +158,7 @@ public final class AssetLibrary {
                     throw new EditException("invalid asset download URL"); // never echo it: it is a bearer credential
                 }
                 if (!List.of("http", "https").contains(uri.getScheme())) throw new EditException("invalid asset download URL");
-                HttpRequest get = HttpRequest.newBuilder(uri).timeout(Duration.ofSeconds(45)).GET().build();
-                HttpResponse<byte[]> response = http.send(get, info -> new LimitedBody(length));
-                if (response.statusCode() != 200) throw new EditException("asset storage answered " + response.statusCode() + "; try again");
-                data = response.body();
+                data = download(uri, length);
                 if (data.length != length || !digest(data).equals(sha)) throw new EditException("asset download failed its checksum; try again");
                 Files.createDirectories(file.getParent());
                 Path tmp = Files.createTempFile(file.getParent(), "download-", ".tmp");
@@ -182,9 +176,6 @@ public final class AssetLibrary {
             if (states.length != volume) throw new EditException("asset data does not match its dimensions");
             // Saved air places air, like local blueprints.
             return new Asset(Blueprint.ofStates(sx, sy, sz, states, false), new Anchor(anchor, facing));
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new EditException("asset download interrupted");
         } catch (IOException e) {
             throw new EditException("cannot download or cache asset; check storage and try again");
         }
@@ -218,28 +209,28 @@ public final class AssetLibrary {
         }
     }
 
-    /** Bounds bytes while receiving, and completes only after the body, so the HTTP timeout covers the download. */
-    private static final class LimitedBody implements HttpResponse.BodySubscriber<byte[]> {
-        private final int limit;
-        private final java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
-        private final java.util.concurrent.CompletableFuture<byte[]> body = new java.util.concurrent.CompletableFuture<>();
-        private java.util.concurrent.Flow.Subscription subscription;
-        LimitedBody(int limit) { this.limit = limit; }
-        public java.util.concurrent.CompletionStage<byte[]> getBody() { return body; }
-        public void onSubscribe(java.util.concurrent.Flow.Subscription s) { subscription = s; s.request(1); }
-        public void onNext(List<java.nio.ByteBuffer> buffers) {
-            for (var buffer : buffers) {
-                if (buffer.remaining() > limit - bytes.size()) {
-                    subscription.cancel();
-                    body.completeExceptionally(new IOException("asset download too large"));
-                    return;
+    /** One GET, redirects not followed, bounded in bytes while receiving and in time over the whole download. */
+    private static byte[] download(URI uri, int limit) throws IOException {
+        long deadline = System.nanoTime() + DOWNLOAD_SECONDS * 1_000_000_000L;
+        HttpURLConnection c = (HttpURLConnection) uri.toURL().openConnection();
+        try {
+            c.setConnectTimeout(10_000);
+            c.setReadTimeout(10_000);
+            c.setInstanceFollowRedirects(false);
+            int status = c.getResponseCode();
+            if (status != 200) throw new EditException("asset storage answered " + status + "; try again");
+            java.io.ByteArrayOutputStream bytes = new java.io.ByteArrayOutputStream();
+            byte[] buffer = new byte[16 * 1024];
+            try (java.io.InputStream in = c.getInputStream()) {
+                for (int n; (n = in.read(buffer)) > 0; ) {
+                    if (n > limit - bytes.size()) throw new IOException("asset download too large");
+                    if (System.nanoTime() > deadline) throw new IOException("asset download timed out");
+                    bytes.write(buffer, 0, n);
                 }
-                byte[] part = new byte[buffer.remaining()];
-                buffer.get(part); bytes.writeBytes(part);
             }
-            subscription.request(1);
+            return bytes.toByteArray();
+        } finally {
+            c.disconnect();
         }
-        public void onError(Throwable error) { body.completeExceptionally(error); }
-        public void onComplete() { body.complete(bytes.toByteArray()); }
     }
 }

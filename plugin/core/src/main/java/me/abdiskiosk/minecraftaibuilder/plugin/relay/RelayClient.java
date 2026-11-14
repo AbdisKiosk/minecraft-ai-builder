@@ -23,16 +23,12 @@ import me.abdiskiosk.minecraftaibuilder.plugin.mcp.McpEndpoint;
 
 import java.net.URI;
 import java.io.IOException;
-import java.net.http.HttpClient;
-import java.net.http.HttpRequest;
-import java.net.http.HttpResponse;
-import java.net.http.WebSocket;
-import java.nio.ByteBuffer;
+import java.net.HttpURLConnection;
 import java.time.Duration;
+import java.util.Collections;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -69,9 +65,10 @@ public final class RelayClient implements BuildService.JobListener {
     private final Supplier<JsonObject> hello;
     private final Logger logger;
     private final Gson gson = new GsonBuilder().disableHtmlEscaping().create();
-    private final HttpClient http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(10)).build();
     private final ExecutorService workers = Executors.newFixedThreadPool(4, daemon("AIBuilder-Relay"));
     private final ScheduledExecutorService timer = Executors.newSingleThreadScheduledExecutor(daemon("AIBuilder-Relay-Timer"));
+    /** Connects and writes to the socket, one at a time and never on the server thread: both block. */
+    private final ExecutorService sender = Executors.newSingleThreadExecutor(daemon("AIBuilder-Relay-Send"));
     private final Map<String, Long> lastProgress = new ConcurrentHashMap<>();
     /** Requests this plugin made of the panel, by id, waiting for their answer. */
     private final Map<Long, CompletableFuture<JsonObject>> answers = new ConcurrentHashMap<>();
@@ -85,14 +82,12 @@ public final class RelayClient implements BuildService.JobListener {
     private volatile boolean welcomed;
     private volatile boolean links;
 
-    private volatile WebSocket socket;
+    private volatile WebSocketClient socket;
     private volatile boolean stopped;
     private volatile String status = "starting";
     private volatile long lastHeard;
     private volatile long lastBeat = System.currentTimeMillis();
     private long backoff = 1;
-    /** Sends must not overlap (java.net.http.WebSocket rule), so each waits for the previous one. */
-    private CompletableFuture<?> sendChain = CompletableFuture.completedFuture(null);
 
     /**
      * @param history null when the history is turned off
@@ -146,15 +141,17 @@ public final class RelayClient implements BuildService.JobListener {
 
     public void stop() {
         stopped = true;
-        WebSocket s = socket;
+        WebSocketClient s = socket;
         socket = null;
         if (s != null) {
             try {
-                s.sendClose(WebSocket.NORMAL_CLOSURE, "server stopping").get(2, TimeUnit.SECONDS);
+                sender.submit(() -> s.close(WebSocketClient.NORMAL_CLOSURE, "server stopping")).get(2, TimeUnit.SECONDS);
             } catch (Exception ignored) {
-                s.abort();
+                // a send that hangs or a sender already shut down: drop the connection below
             }
+            s.abort();
         }
+        sender.shutdownNow();
         workers.shutdownNow();
         uploads.shutdownNow();
         timer.shutdownNow();
@@ -162,33 +159,38 @@ public final class RelayClient implements BuildService.JobListener {
 
     private void connect() {
         if (stopped) return;
+        try {
+            sender.execute(this::open);
+        } catch (java.util.concurrent.RejectedExecutionException stopping) {
+            // stop() ran in between
+        }
+    }
+
+    private void open() {
+        if (stopped) return;
         Listener listener = new Listener();
-        http.newWebSocketBuilder()
-                .header("Authorization", "Bearer " + token)
-                .connectTimeout(Duration.ofSeconds(10))
-                .buildAsync(uri, listener)
-                .whenComplete((ws, error) -> {
-                    if (error != null) {
-                        failed(describe(error));
-                        return;
-                    }
-                    boolean closedEarly;
-                    synchronized (this) {
-                        socket = ws;
-                        sendChain = CompletableFuture.completedFuture(null);
-                        backoff = 1;
-                        closedEarly = listener.closedEarly;
-                    }
-                    lastHeard = System.currentTimeMillis();
-                    if (!status.startsWith("connected")) logger.info("Relay connected to " + uri);
-                    status = "connected to " + uri;
-                    // The panel closed it (a rejected token, say) before this ran, when closed() could not tell it was ours.
-                    if (closedEarly) {
-                        closed(ws, listener.earlyCode, listener.earlyReason);
-                        return;
-                    }
-                    sendHello();
-                });
+        WebSocketClient ws;
+        try {
+            ws = WebSocketClient.connect(uri, Collections.singletonMap("Authorization", "Bearer " + token), 10_000, listener);
+        } catch (IOException | RuntimeException e) {
+            failed(describe(e));
+            return;
+        }
+        listener.ws = ws;
+        synchronized (this) {
+            if (stopped) {
+                ws.abort();
+                return;
+            }
+            socket = ws;
+            backoff = 1;
+        }
+        lastHeard = System.currentTimeMillis();
+        if (!status.startsWith("connected")) logger.info("Relay connected to " + uri);
+        status = "connected to " + uri;
+        sendHello();
+        // Reading starts once the socket is current, so a close the panel sent at once (a rejected token, say) is ours.
+        ws.start("AIBuilder-Relay-Read");
     }
 
     private synchronized void failed(String why) {
@@ -212,7 +214,7 @@ public final class RelayClient implements BuildService.JobListener {
         long now = System.currentTimeMillis();
         long gap = now - lastBeat;
         lastBeat = now;
-        WebSocket s = socket;
+        WebSocketClient s = socket;
         if (s == null) return;
         // A late heartbeat means this process was paused (the machine slept), not that the panel went quiet:
         // give the panel a fresh ping to answer instead of dropping a working connection.
@@ -222,7 +224,7 @@ public final class RelayClient implements BuildService.JobListener {
             failed("no answer from the panel");
             return;
         }
-        enqueue(s, ws -> ws.sendPing(ByteBuffer.allocate(0)));
+        enqueue(s, WebSocketClient::sendPing);
     }
 
     private void sendHello() {
@@ -500,13 +502,8 @@ public final class RelayClient implements BuildService.JobListener {
             ask.add("files", list);
             JsonObject urls = answered(ask).getAsJsonObject("urls");
             for (Map.Entry<String, java.nio.file.Path> f : files.entrySet()) {
-                HttpRequest put = HttpRequest.newBuilder(URI.create(urls.get(f.getKey()).getAsString()))
-                        .timeout(Duration.ofMinutes(5))
-                        .header("Content-Type", "application/gzip")
-                        .PUT(HttpRequest.BodyPublishers.ofFile(f.getValue()))
-                        .build();
-                HttpResponse<String> r = http.send(put, HttpResponse.BodyHandlers.ofString());
-                if (r.statusCode() / 100 != 2) throw new IOException("storage answered " + r.statusCode() + " for " + f.getKey());
+                int status = put(URI.create(urls.get(f.getKey()).getAsString()), f.getValue());
+                if (status / 100 != 2) throw new IOException("storage answered " + status + " for " + f.getKey());
             }
         }
         JsonObject done = new JsonObject();
@@ -519,6 +516,26 @@ public final class RelayClient implements BuildService.JobListener {
         done.add("files", names);
         answered(done);
         history.markArchived(id);
+    }
+
+    /** Uploads a file with one PUT and returns the status; redirects are not followed. */
+    private static int put(URI to, java.nio.file.Path file) throws IOException {
+        HttpURLConnection c = (HttpURLConnection) to.toURL().openConnection();
+        try {
+            c.setConnectTimeout(10_000);
+            c.setReadTimeout(5 * 60_000);
+            c.setInstanceFollowRedirects(false);
+            c.setRequestMethod("PUT");
+            c.setRequestProperty("Content-Type", "application/gzip");
+            c.setDoOutput(true);
+            c.setFixedLengthStreamingMode(java.nio.file.Files.size(file));
+            try (java.io.OutputStream out = c.getOutputStream()) {
+                java.nio.file.Files.copy(file, out);
+            }
+            return c.getResponseCode();
+        } finally {
+            c.disconnect();
+        }
     }
 
     /** Asks the panel and waits for its answer's body; fails unless the answer is 2xx. */
@@ -685,22 +702,32 @@ public final class RelayClient implements BuildService.JobListener {
     }
 
     private void send(JsonObject frame) {
-        WebSocket s = socket;
+        WebSocketClient s = socket;
         if (s == null) return;
         String text = gson.toJson(frame);
-        enqueue(s, ws -> ws.sendText(text, true));
+        enqueue(s, ws -> ws.sendText(text));
     }
 
-    private synchronized void enqueue(WebSocket s, java.util.function.Function<WebSocket, CompletableFuture<WebSocket>> op) {
-        sendChain = sendChain.handle((v, e) -> null)
-                .thenCompose(v -> s == socket ? op.apply(s) : CompletableFuture.completedFuture(s))
-                .exceptionally(e -> {
+    private interface Send {
+        void to(WebSocketClient ws) throws IOException;
+    }
+
+    private void enqueue(WebSocketClient s, Send op) {
+        try {
+            sender.execute(() -> {
+                if (s != socket) return;
+                try {
+                    op.to(s);
+                } catch (IOException | RuntimeException e) {
                     logger.log(Level.FINE, "Relay send failed", e);
-                    return null;
-                });
+                }
+            });
+        } catch (java.util.concurrent.RejectedExecutionException stopping) {
+            // stop() ran in between
+        }
     }
 
-    private void closed(WebSocket ws, int code, String reason) {
+    private void closed(WebSocketClient ws, int code, String reason) {
         if (ws != socket) return;
         String why = switch (code) {
             case RelayProtocol.CLOSE_BAD_TOKEN -> "the panel rejected relay.token";
@@ -716,60 +743,28 @@ public final class RelayClient implements BuildService.JobListener {
         failed(why);
     }
 
-    private final class Listener implements WebSocket.Listener {
-        private final StringBuilder buffer = new StringBuilder();
-        /** A close that came before connect() made this socket current; guarded by the RelayClient. */
-        private boolean closedEarly;
-        private int earlyCode;
-        private String earlyReason;
+    private final class Listener implements WebSocketClient.Listener {
+        /** Set before reading starts. */
+        private WebSocketClient ws;
 
         @Override
-        public void onOpen(WebSocket ws) {
-            ws.request(1);
-        }
-
-        @Override
-        public CompletionStage<?> onText(WebSocket ws, CharSequence data, boolean last) {
+        public void onText(String text) {
             lastHeard = System.currentTimeMillis();
-            buffer.append(data);
-            if (last) {
-                String text = buffer.toString();
-                buffer.setLength(0);
-                handle(text);
-            }
-            ws.request(1);
-            return null;
+            handle(text);
         }
 
         @Override
-        public CompletionStage<?> onPing(WebSocket ws, ByteBuffer message) {
+        public void onHeard() {
             lastHeard = System.currentTimeMillis();
-            ws.request(1);
-            return null;
         }
 
         @Override
-        public CompletionStage<?> onPong(WebSocket ws, ByteBuffer message) {
-            lastHeard = System.currentTimeMillis();
-            ws.request(1);
-            return null;
-        }
-
-        @Override
-        public CompletionStage<?> onClose(WebSocket ws, int code, String reason) {
-            synchronized (RelayClient.this) {
-                if (socket != ws && !closedEarly && !stopped) {
-                    closedEarly = true;
-                    earlyCode = code;
-                    earlyReason = reason;
-                }
-            }
+        public void onClose(int code, String reason) {
             closed(ws, code, reason);
-            return null;
         }
 
         @Override
-        public void onError(WebSocket ws, Throwable error) {
+        public void onError(Throwable error) {
             if (ws == socket) failed(describe(error));
         }
     }
