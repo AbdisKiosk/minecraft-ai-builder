@@ -4,6 +4,7 @@
 import nextEnv from '@next/env';
 import { createServer } from 'node:http';
 import next from 'next';
+import { onPlanChange } from './lib/server/billing';
 import { migrate } from './lib/server/migrate';
 import { installHub, RELAY, RelayHub } from './lib/server/hub';
 import { PLUGIN_JAR_HREF } from './lib/pluginJar';
@@ -22,6 +23,7 @@ if (applied.length) console.info(`database: applied ${applied.join(', ')}`);
 
 const hub = new RelayHub();
 installHub(hub);
+onPlanChange(owners => { hub.planChanged(owners).catch(e => console.warn('relay: could not send the new plan', e.message)); });
 installJarSource(() => findPluginJar());
 
 const app = next({ dev, hostname: host, port });

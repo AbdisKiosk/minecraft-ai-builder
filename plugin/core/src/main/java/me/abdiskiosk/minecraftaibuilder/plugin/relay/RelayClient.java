@@ -81,6 +81,8 @@ public final class RelayClient implements BuildService.JobListener {
     /** A welcome arrived on this connection, and whether it offered account links (link, unlink, player_asset). */
     private volatile boolean welcomed;
     private volatile boolean links;
+    /** The last plan refusal logged, or null when edits were allowed. */
+    private volatile String planRefusal;
 
     private volatile WebSocketClient socket;
     private volatile boolean stopped;
@@ -287,6 +289,10 @@ public final class RelayClient implements BuildService.JobListener {
             welcome(frame);
             return;
         }
+        if (type.equals(RelayProtocol.PLAN)) {
+            plan(frame);
+            return;
+        }
         if (type.equals(RelayProtocol.ANSWER)) {
             CompletableFuture<JsonObject> f = id == null ? null : answers.remove(id.getAsLong());
             if (f != null) f.complete(frame);
@@ -365,7 +371,19 @@ public final class RelayClient implements BuildService.JobListener {
 
     // ---- history archive ----
 
+    /** Takes what the owner's plan allows from a welcome or plan frame; a field an older panel does not send allows. */
+    private void plan(JsonObject frame) {
+        service.setPlan(!frame.has("review") || frame.get("review").getAsBoolean(),
+                !frame.has("protect") || frame.get("protect").getAsBoolean());
+        String refusal = service.planRefusal();
+        // Log changes only: every reconnect brings a welcome.
+        if (refusal != null && !refusal.equals(planRefusal)) logger.warning("Claude's edits are refused: " + refusal);
+        if (refusal == null && planRefusal != null) logger.info("The owner's plan now covers this server's settings; Claude's edits are placed again.");
+        planRefusal = refusal;
+    }
+
     private void welcome(JsonObject frame) {
+        plan(frame);
         assets = frame.has("assets") && frame.get("assets").getAsBoolean();
         links = frame.has("links") && frame.get("links").getAsBoolean();
         welcomed = true;

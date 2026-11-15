@@ -63,10 +63,10 @@ In a browser against the dev database and Stripe's sandbox:
    then Free and `canceled`). An unsigned delivery is answered 400. The logic is also unit tested
    (`test/billing.test.ts`, `planState` in `test/plans.test.ts`). Not seen yet: the Billing page's "Cancelled: the plan
    ends on …" line in a browser. `stripe listen --api-key <test key>` needs no `stripe login`.
-2. **Review mode and WorldGuard protection are not enforced.** The pricing page lists them under Pro and Studio, but
-   both are settings in the plugin's own `config.yml`, which the panel does not control. Enforcing them means the
-   panel telling the plugin its plan over the relay (`RelayProtocol` and `hub.ts` together) and the plugin refusing.
-   Until then the pricing page promises a limit that does not exist.
+2. ~~Review mode and WorldGuard protection are not enforced.~~ Done: `review` and `protect` are limits in
+   `lib/plans.ts`, the panel sends them in the relay's `welcome` and in a `plan` frame when the plan changes, and the
+   plugin refuses the AI's edits while a setting is on that the plan lacks (see "Billing" in `docs/panel.md`).
+   Unit tested on both sides; not yet seen with a real plugin connected to a panel that sells plans.
 3. ~~Not exercised in a browser.~~ Done on 2026-11-13 with a signed-in session against the real routes, on a local
    database seeded with a full server, a second owner and backdated history:
    - Free: a second server, an invite on a full server, saving an asset, promote between two servers, opening and

@@ -22,6 +22,11 @@ interface Card {
 const servers = (n: number) => `${n === 1 ? '1 server' : `${n} servers`}`;
 const members = (n: number | null) => (n === null ? 'Unlimited members' : `${n} members`);
 const history = (days: number | null) => (days === null ? 'Full history and undo' : `${days} days of history and undo`);
+/** The lines of what the plugin enforces (see hub.ts), on the first plan that has each. */
+const gated = (plan: Plan, below: Plan) => [
+  ...(plan.limits.review && !below.limits.review ? ['Review mode with drafts'] : []),
+  ...(plan.limits.protect && !below.limits.protect ? ['WorldGuard protection'] : []),
+];
 
 // The numbers come from lib/plans.ts, which the panel enforces.
 const { free, pro, studio } = PLANS;
@@ -37,7 +42,7 @@ const CARDS: Card[] = [
     blurb: 'For a server you build on every week.',
     builtOn: 'Everything in Free, and:',
     features: [servers(pro.limits.servers), members(pro.limits.members), history(pro.limits.historyDays), 'Asset library',
-      'Review mode with drafts', 'REST API for build scripts'],
+      ...gated(pro, free), 'REST API for build scripts'],
     featured: true,
   },
   {
@@ -45,7 +50,7 @@ const CARDS: Card[] = [
     blurb: 'For build teams and server networks.',
     builtOn: 'Everything in Pro, and:',
     features: [`Up to ${servers(studio.limits.servers)}`, members(studio.limits.members), 'Promote builds between servers',
-      'WorldGuard protection', 'Priority support'],
+      ...gated(studio, pro), 'Priority support'],
   },
 ];
 

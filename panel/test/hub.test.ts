@@ -170,6 +170,34 @@ async function answerTo(socket: FakeSocket, frame: Record<string, unknown>) {
   return null;
 }
 
+test('a panel that sells no plans tells the plugin that review mode and WorldGuard protection are allowed', () => {
+  storage(false);
+  delete process.env.STRIPE_SECRET_KEY;
+  const hub = new RelayHub();
+  try {
+    const welcome = connect(hub, 'a').last('welcome');
+    assert.deepEqual([welcome.review, welcome.protect], [true, true]);
+  } finally {
+    hub.closeAll();
+  }
+});
+
+test('a plan that cannot be read is left out of the welcome, which the plugin takes as allowed', async () => {
+  storage(false);
+  process.env.STRIPE_SECRET_KEY = 'sk_test_unused'; // plans are sold, and there is no database to read one from
+  const hub = new RelayHub();
+  try {
+    const s = connect(hub, 'a');
+    for (let i = 0; i < 200 && !s.last('welcome'); i++) await new Promise(r => setTimeout(r, 5));
+    const welcome = s.last('welcome');
+    assert.equal(welcome.links, true);
+    assert.ok(!('review' in welcome) && !('protect' in welcome), JSON.stringify(welcome));
+  } finally {
+    delete process.env.STRIPE_SECRET_KEY;
+    hub.closeAll();
+  }
+});
+
 test('the welcome offers account links; link frames are checked before any lookup and limited per server', async () => {
   storage(false);
   const hub = new RelayHub();

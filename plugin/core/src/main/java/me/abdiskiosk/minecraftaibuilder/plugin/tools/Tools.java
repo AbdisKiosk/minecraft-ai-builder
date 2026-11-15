@@ -257,6 +257,8 @@ public final class Tools {
             server.addProperty("note", "Block set is 1.8-1.12 (no lanterns, concrete, deepslate, new woods). Blocks that do not exist are rejected; check with block_info.");
         }
         out.add("server", server);
+        String refused = service.planRefusal();
+        if (refused != null) out.addProperty("edits_refused", refused);
         if (service.reviewOn()) {
             JsonObject review = new JsonObject();
             review.addProperty("note", "Edits go into a draft that a person approves before it is placed (results say placed:false). "
@@ -503,6 +505,7 @@ public final class Tools {
         a.only("decorate", "items", "origin", "remove");
         if (!a.has("items") && !a.has("remove")) throw new EditException("give \"items\", \"remove\" or both");
         List<DecorSpec.Item> items = a.has("items") ? DecorSpec.parse(a) : List.of();
+        service.checkPlan();
         if (service.reviewOn()) {
             throw new EditException("decorate is off while review is on: signs, containers and entities would skip the draft. "
                     + "Ask for the draft to be approved, then decorate.");

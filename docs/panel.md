@@ -156,10 +156,19 @@ answers 402 with the reason:
 | Asset library | saving, uploading and sharing, from the panel, from the AI and in game; existing assets stay usable |
 | REST API | `/s/<server>/api/*`; MCP is in every plan |
 | Promote | between two servers; within one server it is allowed |
+| Review mode | by the plugin: while `review.enabled` is on, the AI's edits are refused with the reason |
+| WorldGuard protection | by the plugin: while `worldguard.protect` is on, the AI's edits are refused with the reason |
 
 Nothing is deleted on a downgrade or a failed payment: what is over the limit stays and only more is refused. While
-Stripe retries a card (`past_due`) the plan is kept. Review mode and WorldGuard protection are settings in the
-plugin's `config.yml`, which the panel does not control: no plan limits them yet.
+Stripe retries a card (`past_due`) the plan is kept.
+
+Review mode and WorldGuard protection are settings in the plugin's `config.yml`, so the plugin enforces them. The
+panel says what the owner's plan allows in the relay's `welcome`, and again in a `plan` frame when `syncCustomer`
+reads a new plan (`RelayHub#planChanged`). While a setting is on that the plan lacks, the plugin refuses the AI's
+edits and `decorate` rather than place them without the draft or the protection; `get_context` says so in
+`edits_refused` and the server console logs it. The owner upgrades, or turns the setting off and restarts the
+server. Approving, rejecting and reverting on the panel stay open, so a draft made before a downgrade is not stuck.
+A plugin from before this ignores the fields and is not limited, and so is a plan the panel could not read.
 
 **Billing** in the dashboard (shown only when the panel sells plans) has the account's plan and two links:
 `/api/billing/checkout` redirects to Stripe Checkout, which returns to `/api/billing/return`, and `/api/billing/portal`

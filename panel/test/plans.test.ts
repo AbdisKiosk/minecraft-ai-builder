@@ -17,6 +17,13 @@ test('Free allows one server, two members, a week of history and no extras', () 
   for (const feature of ['assets', 'restApi', 'promote'] as const) assert.match(featureRefusal(free, feature)!, /plan\. Upgrade/);
 });
 
+test('review mode starts at Pro and WorldGuard protection at Studio', () => {
+  assert.deepEqual([free.review, free.protect], [false, false]);
+  assert.deepEqual([PLANS.pro.limits.review, PLANS.pro.limits.protect], [true, false]);
+  assert.deepEqual([PLANS.studio.limits.review, PLANS.studio.limits.protect], [true, true]);
+  assert.deepEqual([UNLIMITED.review, UNLIMITED.protect], [true, true]);
+});
+
 test('history older than the window is closed, newer is open', () => {
   const now = 100 * DAY;
   assert.equal(historyCutoff(free, now), 93 * DAY);

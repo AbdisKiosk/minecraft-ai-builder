@@ -57,6 +57,14 @@ package me.abdiskiosk.minecraftaibuilder.common;
  *
  * Without a welcome that says {@code "archive":true}, the plugin keeps its entries and asks for nothing.
  *
+ * Review mode and WorldGuard protection are settings in the plugin's config.yml that the panel sells in its plans,
+ * so the panel says what the plan of the server's owner allows and the plugin refuses edits while a setting is on
+ * that the plan lacks. Additive (no protocol bump): a field that is missing allows, as from an older panel.
+ * <pre>
+ * panel → plugin  {"t":"welcome",...,"review":true,"protect":false}
+ *                 {"t":"plan","review":true,"protect":true}   (when the plan changes while connected)
+ * </pre>
+ *
  * The panel knows which server a socket belongs to from the bearer token it connected with.
  */
 public final class RelayProtocol {
@@ -76,6 +84,7 @@ public final class RelayProtocol {
     public static final String REPLY = "reply";
     public static final String EVENT = "event";
     public static final String WELCOME = "welcome";
+    public static final String PLAN = "plan";
     public static final String UPLOAD = "upload";
     public static final String UPLOADED = "uploaded";
     public static final String ANSWER = "answer";

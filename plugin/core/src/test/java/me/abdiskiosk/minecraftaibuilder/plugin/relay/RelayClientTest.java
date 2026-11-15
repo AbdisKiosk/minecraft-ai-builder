@@ -468,6 +468,35 @@ class RelayClientTest {
     }
 
     @Test
+    void editsAreRefusedWhileASettingIsOnThatTheOwnersPlanLacks() throws Exception {
+        settled();
+        assertEquals(null, service.planRefusal(), "a welcome without plan fields, as from an older panel, allows");
+        service.setDrafts(new me.abdiskiosk.minecraftaibuilder.plugin.Drafts(service,
+                new me.abdiskiosk.minecraftaibuilder.plugin.Drafts.Settings(true, 1000, 2, 1000),
+                new History.Settings(true, 1000, 10, 1 << 20, 4096, 1000), Logger.getAnonymousLogger()));
+        service.setGuard((me.abdiskiosk.minecraftaibuilder.common.RegionGuard) Proxy.newProxyInstance(
+                getClass().getClassLoader(), new Class<?>[]{me.abdiskiosk.minecraftaibuilder.common.RegionGuard.class},
+                (p, m, a) -> m.getName().equals("denied") ? List.of() : null), true);
+        assertEquals(null, service.planRefusal(), "review and protection are on and nothing forbids them");
+
+        panel.send("{\"t\":\"plan\",\"review\":true,\"protect\":false}");
+        settled();
+        assertTrue(service.planRefusal().startsWith("WorldGuard protection (worldguard.protect) is on"), service.planRefusal());
+        BuildService.Caller caller = new BuildService.Caller(ALEX, "Alex", "world", null, 0, List.of(), 0, 255);
+        EditException e = org.junit.jupiter.api.Assertions.assertThrows(EditException.class,
+                () -> service.checkEditable(caller, Box.of(new Vec3(0, 64, 0), new Vec3(0, 64, 0)), "items[0]"));
+        assertTrue(e.getMessage().contains("Billing page"), e.getMessage());
+
+        panel.send("{\"t\":\"plan\",\"review\":false,\"protect\":true}");
+        settled();
+        assertTrue(service.planRefusal().startsWith("review mode (review.enabled) is on"), service.planRefusal());
+
+        panel.send("{\"t\":\"welcome\",\"archive\":false,\"assets\":true,\"links\":true,\"review\":true,\"protect\":true}");
+        settled();
+        assertEquals(null, service.planRefusal(), "the plan covers both again");
+    }
+
+    @Test
     void listsTheLinkedPlayersLibraryInGame() throws Exception {
         settled();
         panel.playerHandler = f -> frame("{\"assets\":[{\"name\":\"window\",\"size\":[3,4,1],\"description\":\"oak\"},"
