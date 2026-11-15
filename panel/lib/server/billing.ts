@@ -1,7 +1,7 @@
 import Stripe from 'stripe';
 import { customerOfEvent, isPlan, limitsOf, planState, UNLIMITED, type Limits, type PlanId } from '../plans';
 import type { UserRow } from './access';
-import { exec, one } from './db';
+import { exec, one, query } from './db';
 
 // Plans are sold through Stripe: hosted Checkout to subscribe, the Customer Portal to change or cancel. The panel keeps
 // what the subscription grants on the user's row and reads it from there. Without STRIPE_SECRET_KEY the panel sells
@@ -132,6 +132,17 @@ export async function syncCustomer(customer: string): Promise<void> {
   await exec(
     'UPDATE users SET plan = ?, stripe_subscription = ?, plan_status = ?, plan_renews_at = ?, plan_cancels = ? WHERE stripe_customer = ?',
     [s.plan, s.subscription, s.status, s.renews === null ? null : new Date(s.renews), s.cancels ? 1 : 0, customer]);
+  const owners = await query<{ id: number }>('SELECT id FROM users WHERE stripe_customer = ?', [customer]);
+  g.__aibPlanChanged?.(owners.map(o => o.id));
+}
+
+// The plugin enforces review mode and WorldGuard protection, so a connected server has to hear of a new plan.
+// server.ts points this at the relay hub; it is on globalThis because route bundles load their own copy of this module.
+const g = globalThis as { __aibPlanChanged?: (owners: number[]) => void };
+
+/** Sets who is told the accounts whose plan was just read from Stripe again. */
+export function onPlanChange(listener: (owners: number[]) => void) {
+  g.__aibPlanChanged = listener;
 }
 
 /** Brings the account's plan up to date with Stripe, e.g. when the user comes back from Checkout. */

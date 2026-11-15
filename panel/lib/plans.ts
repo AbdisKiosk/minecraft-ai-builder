@@ -15,6 +15,10 @@ export interface Limits {
   restApi: boolean;
   /** Copying a region from one server into a draft on another. */
   promote: boolean;
+  /** Review mode: the plugin's review.enabled, which puts the AI's edits into drafts. The plugin enforces it. */
+  review: boolean;
+  /** WorldGuard protection: the plugin's worldguard.protect. The plugin enforces it. */
+  protect: boolean;
 }
 
 export interface Plan { id: PlanId; name: string; /** US dollars a month. */ price: number; limits: Limits }
@@ -26,13 +30,13 @@ export interface Plan { id: PlanId; name: string; /** US dollars a month. */ pri
 export const PRO_INCLUDES_STUDIO = true;
 
 export const PLANS: Record<PlanId, Plan> = {
-  free: { id: 'free', name: 'Free', price: 0, limits: { servers: 1, members: 2, historyDays: 7, assets: false, restApi: false, promote: false } },
-  pro: { id: 'pro', name: 'Pro', price: 10, limits: { servers: 3, members: 10, historyDays: null, assets: true, restApi: true, promote: false } },
-  studio: { id: 'studio', name: 'Studio', price: 29, limits: { servers: 10, members: null, historyDays: null, assets: true, restApi: true, promote: true } },
+  free: { id: 'free', name: 'Free', price: 0, limits: { servers: 1, members: 2, historyDays: 7, assets: false, restApi: false, promote: false, review: false, protect: false } },
+  pro: { id: 'pro', name: 'Pro', price: 10, limits: { servers: 3, members: 10, historyDays: null, assets: true, restApi: true, promote: false, review: true, protect: false } },
+  studio: { id: 'studio', name: 'Studio', price: 29, limits: { servers: 10, members: null, historyDays: null, assets: true, restApi: true, promote: true, review: true, protect: true } },
 };
 
 /** Everything allowed: what an account has on a panel that does not sell plans. */
-export const UNLIMITED: Limits = { servers: 10, members: null, historyDays: null, assets: true, restApi: true, promote: true };
+export const UNLIMITED: Limits = { servers: 10, members: null, historyDays: null, assets: true, restApi: true, promote: true, review: true, protect: true };
 
 export function isPlan(v: unknown): v is PlanId {
   return v === 'free' || v === 'pro' || v === 'studio';

@@ -78,6 +78,9 @@ public final class BuildService {
     private final MemoryGuard memory;
     private volatile RegionGuard guard;
     private volatile boolean protect;
+    /** What the plan of the server's owner on the panel allows; a panel that does not say allows both. */
+    private volatile boolean planReview = true;
+    private volatile boolean planProtect = true;
     /** Large reads run one at a time, so the arrays of several checks never sit in the heap together. */
     final Semaphore largeReads = new Semaphore(1, true);
     /** How long a large read waits for the one before it; tests shorten it. */
@@ -129,6 +132,33 @@ public final class BuildService {
     /** True when edits keep out of WorldGuard regions the acting player may not build in. */
     public boolean protects() {
         return guard != null && protect;
+    }
+
+    /** What the owner's plan allows of review mode and WorldGuard protection, as the panel's welcome or plan frame said. */
+    public void setPlan(boolean review, boolean protect) {
+        this.planReview = review;
+        this.planProtect = protect;
+    }
+
+    /**
+     * Why Claude's edits are refused: review.enabled or worldguard.protect is on and the owner's plan lacks it.
+     * Refusing keeps the promise the setting makes; placing without the draft or the protection would break it.
+     *
+     * @return null when the plan allows what is turned on
+     */
+    public String planRefusal() {
+        boolean review = reviewOn() && !planReview;
+        if (!review && !(protects() && !planProtect)) return null;
+        return (review ? "review mode (review.enabled)" : "WorldGuard protection (worldguard.protect)")
+                + " is on in this server's config.yml, but the plan of the server's owner does not include it, so nothing"
+                + " is placed. The owner can upgrade on the Billing page of the panel, or turn the setting off and restart"
+                + " the server.";
+    }
+
+    /** Throws {@link #planRefusal()} when there is one. */
+    public void checkPlan() {
+        String refusal = planRefusal();
+        if (refusal != null) throw new EditException(refusal);
     }
 
     public Path dataDir() {
@@ -975,6 +1005,8 @@ public final class BuildService {
 
     /** @return warnings for the result; throws for anything that must not run */
     private List<String> validate(Caller caller, List<Op> ops, boolean guarded) {
+        // The panel's own revert, approve and promote stay open, so a draft made before a downgrade is not stuck.
+        if (guarded) checkPlan();
         String world = caller.world();
         checkWorld(world);
         List<String> warnings = new ArrayList<>();
@@ -1017,6 +1049,7 @@ public final class BuildService {
 
     /** Throws unless {@code bounds} may be changed: allowed world, build zone, WorldGuard protection and y limits. */
     public void checkEditable(Caller caller, Box bounds, String what) {
+        checkPlan();
         checkWorld(caller.world());
         checkZone(caller.world(), bounds);
         checkGuard(caller, bounds);

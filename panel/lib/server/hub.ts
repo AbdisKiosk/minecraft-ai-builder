@@ -6,7 +6,8 @@ import { roleOf, serverForRelayToken } from './access';
 import { ArchiveError, commit, uploadUrls } from './archive';
 import { AssetGrants, assetRequest } from './assetRelay';
 import { AssetError } from './assets';
-import { exec } from './db';
+import { billingEnabled, serverLimits } from './billing';
+import { exec, query } from './db';
 import { linkDeps } from './minecraftLinkStore';
 import { AttemptLimit, failure, linkPlayer, playerAssetRequest, unlinkPlayer } from './minecraftLinks';
 import { configured as r2Configured, downloadUrl } from './r2';
@@ -27,6 +28,8 @@ export const RELAY = {
 
 export type Json = Record<string, any>;
 export interface Reply { status: number; body: unknown }
+/** The plan fields of a welcome or plan frame; empty when the plan is not known. */
+type PlanFrame = { review?: boolean; protect?: boolean };
 
 // server.ts and Next's route bundles each load their own copy of this module, so callers tell these errors apart
 // by `code`, never with instanceof.
@@ -280,10 +283,42 @@ export class RelayHub {
     console.info(`relay: server ${c.serverId} connected (${frame.mc ?? '?'} ${frame.bridge ?? '?'}, ${frame.plugin ?? '?'})`);
     // History goes to R2 when it is configured: the plugin then uploads each entry (see archive.ts).
     // links: this panel takes link, unlink and player_asset frames (/aibuilder link, asset save and asset list in game).
-    c.socket.send(JSON.stringify({ t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured(), links: true }));
+    const welcome = { t: 'welcome', archive: r2Configured() && frame.history === true, assets: r2Configured(), links: true };
+    // review, protect: what the owner's plan allows of the plugin's own settings, which the plugin enforces.
+    const send = (plan: PlanFrame) => {
+      if (c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ ...welcome, ...plan }));
+    };
+    if (billingEnabled()) this.planOf(c.serverId).then(send);
+    else send({ review: true, protect: true }); // no plans are sold, so there is nothing to look up
     exec('UPDATE servers SET info = ?, last_seen_at = NOW() WHERE id = ?', [JSON.stringify(s.info), c.serverId])
       .catch(e => console.warn('relay: could not save server info', e.message));
     this.emit({ type: 'server', server: c.serverId, state: s.toJson() });
+  }
+
+  /**
+   * What the server's plan allows of review mode and WorldGuard protection. When the plan cannot be read, nothing
+   * is said, which the plugin takes as allowed: a database fault must not stop a paying server's builds.
+   */
+  private async planOf(serverId: string): Promise<PlanFrame> {
+    try {
+      const { review, protect } = await serverLimits(serverId);
+      return { review, protect };
+    } catch (e) {
+      console.warn(`relay: could not read the plan of server ${serverId}`, (e as Error).message);
+      return {};
+    }
+  }
+
+  /** Tells the connected servers these accounts own what their plan allows now. */
+  async planChanged(owners: number[]) {
+    for (const owner of owners) {
+      for (const { id } of await query<{ id: string }>('SELECT id FROM servers WHERE owner_id = ?', [owner])) {
+        const c = this.live.get(id);
+        if (!c) continue;
+        const plan = await this.planOf(id);
+        if ('review' in plan && c.socket.readyState === WebSocket.OPEN) c.socket.send(JSON.stringify({ t: 'plan', ...plan }));
+      }
+    }
   }
 
   /** A plugin's upload request or confirmation; answered with {"t":"answer"} under the same id. */
