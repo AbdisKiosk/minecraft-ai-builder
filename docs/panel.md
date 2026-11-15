@@ -11,7 +11,8 @@ Claude Code / SDK ──HTTPS──▶ panel  /s/<server>/mcp, /s/<server>/api/<
 Browser           ──HTTPS──▶ panel  pages, /api/…, /api/events               (Auth0 session)
 Paper server      ──wss────▶ panel  /relay                                   (server token aibs_…)
                               │
-                              ├── MySQL: users, servers, memberships, invites, access tokens, history index
+                              ├── Anthropic API: the chat's requests, each with its user's own API key
+                              ├── MySQL: users, servers, memberships, invites, access tokens, history index, chats
                               └── R2: archived history, Minecraft client jars
 ```
 
@@ -120,13 +121,49 @@ For several servers in one session, add one entry per server, each with that ser
 The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>` and that server's
 `AIBUILDER_TOKEN`, so build scripts can run against several servers in parallel.
 
+## Chat with Claude
+
+**Chat with Claude** on a server's page (builders and up) is Claude building from the browser, without Claude Code.
+It uses the user's own Anthropic API key, which Anthropic bills; a Claude subscription does not include one.
+
+- **Key.** **Access tokens** → **Anthropic API key**. The panel checks the key with Anthropic once (listing models,
+  which costs nothing), stores it sealed with AES-256-GCM under `KEY_SECRET` (`AUTH0_SECRET` without it;
+  `lib/server/secretBox.ts`) and shows only its last four characters again. No answer of the API carries the key.
+- **Tools.** The chat sends the plugin the same MCP messages Claude Code sends to `/s/<server>/mcp`, down the relay as
+  the signed-in user (`lib/server/chat/mcp.ts`). So its edits pass the same checks as any other: limits, review mode
+  (they go into the draft, and the tool's card links to it), WorldGuard protection, history and undo. The builder role
+  is checked when a message is sent and again before each round of tool calls.
+- **Prompt.** The plugin's own instructions (from its MCP `initialize`) and this repository's `build` and
+  `build-style` skills, without their parts about scripts and subagents: the chat has no shell
+  (`lib/server/chat/prompt.ts`). It is fixed by a chat's first turn, so later requests reuse Anthropic's prompt cache.
+- **Turns.** A turn runs on the panel, not in the request that started it (`lib/server/chat/runs.ts`): closing the
+  page does not stop a build, and the page follows a turn over server-sent events that replay from the turn's start.
+  **Stop** ends it at once while Claude writes, and after the running tool call otherwise. A turn asks Claude at most
+  40 times; after that, "continue" starts the next one. A user can have three turns running.
+- **Storage.** `chats` and `chat_messages` (migration `011_chat.sql`): the messages as the Messages API takes them,
+  renders included, because a later turn sends the history back unchanged. A chat is its user's alone. Deleting it
+  leaves what it built in the world and in the history.
+- **Restart.** The panel's turns end when it restarts. What they stored stays, and the chat's next message first
+  answers tool calls that were left open with "interrupted", so Claude checks the world before repeating one.
+- **Cost.** The model picker is per chat (Claude Opus 5.5 by default), and the page shows the tokens a chat has used.
+  The panel sets no spending limit: set one on the key's workspace in the Claude Console.
+
+| Route | What it does |
+| --- | --- |
+| `GET/PUT/DELETE /api/account/api-key` | the caller's key: `{key: {hint, created, usable} \| null}` |
+| `GET /api/servers/<id>/chats` | the caller's chats there, and whether they have a usable key |
+| `POST /api/servers/<id>/chats` | a new chat from its first message `{text, model?}` |
+| `GET/POST/DELETE /api/servers/<id>/chats/<chat>` | the chat as the page shows it; the next message; delete |
+| `GET /api/servers/<id>/chats/<chat>/events` | the running turn's events: `text`, `tool`, `result`, `usage`, `end` |
+| `POST /api/servers/<id>/chats/<chat>/stop` | stop the running turn |
+
 ## Roles
 
 | Role | Can |
 | --- | --- |
 | owner | everything, including downloading the server's plugin, giving it a new key and deleting it |
 | admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
-| builder | build through Claude Code and scripts with their access token for the server, promote regions |
+| builder | build through Claude Code and scripts with their access token for the server, chat with Claude on the panel, promote regions |
 | viewer | see jobs, history and drafts |
 
 Invite links are single use and last seven days. Owners invite admins, builders and viewers; admins invite builders

@@ -31,6 +31,6 @@ export function canManage(actor: Role, target: Role): boolean {
 export const ROLE_TEXT: Record<Role, string> = {
   owner: 'everything, including deleting the server',
   admin: 'approve drafts, revert edits, invite and manage builders and viewers',
-  builder: 'build with Claude Code and scripts, promote regions',
+  builder: 'build with Claude Code, scripts and the chat, promote regions',
   viewer: 'see jobs, history and drafts',
 };
