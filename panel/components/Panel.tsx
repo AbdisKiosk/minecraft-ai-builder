@@ -6,6 +6,7 @@ import { finishWelcome } from '../lib/tips';
 import { usePanel } from '../lib/usePanel';
 import AssetsPage from './AssetsPage';
 import BillingPage from './BillingPage';
+import ChatPage from './ChatPage';
 import Dashboard from './Dashboard';
 import DiffPage from './DiffPage';
 import DraftPage from './DraftPage';
@@ -67,6 +68,9 @@ export default function Panel({ me }: { me: Me }) {
       } else if (route.page === 'lessons') {
         crumbs.push([name, serverHref(route.server)], ['Lessons']);
         page = <LessonsPage key={route.server} server={server} />;
+      } else if (route.page === 'chat') {
+        crumbs.push([name, serverHref(route.server)], ['Chat']);
+        page = <ChatPage key={route.server} server={server} chat={route.chat} />;
       } else if (route.page === 'diff') {
         crumbs.push([name, serverHref(route.server)], [route.id]);
         page = <DiffPage key={`${route.server}/${route.id}`} server={server} id={route.id} servers={servers} />;
