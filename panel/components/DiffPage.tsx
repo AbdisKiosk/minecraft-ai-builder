@@ -11,6 +11,7 @@ import ChangedSince from './ChangedSince';
 import FeedbackDialog from './FeedbackDialog';
 import PromoteDialog from './PromoteDialog';
 import { Badge, ChangesCard, Conflicts, Pills, ServerPageLink, TypesCard } from './shared';
+import Tip from './Tip';
 
 /** One history entry: what it changed, pictures, and revert. */
 export default function DiffPage({ server: s, id, servers }: { server: Server; id: string; servers: Servers }) {
@@ -66,7 +67,7 @@ export default function DiffPage({ server: s, id, servers }: { server: Server; i
           <p className="muted">Puts back the old blocks as a new job. Blocks changed again since this edit are left alone and listed, unless you force it.</p>
           <div className="toolbar">
             {admin && !s.online ? <span className="muted">The server is offline; reverting needs it online.</span> : admin ? <>
-              <button className="danger" disabled={busy || !e.tracked || total === 0} onClick={revert}>Revert this edit</button>
+              <Tip id="revert"><button className="danger" disabled={busy || !e.tracked || total === 0} onClick={revert}>Revert this edit</button></Tip>
               <label><input type="checkbox" checked={force} onChange={ev => setForce(ev.target.checked)} /> also overwrite later changes</label>
             </> : <span className="muted">Admins and the owner can revert.</span>}
             <span className="spacer" />

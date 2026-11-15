@@ -411,3 +411,42 @@ button.link:hover { text-decoration: underline; }
 .lesson-edit { display: grid; gap: 8px; }
 .lesson-edit textarea { width: 100%; font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
   border-radius: 8px; padding: 6px 10px; resize: vertical; }
+
+/* ---- the welcome guide and first-time tips (lib/tips.ts) ---- */
+dialog.guide { width: min(460px, calc(100vw - 32px)); padding: 32px 28px 20px; border-radius: 18px; color: var(--text); text-align: center; }
+.guide-logo { width: 52px; height: 52px; }
+.guide-logo .c1 { fill: #50b37a; } .guide-logo .c2 { fill: #367a54; } .guide-logo .c3 { fill: #42995f; }
+.guide h1 { font-size: 26px; letter-spacing: -.02em; margin: 10px 0 6px; }
+.guide-lead { margin: 0 auto 22px; max-width: 34em; }
+.guide-points { list-style: none; padding: 0; margin: 0 0 24px; display: grid; gap: 16px; text-align: left; }
+.guide-points li { display: grid; grid-template-columns: 32px 1fr; gap: 14px; align-items: start; }
+.guide-points svg, .tip-icon { fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.guide-points svg { width: 30px; height: 30px; margin-top: 2px; }
+.guide-points div { display: grid; gap: 1px; }
+.guide-points span { color: var(--muted); font-size: 13.5px; }
+.guide-go { width: 100%; font-size: 16px; padding: 11px 16px; border-radius: 12px; }
+.guide-foot { font-size: 12.5px; margin: 12px 0 0; }
+
+.tip-anchor { display: inline-flex; }
+.tip {
+  position: fixed; z-index: 40; width: max-content; max-width: min(300px, calc(100vw - 16px));
+  display: grid; grid-template-columns: 26px 1fr auto; gap: 10px; align-items: start;
+  padding: 12px 10px 12px 12px; border-radius: 14px; background: var(--surface); border: 1px solid var(--border);
+  box-shadow: 0 10px 30px rgba(16, 24, 40, .18), 0 2px 6px rgba(16, 24, 40, .08);
+  font-weight: 400; font-size: 13px; line-height: 1.4; text-align: left; white-space: normal;
+  transform-origin: var(--arrow) 0; animation: tip-in .22s cubic-bezier(.2, .9, .3, 1.2);
+}
+.tip[data-side=above] { transform-origin: var(--arrow) 100%; }
+.tip[hidden] { display: none; }
+.tip::before {
+  content: ""; position: absolute; left: var(--arrow); top: -7px; width: 12px; height: 12px; margin-left: -6px;
+  background: var(--surface); border: solid var(--border); border-width: 1px 0 0 1px; transform: rotate(45deg);
+}
+.tip[data-side=above]::before { top: auto; bottom: -7px; transform: rotate(225deg); }
+.tip-icon { width: 24px; height: 24px; }
+.tip b { font-size: 14px; font-weight: 650; }
+.tip p { margin: 2px 0 0; color: var(--muted); }
+.tip-close { background: none; color: var(--muted); border: 0; padding: 0 4px; font-size: 13px; line-height: 20px; border-radius: 6px; }
+.tip-close:hover { color: var(--text); background: var(--surface-2); }
+@keyframes tip-in { from { opacity: 0; transform: scale(.9); } }
+@media (prefers-reduced-motion: reduce) { .tip { animation: none; } }

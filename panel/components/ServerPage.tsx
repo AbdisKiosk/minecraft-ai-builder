@@ -5,6 +5,7 @@ import { billingHref, diffHref, draftHref, go, lessonsHref, mapHref, setupHref }
 import { can, type DraftSummary, type HistorySummary, type Server } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
+import Tip from './Tip';
 import MembersCard from './MembersCard';
 import ConnectClaude from './ConnectClaude';
 import CorrectionRate from './CorrectionRate';
@@ -26,11 +27,11 @@ export default function ServerPage({ server, servers }: { server: Server; server
       <div className="page-head"><div><h1>{server.name} {server.role !== 'owner' && <Badge>{server.role}</Badge>}</h1>
         <div className="muted"><span className={`dot inline ${server.online ? 'on' : ''}`} /> <ServerMeta server={server} /></div></div>
         <div className="toolbar" style={{ margin: 0 }}>
-          {!fresh && <a className="button ghost small" href={mapHref(id)}>Map</a>}
-          {!fresh && <a className="button ghost small" href={lessonsHref(id)}>Lessons</a>}
+          {!fresh && <Tip id="map"><a className="button ghost small" href={mapHref(id)}>Map</a></Tip>}
+          {!fresh && <Tip id="lessons"><a className="button ghost small" href={lessonsHref(id)}>Lessons</a></Tip>}
           {builder && !fresh && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
-          {builder && <button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
-            {connect ? 'Hide' : 'Connect your AI'}</button>}</div></div>
+          {builder && <Tip id="connect" when={!fresh}><button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
+            {connect ? 'Hide' : 'Connect your AI'}</button></Tip>}</div></div>
       {connect && <section className="card"><h2>Connect your AI</h2><ConnectClaude server={server} /></section>}
       {fresh && (
         <a className="card finish-setup big" href={setupHref(id)}>
@@ -197,7 +198,7 @@ function History({ id, server }: { id: string; server: Server }) {
 
   const last = entries?.[entries.length - 1];
   return (
-    <section className="card"><h2>History</h2><div className="table-wrap"><table>
+    <section className="card"><h2><Tip id="history" when={!!entries?.length}>History</Tip></h2><div className="table-wrap"><table>
       <thead><tr><th>When</th><th>Tool</th><th className="hide-sm">Who</th><th>Changes</th><th className="hide-sm">Where</th><th>Status</th></tr></thead>
       <tbody>
         {error && !entries?.length ? <tr><td colSpan={6} className="error">{error}</td></tr>

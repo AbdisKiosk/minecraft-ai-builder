@@ -6,6 +6,7 @@ import { go, mapHref } from '../lib/routes';
 import { can, type Server } from '../lib/types';
 import Modal from './Modal';
 import SaveAssetDialog from './SaveAssetDialog';
+import Tip from './Tip';
 
 /** An inclusive block rectangle on the map. */
 interface Rect { x1: number; z1: number; x2: number; z2: number }
@@ -114,9 +115,9 @@ export default function MapPage({ server, world: routeWorld }: { server: Server;
             </select>
           )}
           {builder && ready && (
-            <button className={drawMode && drawFor === 'area' ? '' : 'ghost'} onClick={() => startDrawing('area')}
+            <Tip id="markArea"><button className={drawMode && drawFor === 'area' ? '' : 'ghost'} onClick={() => startDrawing('area')}
               aria-pressed={drawMode && drawFor === 'area'}>
-              {drawMode && drawFor === 'area' ? 'Cancel marking (Esc)' : 'Mark area'}</button>
+              {drawMode && drawFor === 'area' ? 'Cancel marking (Esc)' : 'Mark area'}</button></Tip>
           )}
           {builder && ready && (
             <button className={drawMode && drawFor === 'asset' ? '' : 'ghost'} onClick={() => startDrawing('asset')}

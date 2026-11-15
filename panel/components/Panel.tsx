@@ -2,6 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react';
 import { assetsHref, billingHref, parseRoute, serverHref, tokensHref, useHash } from '../lib/routes';
+import { finishWelcome } from '../lib/tips';
 import { usePanel } from '../lib/usePanel';
 import AssetsPage from './AssetsPage';
 import BillingPage from './BillingPage';
@@ -12,7 +13,9 @@ import LessonsPage from './LessonsPage';
 import MapPage from './MapPage';
 import ServerPage from './ServerPage';
 import SetupPage from './SetupPage';
+import { useTips } from './Tip';
 import TokensPage from './TokensPage';
+import WelcomeGuide from './WelcomeGuide';
 
 type Crumb = [label: string, href?: string];
 export interface Me { name: string | null; email: string | null; picture: string | null; /** The panel sells plans. */ billing: boolean }
@@ -20,6 +23,9 @@ export interface Me { name: string | null; email: string | null; picture: string
 export default function Panel({ me }: { me: Me }) {
   const { servers, loaded, error, live, reload } = usePanel();
   const route = parseRoute(useHash());
+  // The welcome guide: once for a new visitor, and again from the header.
+  const [guide, setGuide] = useState(false);
+  const { welcomed } = useTips();
   // Keeps "connected 3m ago" and ETAs fresh.
   const [, tick] = useState(0);
   useEffect(() => {
@@ -85,6 +91,7 @@ export default function Panel({ me }: { me: Me }) {
         </nav>
         <span className={`live ${live ? 'on' : ''}`} title={live ? 'Live updates on' : 'Reconnecting…'} role="img"
           aria-label={live ? 'Live updates on' : 'Reconnecting'} />
+        <button className="ghost small" onClick={() => setGuide(true)}>Guide</button>
         <a className="button ghost small" href={tokensHref}>Access tokens</a>
         <a className="button ghost small" href={assetsHref}>Assets</a>
         {me.billing && <a className="button ghost small" href={billingHref}>Billing</a>}
@@ -94,6 +101,9 @@ export default function Panel({ me }: { me: Me }) {
         <a className="button ghost small" href="/auth/logout">Log out</a>
       </header>
       <main>{page}</main>
+      {loaded && (guide || !welcomed) && (
+        <WelcomeGuide hasServers={servers.size > 0} onClose={() => { finishWelcome(); setGuide(false); }} />
+      )}
     </>
   );
 }
