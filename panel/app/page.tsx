@@ -31,20 +31,6 @@ function PlanBadge({ feature }: { feature: keyof Limits }) {
   return plan && plan !== 'free' ? <span className="badge running">{PLANS[plan].name}</span> : null;
 }
 
-/** What the product does in one picture: a request, the draft it becomes, and the two buttons that decide it. */
-function HeroArt() {
-  return (
-    <div className="hero-art" aria-hidden="true">
-      <p className="hero-say">Build a watchtower on the hill by the river, spruce and stone.</p>
-      <Blocks />
-      <div className="hero-draft">
-        <span><i className="dot on" />Draft ready to review</span>
-        <span className="hero-draft-buttons"><b className="approve">Approve</b><b>Reject</b></span>
-      </div>
-    </div>
-  );
-}
-
 export default async function Home() {
   const session = await auth0.getSession();
   const { free, pro } = PLANS;
@@ -70,7 +56,7 @@ export default async function Home() {
             <li>No ports to open</li>
           </ul>
         </div>
-        <HeroArt />
+        <div className="hero-art"><Blocks /></div>
       </section>
 
       <section className="band">
