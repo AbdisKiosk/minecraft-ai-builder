@@ -10,7 +10,7 @@ function Blocks() {
   const cubes = [[0, 2, 0], [1, 2, 0], [2, 2, 0], [0, 2, 1], [2, 2, 1], [0, 2, 2], [1, 2, 2], [2, 2, 2], [1, 1, 1], [1, 0, 1], [0, 1, 0], [2, 1, 2]];
   const order = [...cubes].sort((a, b) => (a[0] + a[2]) - (b[0] + b[2]) || b[1] - a[1]);
   return (
-    <svg viewBox="-60 -10 120 110" role="img" aria-label="Blocks being placed">
+    <svg viewBox="-56 14 112 112" role="img" aria-label="Blocks being placed">
       {order.map(([x, y, z], n) => {
         const cx = (x - z) * 17, cy = (x + z) * 10 + y * 20;
         return (
