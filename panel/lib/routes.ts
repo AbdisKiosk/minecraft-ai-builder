@@ -10,6 +10,7 @@ export type Route =
   | { page: 'draft'; server: string; id: string }
   | { page: 'map'; server: string; world: string | null }
   | { page: 'lessons'; server: string }
+  | { page: 'chat'; server: string; chat: string | null }
   | { page: 'assets' }
   | { page: 'billing' };
 
@@ -19,6 +20,7 @@ export const setupHref = (server: string) => `${serverHref(server)}/setup`;
 export const diffHref = (server: string, id: string) => `${serverHref(server)}/h/${encodeURIComponent(id)}`;
 export const draftHref = (server: string, id: string) => `${serverHref(server)}/d/${encodeURIComponent(id)}`;
 export const lessonsHref = (server: string) => `${serverHref(server)}/lessons`;
+export const chatHref = (server: string, chat?: string) => `${serverHref(server)}/chat${chat ? '/' + encodeURIComponent(chat) : ''}`;
 export const mapHref = (server: string, world?: string) => `${serverHref(server)}/map${world ? '/' + encodeURIComponent(world) : ''}`;
 export const assetsHref = '#/assets';
 export const billingHref = '#/billing';
@@ -33,6 +35,7 @@ export function parseRoute(hash: string): Route {
     if (parts[2] === 'h' && parts[3]) return { page: 'diff', server: parts[1], id: parts[3] };
     if (parts[2] === 'd' && parts[3]) return { page: 'draft', server: parts[1], id: parts[3] };
     if (parts[2] === 'lessons') return { page: 'lessons', server: parts[1] };
+    if (parts[2] === 'chat') return { page: 'chat', server: parts[1], chat: parts[3] || null };
     if (parts[2] === 'map') return { page: 'map', server: parts[1], world: parts[3] || null };
     return { page: 'server', server: parts[1] };
   }

@@ -110,7 +110,7 @@ public final class Tools {
                 a -> read(a, service)));
 
         registry.register(new Tool("check_region",
-                "Cheapest check of a build: finds " + String.join(", ", RegionLint.KINDS) + " as counts plus a few coordinates. checks=comma list (default all), limit=coordinates per kind (default 5).",
+                "Cheapest build check: " + String.join(", ", RegionLint.KINDS) + " as counts and a few coordinates. checks=comma list (default all), limit=coordinates per kind (default 5).",
                 schema("\"region\":" + REGION + ",\"checks\":{\"type\":\"string\"},\"limit\":{\"type\":\"integer\"}", "region"),
                 a -> check(a, service)));
 

@@ -18,6 +18,7 @@ description: Minecraft building aesthetics - palettes, depth, roofs, detailing. 
 - Use odd widths (5, 7, 9) so doors, windows and roof peaks can be centred.
 - Make the foundation one block wider than the walls, in a darker block.
 - Use stairs and slabs for roof slopes and window sills, `[half=top]` stairs under eaves, and fences/walls for railings.
+- No air gaps. A plain slab (`type=bottom`) fills only the lower half of its block, so a campfire, lantern, pot or block set on it floats half a block up. Under anything that rests on a slab, use a top slab (`stone_brick_slab[type=top]`) or a full block. Close the underside of overhangs (a chimney cap wider than its chimney, a fireplace hood, a ledge) with top slabs or `[half=top]` stairs, so no air shows beneath them. `check_region` reports blocks on bottom slabs as `gaps`.
 
 ## Roofs
 - Gable: each side's stairs have `facing` pointing toward the ridge (the direction the slope rises), rising one block per step, with a full block or slab ridge. The roof should overhang the walls by one block.
@@ -34,5 +35,5 @@ description: Minecraft building aesthetics - palettes, depth, roofs, detailing. 
 - Does the silhouette read clearly from the iso view (varied height, no box)?
 - Is any wall or roof face flat and untextured?
 - Is the palette consistent, with no stray blocks?
-- Is anything floating, cut off, or clipping into terrain?
+- Is anything floating, cut off, or clipping into terrain? Does anything sit on a bottom slab with half a block of air under it, or overhang open air?
 - Are the proportions right (height vs width, roof vs walls ~1:1 for houses)?

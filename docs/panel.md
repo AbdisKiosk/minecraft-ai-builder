@@ -11,7 +11,8 @@ Claude Code / SDK ──HTTPS──▶ panel  /s/<server>/mcp, /s/<server>/api/<
 Browser           ──HTTPS──▶ panel  pages, /api/…, /api/events               (Auth0 session)
 Paper server      ──wss────▶ panel  /relay                                   (server token aibs_…)
                               │
-                              ├── MySQL: users, servers, memberships, invites, access tokens, history index
+                              ├── Anthropic or OpenRouter: the chat's requests, each with its user's own API key
+                              ├── MySQL: users, servers, memberships, invites, access tokens, history index, chats
                               └── R2: archived history, Minecraft client jars
 ```
 
@@ -120,13 +121,75 @@ For several servers in one session, add one entry per server, each with that ser
 The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>` and that server's
 `AIBUILDER_TOKEN`, so build scripts can run against several servers in parallel.
 
+## AI chat
+
+**Chat with AI** on a server's page (builders and up) is an AI building from the browser, without Claude Code.
+It uses the user's own API key for one of two providers, which bills them; a Claude subscription includes neither:
+
+| Provider | Key | Requests go to |
+| --- | --- | --- |
+| Anthropic | `sk-ant-…`, from the Claude Console | `https://api.anthropic.com/v1/messages` |
+| OpenRouter | `sk-or-…`, from openrouter.ai | `https://openrouter.ai/api/v1/messages`, OpenRouter's Anthropic-compatible endpoint, asking it to prefer Anthropic's own API (`provider.order`) |
+
+Both take the same Messages API, so one loop serves both (`lib/server/chat/providers.ts` holds what differs).
+
+- **Models.** Through Anthropic: Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 and Fable 5.2. Through
+  OpenRouter: every model in its public catalog that can call tools on the Messages API (some 320, Claude first, then
+  newest first), read at most every ten minutes (`lib/server/chat/models.ts`); the page searches them and shows each
+  one's price per million tokens and context. When the catalog can't be read, the same four Claude models stand in.
+- **What each model is sent.** Claude 4.6 and later get adaptive thinking at effort `high`; every Claude model gets
+  Anthropic's prompt caching, and through OpenRouter a preference for Anthropic's own API. Any other model gets the
+  plain Messages API, so it reasons as it does by default, and its answer is capped at the most output OpenRouter
+  lists for it. A model that cannot take images gets a note in place of each render, telling it to use
+  `check_region` and `read_region` instead. The build advice in the prompt was tuned on Claude models, so other models may
+  build worse; the picker says so.
+- **Keys.** **Access tokens** → **API keys for the chat**, one per provider. The panel checks a key with its provider
+  once, at no cost (Anthropic's model list, OpenRouter's `/api/v1/key`), stores it sealed with AES-256-GCM under
+  `KEY_SECRET` (`AUTH0_SECRET` without it; `lib/server/secretBox.ts`) and shows only its last four characters again.
+  No answer of the API carries a key. Every client is built with its address and key given explicitly, so an
+  `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_BASE_URL` in the panel's environment never mixes with a
+  user's request. Users cannot enter an address of their own: the panel would send their key there from its own network.
+- **Provider per chat.** A new chat uses the provider picked with its model (the first one the user has a key for by
+  default) and keeps it: the model can change between messages, the provider cannot, because thinking blocks that one
+  provider's account returned are not for another's. A chat whose provider's key was removed asks for the key or a new chat.
+- **Tools.** The chat sends the plugin the same MCP messages Claude Code sends to `/s/<server>/mcp`, down the relay as
+  the signed-in user (`lib/server/chat/mcp.ts`). So its edits pass the same checks as any other: limits, review mode
+  (they go into the draft, and the tool's card links to it), WorldGuard protection, history and undo. The builder role
+  is checked when a message is sent and again before each round of tool calls.
+- **Prompt.** The plugin's own instructions (from its MCP `initialize`) and this repository's `build` and
+  `build-style` skills, without their parts about scripts and subagents: the chat has no shell
+  (`lib/server/chat/prompt.ts`). It is fixed by a chat's first turn, so later requests reuse the prompt cache.
+- **Turns.** A turn runs on the panel, not in the request that started it (`lib/server/chat/runs.ts`): closing the
+  page does not stop a build, and the page follows a turn over server-sent events that replay from the turn's start.
+  **Stop** ends it at once while the model writes, and after the running tool call otherwise. A turn asks the model at most
+  40 times; after that, "continue" starts the next one. A user can have three turns running.
+- **Storage.** `api_keys`, `chats` and `chat_messages` (migrations `011_chat.sql` to `013_chat_providers.sql`): the
+  messages as the Messages API takes them, renders included, because a later turn sends the history back unchanged. A
+  chat is its user's alone. Deleting it leaves what it built in the world and in the history.
+- **Restart.** The panel's turns end when it restarts. What they stored stays, and the chat's next message first
+  answers tool calls that were left open with "interrupted", so the model checks the world before repeating one.
+- **Cost.** The page shows the tokens a chat has used. The panel sets no spending limit: set one with the provider (a
+  workspace limit in the Claude Console, a credit limit on the OpenRouter key). An OpenRouter account out of credit
+  ends the turn with a message saying so.
+
+| Route | What it does |
+| --- | --- |
+| `GET /api/account/api-keys` | the caller's keys: `{keys: {anthropic, openrouter}}`, each `{hint, created, usable}` or null |
+| `PUT/DELETE /api/account/api-keys/<provider>` | save `{key}` (after the provider accepts it) or remove the key |
+| `GET /api/chat-models` | the models per provider: `{models: {anthropic, openrouter}, stale}` |
+| `GET /api/servers/<id>/chats` | the caller's chats there, and the providers they have a usable key for |
+| `POST /api/servers/<id>/chats` | a new chat from its first message `{text, provider?, model?}` |
+| `GET/POST/DELETE /api/servers/<id>/chats/<chat>` | the chat as the page shows it; the next message `{text, model?}`; delete |
+| `GET /api/servers/<id>/chats/<chat>/events` | the running turn's events: `text`, `tool`, `result`, `usage`, `end` |
+| `POST /api/servers/<id>/chats/<chat>/stop` | stop the running turn |
+
 ## Roles
 
 | Role | Can |
 | --- | --- |
 | owner | everything, including downloading the server's plugin, giving it a new key and deleting it |
 | admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
-| builder | build through Claude Code and scripts with their access token for the server, promote regions |
+| builder | build through Claude Code and scripts with their access token for the server, use the AI chat on the panel, promote regions |
 | viewer | see jobs, history and drafts |
 
 Invite links are single use and last seven days. Owners invite admins, builders and viewers; admins invite builders

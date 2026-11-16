@@ -113,6 +113,35 @@ class RegionLintTest {
     }
 
     @Test
+    void gapsFindsWhatStandsOnABottomSlab() {
+        // A chimney capped with bottom slabs and campfires on them, as the chat built one: the campfires hover.
+        Region chimney = ground().fill(2, 1, 2, 3, 3, 3, "stone_bricks").fill(2, 4, 2, 3, 4, 3, "stone_brick_slab")
+                .fill(2, 5, 2, 3, 5, 3, "campfire");
+        RegionLint.Issue issue = chimney.only("gaps");
+        assertEquals(4, issue.count());
+        assertEquals(new Vec3(2, 5, 2), issue.at().get(0));
+        assertEquals("stands on a bottom slab, so half a block of air shows under it; make the slab type=top or a full block", issue.hint());
+        // Explicit bottom slabs, and full blocks or other slabs on them, count too.
+        assertEquals(2, ground().set(1, 1, 1, "oak_slab[type=bottom]").set(1, 2, 1, "lantern")
+                .set(4, 1, 4, "stone_slab").set(4, 2, 4, "stone_slab").only("gaps").count());
+    }
+
+    @Test
+    void gapsLeavesTopAndDoubleSlabsAndHangingThingsAlone() {
+        Region ok = ground()
+                .set(1, 1, 1, "stone_brick_slab[type=top]").set(1, 2, 1, "campfire")
+                .set(3, 1, 3, "oak_slab[type=double]").set(3, 2, 3, "lantern")
+                // Under a slab ceiling: a lantern hanging from the slab above it, and a chain.
+                .set(5, 3, 5, "stone_slab").set(5, 2, 5, "lantern[hanging=true]")
+                // Clinging to something beside it rather than standing on the slab.
+                .set(1, 3, 5, "stone_slab").set(1, 4, 5, "oak_wall_sign[facing=east]").set(0, 4, 5, "stone")
+                .set(4, 1, 1, "stone_slab").set(4, 2, 1, "water");
+        assertTrue(ok.check("gaps").isEmpty(), ok.check("gaps").toString());
+        // A slab on the bottom layer of the box: whatever is below it is unknown, but what stands on it is not.
+        assertEquals(1, new Region(0, 0, 0, 2, 2, 2).set(1, 0, 1, "stone_slab").set(1, 1, 1, "torch").only("gaps").count());
+    }
+
+    @Test
     void halvesFindsLoneDoorAndBedParts() {
         Region r = ground()
                 .set(1, 1, 1, "oak_door[facing=east]").set(1, 2, 1, "oak_door[facing=east,half=upper]")

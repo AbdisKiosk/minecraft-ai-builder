@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { api, downloadPlugin, message, serverApi } from '../lib/api';
 import { ago, boxText, dateTime, num, OFFLINE } from '../lib/format';
-import { billingHref, diffHref, draftHref, go, lessonsHref, mapHref, setupHref } from '../lib/routes';
+import { billingHref, chatHref, diffHref, draftHref, go, lessonsHref, mapHref, setupHref } from '../lib/routes';
 import { can, type DraftSummary, type HistorySummary, type Server } from '../lib/types';
 import type { Servers } from '../lib/usePanel';
 import PromoteDialog from './PromoteDialog';
@@ -29,6 +29,7 @@ export default function ServerPage({ server, servers }: { server: Server; server
         <div className="toolbar" style={{ margin: 0 }}>
           {!fresh && <Tip id="map"><a className="button ghost small" href={mapHref(id)}>Map</a></Tip>}
           {!fresh && <Tip id="lessons"><a className="button ghost small" href={lessonsHref(id)}>Lessons</a></Tip>}
+          {builder && !fresh && <a className="button ghost small" href={chatHref(id)}>Chat with AI</a>}
           {builder && !fresh && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
           {builder && <Tip id="connect" when={!fresh}><button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
             {connect ? 'Hide' : 'Connect your AI'}</button></Tip>}</div></div>

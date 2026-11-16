@@ -1,7 +1,11 @@
-# The panel image (panel/Dockerfile) is built from the repository root: it needs panel/ and plugin/ only.
+# The panel image (panel/Dockerfile) is built from the repository root: it needs panel/, plugin/ and the build skills
+# the panel's chat reads (.claude/skills).
 *
 !panel
 !plugin
+!.claude
+.claude/*
+!.claude/skills
 
 panel/node_modules
 panel/.next

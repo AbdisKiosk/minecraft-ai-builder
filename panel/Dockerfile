@@ -35,6 +35,9 @@ COPY --from=build /app/dist ./dist
 COPY --from=build /app/migrations ./migrations
 COPY --from=build /app/next.config.ts ./
 COPY --from=plugin /src/core/build/libs/ ./plugin-jar/
+# The build skills Claude Code uses, which the panel's chat puts in its system prompt (lib/server/chat/prompt.ts).
+COPY .claude/skills ./skills
+ENV CHAT_SKILLS_DIR=/app/skills
 USER node
 EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s CMD wget -qO- http://127.0.0.1:3000/api/health || exit 1

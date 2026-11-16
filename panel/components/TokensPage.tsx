@@ -2,12 +2,13 @@ import { useCallback, useEffect, useState } from 'react';
 import { api, message, serverApi } from '../lib/api';
 import { ago } from '../lib/format';
 import { serverHref } from '../lib/routes';
+import ApiKeysCard from './ApiKeysCard';
 import { ConnectionDetails, type AccessToken } from './ConnectClaude';
 import MinecraftAccount from './MinecraftAccount';
 
 interface Row { server: string; name: string; created: number; lastUsed: number | null }
 
-/** The user's access tokens (one per server, each shown again on request) and linked Minecraft accounts. */
+/** The user's access tokens (one per server, each shown again on request), API keys and linked Minecraft accounts. */
 export default function TokensPage() {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [shown, setShown] = useState<Record<string, string | null>>({});
@@ -76,6 +77,7 @@ export default function TokensPage() {
             })}
         </tbody>
       </table></div></section>
+      <ApiKeysCard />
       <MinecraftAccount />
     </>
   );
