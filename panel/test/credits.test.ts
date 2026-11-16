@@ -81,9 +81,10 @@ test('credits are a source of their own that Anthropic answers', () => {
 test('amounts read as dollars', () => {
   assert.equal(usd(12_340_000), '$12.34');
   assert.equal(usd(0), '$0.00');
-  assert.equal(usd(4200), '<$0.01');
+  assert.equal(usd(4200), '$0.0042');
   assert.equal(usd(-1_200_000), '-$1.20');
-  assert.equal(usd(-300), '-<$0.01');
+  assert.equal(usd(-300), '-$0.0003');
+  assert.equal(usd(7), '$0.0001');
 });
 
 test('a top-up is a whole number of dollars from the minimum up', () => {

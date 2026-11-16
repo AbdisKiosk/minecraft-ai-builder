@@ -51,11 +51,13 @@ export const CREDIT_MODELS: readonly ChatModel[] = CLAUDE.map(m => ({
   ...('long' in m ? { long: m.long } : {}),
 }));
 
-/** "$12.34"; an amount under a cent that is not zero is "<$0.01", and a debt is "-$1.20". */
+/** "$12.34"; an amount under a cent that is not zero gets four decimals ("$0.0042"), and a debt is "-$1.20". */
 export function usd(micros: number): string {
   const dollars = Math.abs(micros) / MICROS_PER_DOLLAR;
-  if (dollars > 0 && dollars < 0.01) return micros < 0 ? '-<$0.01' : '<$0.01';
-  return `${micros < 0 ? '-' : ''}$${dollars.toFixed(2)}`;
+  const sign = micros < 0 ? '-' : '';
+  // Never "$0.0000" for something that cost.
+  if (dollars > 0 && dollars < 0.01) return `${sign}$${Math.max(dollars, 0.0001).toFixed(4)}`;
+  return `${sign}$${dollars.toFixed(2)}`;
 }
 
 /** Why `amount` dollars cannot be bought, or null when it can. */
