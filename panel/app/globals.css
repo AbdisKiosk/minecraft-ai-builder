@@ -451,7 +451,7 @@ dialog.guide { width: min(460px, calc(100vw - 32px)); padding: 32px 28px 20px; b
 @keyframes tip-in { from { opacity: 0; transform: scale(.9); } }
 @media (prefers-reduced-motion: reduce) { .tip { animation: none; } }
 
-/* Chat with Claude (components/ChatPage.tsx) */
+/* AI chat (components/ChatPage.tsx) */
 .chat-page { display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 16px; align-items: start; }
 .chat-list { display: grid; gap: 12px; }
 .chat-list ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }

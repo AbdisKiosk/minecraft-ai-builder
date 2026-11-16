@@ -29,7 +29,7 @@ export default function ServerPage({ server, servers }: { server: Server; server
         <div className="toolbar" style={{ margin: 0 }}>
           {!fresh && <Tip id="map"><a className="button ghost small" href={mapHref(id)}>Map</a></Tip>}
           {!fresh && <Tip id="lessons"><a className="button ghost small" href={lessonsHref(id)}>Lessons</a></Tip>}
-          {builder && !fresh && <a className="button ghost small" href={chatHref(id)}>Chat with Claude</a>}
+          {builder && !fresh && <a className="button ghost small" href={chatHref(id)}>Chat with AI</a>}
           {builder && !fresh && <button className="ghost small" onClick={() => setPromote(true)}>Copy region to…</button>}
           {builder && <Tip id="connect" when={!fresh}><button className={connect ? 'ghost small' : 'small'} onClick={() => setConnect(!connect)}>
             {connect ? 'Hide' : 'Connect your AI'}</button></Tip>}</div></div>

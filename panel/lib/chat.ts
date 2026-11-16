@@ -106,7 +106,7 @@ export interface ChatView extends ChatSummary {
   error: string | null;
 }
 
-/** The most characters of a tool's answer the page gets; Claude reads all of it. */
+/** The most characters of a tool's answer the page gets; the model reads all of it. */
 export const MAX_RESULT_TEXT = 4000;
 
 /** The items after `e`, as a new array (the last item is copied when it changes). */

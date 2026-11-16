@@ -34,7 +34,7 @@ export async function listTools(send: Send): Promise<Anthropic.Tool[]> {
   return tools.map(t => ({ name: String(t.name), description: String(t.description ?? ''), input_schema: t.inputSchema ?? { type: 'object' } }));
 }
 
-/** An MCP tool result as a tool_result's content: its text, and a render as an image Claude can look at. */
+/** An MCP tool result as a tool_result's content: its text, and a render as an image the model can look at. */
 export function toolAnswer(result: Json): ToolAnswer {
   const content: Exclude<ToolAnswer['content'], string | undefined> = [];
   for (const c of Array.isArray(result.content) ? result.content as Json[] : []) {
@@ -47,7 +47,7 @@ export function toolAnswer(result: Json): ToolAnswer {
   return { content, isError: result.isError === true };
 }
 
-/** Calls a tool. Whatever goes wrong becomes an error answer, so Claude can tell the user or try something else. */
+/** Calls a tool. Whatever goes wrong becomes an error answer, so the model can tell the user or try something else. */
 export async function callTool(send: Send, name: string, input: unknown): Promise<ToolAnswer> {
   try {
     return toolAnswer(await rpc(send, 'tools/call', { name, arguments: input ?? {} }));

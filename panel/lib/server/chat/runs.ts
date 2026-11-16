@@ -17,7 +17,7 @@ import { appendMessage, chatRow, messagesOf, setSystemPrompt, turnEnded, turnSta
 // minutes, and closing the page must not stop it. The page follows a turn through its events, replayed from the start
 // to whoever opens the stream. A restart of the panel ends its turns; what they stored stays (see owedResults).
 
-/** Requests to Claude in one turn; each round of tool calls takes one. */
+/** Requests to the model in one turn; each round of tool calls takes one. */
 export const MAX_ROUNDS = 40;
 /** Turns one user may have running at once, over all their chats. */
 export const MAX_RUNS = 3;
@@ -65,7 +65,7 @@ export function follow(chatId: string, listener: (e: ChatEvent) => void): (() =>
   return () => { run.listeners.delete(listener); };
 }
 
-/** Asks the chat's turn to stop: at once while Claude writes, after the tool call that is running otherwise. */
+/** Asks the chat's turn to stop: at once while the model writes, after the tool call that is running otherwise. */
 export function stop(chatId: string): boolean {
   const run = runs().get(chatId);
   if (!run || run.ended) return false;
@@ -88,7 +88,7 @@ export async function chatView(chat: ChatRow): Promise<ChatView> {
 }
 
 /**
- * Starts a turn: stores the user's message and lets Claude answer in the background. Resolves once the message is
+ * Starts a turn: stores the user's message and lets the model answer in the background. Resolves once the message is
  * stored. Refuses (HttpError) when the turn cannot start; the caller has checked that `user` builds on the server.
  * The model may change between turns, the provider may not: thinking blocks that one provider's account returned
  * are not for another's.
@@ -99,11 +99,11 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
   if (text.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message can be at most ${MAX_MESSAGE_CHARS} characters`);
   const chosen = await findModel(provider, model);
   if (!chosen) throw new HttpError(400, `${providerName(provider)} has no model '${model}' that can use tools`);
-  if (running(chat.id)) throw new HttpError(409, 'Claude is still answering in this chat; stop it or wait');
+  if (running(chat.id)) throw new HttpError(409, 'the AI is still answering in this chat; stop it or wait');
   if ([...runs().values()].filter(r => !r.ended && r.userId === user.id).length >= MAX_RUNS) {
     throw new HttpError(429, `you have ${MAX_RUNS} chats running; wait for one or stop it`);
   }
-  if (!hub().online(chat.server_id)) throw new HttpError(503, 'the server is offline, so Claude cannot build on it right now');
+  if (!hub().online(chat.server_id)) throw new HttpError(503, 'the server is offline, so the AI cannot build on it right now');
 
   // Taken before the first await, so two requests cannot both start a turn in one chat.
   const run = new Run(user.id);
@@ -172,8 +172,8 @@ async function answer(run: Run, chat: ChatRow, model: ChatModel, apiKey: string,
 const WHY: Record<EndReason, string | null> = {
   done: null,
   stopped: null,
-  limit: `Claude stopped after ${MAX_ROUNDS} steps. Say "continue" to let it go on.`,
-  refused: 'Claude declined this request.',
+  limit: `The AI stopped after ${MAX_ROUNDS} steps. Say "continue" to let it go on.`,
+  refused: 'The model declined this request.',
   error: 'The turn failed.',
 };
 

@@ -11,7 +11,7 @@ export const GET = route<P>(async (_req, { id, chat }) => {
   return json(await chatView(await ownChat(chat, id, user)));
 });
 
-/** The next message: {"text", "model"?}. Answers 202; Claude's answer follows on the chat's events. */
+/** The next message: {"text", "model"?}. Answers 202; the model's answer follows on the chat's events. */
 export const POST = route<P>(async (req, { id, chat }) => {
   const user = await requireUser();
   await requireRole(user, id, 'builder');

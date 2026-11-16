@@ -1,7 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk';
 import { toolView, type ChatEvent, type EndReason } from '../../chat';
 
-// One turn of the panel's chat: Claude answers the user's message, calling the server's tools as often as it needs.
+// One turn of the panel's chat: the model answers the user's message, calling the server's tools as often as it needs.
 // Everything it touches is passed in, so the loop runs in tests without Anthropic, a database or a Minecraft server.
 
 export type ResultContent = Anthropic.ToolResultBlockParam['content'];
@@ -15,19 +15,19 @@ export interface TurnInput {
   tools: Anthropic.Tool[];
   /** The conversation so far, ending with the user's new message. The turn appends to it. */
   messages: Anthropic.MessageParam[];
-  /** How many times Claude may be asked in this turn; each round of tool calls takes one. */
+  /** How many times the model may be asked in this turn; each round of tool calls takes one. */
   maxRounds: number;
   signal: AbortSignal;
 }
 
 export interface TurnDeps {
-  /** One request to Claude; `onText` gets the text as it is written. Rejects when the signal aborts. */
+  /** One request to the model; `onText` gets the text as it is written. Rejects when the signal aborts. */
   ask(params: Anthropic.MessageCreateParamsNonStreaming, onText: (delta: string) => void, signal: AbortSignal): Promise<Anthropic.Message>;
   /** Runs a tool on the Minecraft server. A failure to reach the server is an answer too, not a rejection. */
   callTool(name: string, input: unknown): Promise<ToolAnswer>;
   /** Why the user may not build right now (they lost the builder role), or null. Asked before each round of tools. */
   refusal(): Promise<string | null>;
-  /** Stores a message; the turn sends nothing to Claude that is not stored. */
+  /** Stores a message; the turn sends nothing to the model that is not stored. */
   append(message: Anthropic.MessageParam): Promise<void>;
   emit(event: ChatEvent): void;
 }
@@ -64,7 +64,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnEnd
     if (message.stop_reason === 'refusal') return { reason: 'refused', error: message.stop_details?.explanation ?? undefined };
     const calls = toolUses(message.content);
     if (message.stop_reason === 'max_tokens' && calls.length) {
-      return { reason: 'error', error: 'Claude’s answer was cut off in the middle of a tool call, so it was not run. Ask for the build in smaller steps.' };
+      return { reason: 'error', error: 'The AI’s answer was cut off in the middle of a tool call, so it was not run. Ask for the build in smaller steps.' };
     }
     if (message.content.length) {
       const assistant: Anthropic.MessageParam = { role: 'assistant', content: message.content };
@@ -78,7 +78,7 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnEnd
     const results: Anthropic.ToolResultBlockParam[] = [];
     for (const call of calls) {
       deps.emit({ type: 'tool', id: call.id, name: call.name, input: call.input });
-      // Every call gets an answer, or the conversation could not be sent to Claude again.
+      // Every call gets an answer, or the conversation could not be sent to the model again.
       const answer: ToolAnswer = signal.aborted ? { content: 'Not run: the user stopped the turn.', isError: true }
         : refused ? { content: refused, isError: true }
         : await deps.callTool(call.name, call.input);
@@ -94,8 +94,8 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnEnd
 }
 
 /**
- * The answers a conversation still owes: when its last message is Claude calling tools (the panel stopped before they
- * ran or were stored), an error answer for each, so the next request to Claude is valid. Null when none are owed.
+ * The answers a conversation still owes: when its last message is the model calling tools (the panel stopped before they
+ * ran or were stored), an error answer for each, so the next request to the model is valid. Null when none are owed.
  */
 export function owedResults(messages: readonly Anthropic.MessageParam[]): Anthropic.MessageParam | null {
   const last = messages[messages.length - 1];

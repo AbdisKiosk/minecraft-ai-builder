@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-// What Claude is told in a panel chat. Claude Code gets the workflow from this repository's skills
+// What the model is told in a panel chat. Claude Code gets the workflow from this repository's skills
 // (.claude/skills/build and build-style); the chat reads the same files, so there is one copy of the advice, and
 // leaves out what needs a shell: scripts and subagents.
 
@@ -43,7 +43,7 @@ export function loadSkills(): Promise<string[]> {
       try {
         texts.push(await readFile(join(dir, name, 'SKILL.md'), 'utf8'));
       } catch (e) {
-        console.warn(`chat: no ${name} skill in ${dir}; Claude builds without it`, (e as Error).message);
+        console.warn(`chat: no ${name} skill in ${dir}; the AI builds without it`, (e as Error).message);
       }
     }
     return texts;

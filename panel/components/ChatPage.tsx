@@ -14,7 +14,7 @@ interface Catalog { models: Record<ProviderId, ChatModel[]>; stale: ProviderId[]
 interface Pick { provider: ProviderId; model: string }
 
 /**
- * Chat with Claude about one server: it builds through the same tools as Claude Code, on the user's own API key for
+ * Chat with an AI about one server: it builds through the same tools as Claude Code, on the user's own API key for
  * Anthropic or OpenRouter.
  * A turn runs on the panel, so this page only follows it and can be closed meanwhile.
  */
@@ -156,7 +156,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
           <a href={tokensHref}>Add one under Access tokens</a>, then come back.</p>}
         {blocked === 'chat-key' && view && <p className="warn">This chat uses {providerName(view.provider)}, and you have no{' '}
           {providerName(view.provider)} key. <a href={tokensHref}>Add it under Access tokens</a>, or start a new chat.</p>}
-        {blocked === 'offline' && <p className="warn">This server is offline, so Claude cannot build on it right now.</p>}
+        {blocked === 'offline' && <p className="warn">This server is offline, so the AI cannot build on it right now.</p>}
         <Composer disabled={!!blocked || sending || !chosen} running={running} onSend={send} onStop={stop} />
         <div className="chat-foot muted">
           {pick && providers.length > 0 && (
@@ -214,7 +214,7 @@ function ModelPicker({ providers, pick, catalog, locked, disabled, onPick }: {
         {chosen ? <>
           {priceText(chosen)}{chosen.context ? ` · ${tokens(chosen.context)} context` : ''}
           {!chosen.images && ' · cannot see renders'}
-          {!chosen.claude && ' · the build advice is written for Claude, so results may vary'}
+          {!chosen.claude && ' · the build advice was tuned on Claude models, so results may vary'}
         </> : catalog && pick.model ? `No model that can use tools is called "${pick.model}". Pick one from the list.` : null}
         {catalog?.stale.includes(pick.provider) && ` ${providerName(pick.provider)}\u2019s model list could not be read just now.`}
       </span>
@@ -238,7 +238,7 @@ function Conversation({ items, running, server, empty }: { items: ChatItem[]; ru
       onScroll={ev => { const el = ev.currentTarget; pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
       {empty && !items.length && (
         <div className="chat-empty muted">
-          <b>Ask Claude to build something on this server.</b>
+          <b>Ask the AI to build something on this server.</b>
           <span>Say what and where: stand there in game, name an area you marked on the map, or give coordinates.</span>
         </div>
       )}
@@ -246,7 +246,7 @@ function Conversation({ items, running, server, empty }: { items: ChatItem[]; ru
         item.kind === 'tool' ? <ToolCard key={item.id} item={item} server={server} />
           : <div key={i} className={`chat-msg ${item.kind}`}>{item.text}</div>
       ))}
-      {waiting && <div className="chat-working muted"><span className="spinner" /> Claude is working…</div>}
+      {waiting && <div className="chat-working muted"><span className="spinner" /> The AI is working…</div>}
     </div>
   );
 }
@@ -304,7 +304,7 @@ function Composer({ disabled, running, onSend, onStop }:
   return (
     <form className="chat-composer" onSubmit={submit}>
       <textarea value={text} onChange={ev => setText(ev.target.value)} onKeyDown={onKey} rows={2} maxLength={8000}
-        placeholder="Build a small stone bridge over the river at @river…" aria-label="Message to Claude" disabled={disabled} />
+        placeholder="Build a small stone bridge over the river at @river…" aria-label="Message to the AI" disabled={disabled} />
       {running ? <button type="button" className="ghost" onClick={onStop}>Stop</button>
         : <button type="submit" disabled={disabled || !text.trim()}>Send</button>}
     </form>

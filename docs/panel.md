@@ -121,9 +121,9 @@ For several servers in one session, add one entry per server, each with that ser
 The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.com/s/<server>` and that server's
 `AIBUILDER_TOKEN`, so build scripts can run against several servers in parallel.
 
-## Chat with Claude
+## AI chat
 
-**Chat with Claude** on a server's page (builders and up) is Claude building from the browser, without Claude Code.
+**Chat with AI** on a server's page (builders and up) is an AI building from the browser, without Claude Code.
 It uses the user's own API key for one of two providers, which bills them; a Claude subscription includes neither:
 
 | Provider | Key | Requests go to |
@@ -141,7 +141,7 @@ Both take the same Messages API, so one loop serves both (`lib/server/chat/provi
   Anthropic's prompt caching, and through OpenRouter a preference for Anthropic's own API. Any other model gets the
   plain Messages API, so it reasons as it does by default, and its answer is capped at the most output OpenRouter
   lists for it. A model that cannot take images gets a note in place of each render, telling it to use
-  `check_region` and `read_region` instead. The build advice in the prompt is written for Claude, so other models may
+  `check_region` and `read_region` instead. The build advice in the prompt was tuned on Claude models, so other models may
   build worse; the picker says so.
 - **Keys.** **Access tokens** → **API keys for the chat**, one per provider. The panel checks a key with its provider
   once, at no cost (Anthropic's model list, OpenRouter's `/api/v1/key`), stores it sealed with AES-256-GCM under
@@ -161,13 +161,13 @@ Both take the same Messages API, so one loop serves both (`lib/server/chat/provi
   (`lib/server/chat/prompt.ts`). It is fixed by a chat's first turn, so later requests reuse the prompt cache.
 - **Turns.** A turn runs on the panel, not in the request that started it (`lib/server/chat/runs.ts`): closing the
   page does not stop a build, and the page follows a turn over server-sent events that replay from the turn's start.
-  **Stop** ends it at once while Claude writes, and after the running tool call otherwise. A turn asks Claude at most
+  **Stop** ends it at once while the model writes, and after the running tool call otherwise. A turn asks the model at most
   40 times; after that, "continue" starts the next one. A user can have three turns running.
 - **Storage.** `api_keys`, `chats` and `chat_messages` (migrations `011_chat.sql` to `013_chat_providers.sql`): the
   messages as the Messages API takes them, renders included, because a later turn sends the history back unchanged. A
   chat is its user's alone. Deleting it leaves what it built in the world and in the history.
 - **Restart.** The panel's turns end when it restarts. What they stored stays, and the chat's next message first
-  answers tool calls that were left open with "interrupted", so Claude checks the world before repeating one.
+  answers tool calls that were left open with "interrupted", so the model checks the world before repeating one.
 - **Cost.** The page shows the tokens a chat has used. The panel sets no spending limit: set one with the provider (a
   workspace limit in the Claude Console, a credit limit on the OpenRouter key). An OpenRouter account out of credit
   ends the turn with a message saying so.
@@ -189,7 +189,7 @@ Both take the same Messages API, so one loop serves both (`lib/server/chat/provi
 | --- | --- |
 | owner | everything, including downloading the server's plugin, giving it a new key and deleting it |
 | admin | approve and reject drafts, revert edits, rename, invite and manage builders and viewers |
-| builder | build through Claude Code and scripts with their access token for the server, chat with Claude on the panel, promote regions |
+| builder | build through Claude Code and scripts with their access token for the server, use the AI chat on the panel, promote regions |
 | viewer | see jobs, history and drafts |
 
 Invite links are single use and last seven days. Owners invite admins, builders and viewers; admins invite builders

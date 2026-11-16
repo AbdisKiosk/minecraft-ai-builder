@@ -28,7 +28,7 @@ const answer = (stop_reason: string, ...content: any[]) => ({ content, stop_reas
 const text = (t: string) => ({ type: 'text', text: t });
 const use = (id: string, name = 'build', input: unknown = {}) => ({ type: 'tool_use', id, name, input });
 
-/** A turn against scripted answers from Claude; records what was stored, emitted and called. */
+/** A turn against scripted answers from the model; records what was stored, emitted and called. */
 function turn(answers: any[], over: { maxRounds?: number; refusal?: () => string | null; abort?: AbortController; onTool?: () => void } = {}) {
   const messages: Msg[] = [{ role: 'user', content: 'build a hut' }];
   const stored: Msg[] = [], events: any[] = [], calls: string[] = [], asked: any[] = [];

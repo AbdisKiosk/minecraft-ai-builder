@@ -9,12 +9,12 @@ type Keys = Record<ProviderId, Key | null>;
 const KEYS = '/api/account/api-keys';
 
 const ABOUT: Record<ProviderId, string> = {
-  anthropic: 'Claude from Anthropic’s own API, billed by Anthropic. A Claude subscription does not include an API key.',
-  openrouter: 'Claude through OpenRouter, billed from your OpenRouter credit. OpenRouter sees everything the chat sends, as Anthropic does.',
+  anthropic: 'Anthropic’s Claude models from its own API, billed by Anthropic. A Claude subscription does not include an API key.',
+  openrouter: 'Hundreds of models (Claude, GPT, Gemini and more) through OpenRouter, billed from your OpenRouter credit. OpenRouter and the model’s maker see what the chat sends.',
 };
 
 /**
- * The user's API keys for chatting with Claude on a server's page, one per provider. Only a key's last four
+ * The user's API keys for the AI chat on a server's page, one per provider. Only a key's last four
  * characters come back.
  */
 export default function ApiKeysCard() {
@@ -28,7 +28,7 @@ export default function ApiKeysCard() {
   return (
     <section className="card">
       <h2>API keys for the chat</h2>
-      <p className="muted">Chatting with Claude on a server&apos;s page uses your own key, and the provider bills you for what it
+      <p className="muted">The AI chat on a server&apos;s page uses your own key, and the provider bills you for what it
         uses. Add one for either provider; each chat picks one. The panel stores keys encrypted and never shows them again.</p>
       {error && <p className="error">{error}</p>}
       {!keys ? <p className="muted">Loading…</p> : PROVIDERS.map(p => (

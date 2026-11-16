@@ -15,7 +15,7 @@ export const GET = route<P>(async (_req, { id }) => {
 });
 
 /**
- * Starts a chat with its first message: {"text", "provider"?, "model"?} answers {"id"}; Claude's answer follows on its
+ * Starts a chat with its first message: {"text", "provider"?, "model"?} answers {"id"}; the model's answer follows on its
  * events. The provider (Anthropic by default) stays the chat's.
  */
 export const POST = route<P>(async (req, { id }) => {
