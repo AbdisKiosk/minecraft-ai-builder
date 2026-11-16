@@ -72,7 +72,7 @@ print(b.flush())                               # one undo step
 
 ## 4. Phases and checks
 - Foundation, frame, walls, roof, details. One `build` call or script phase per step, so each is one `undo`.
-- After a phase, `check_region` on it first: the cheapest check, a few coordinates of floating or unsupported blocks, lone door/bed halves, reversed stairs, unconnected fences/panes and dark floors (`limit` lists more coordinates). Fix the real ones; `light` fixes dark floors.
+- After a phase, `check_region` on it first: the cheapest check, a few coordinates of floating or unsupported blocks, blocks hovering on bottom slabs (`gaps`), lone door/bed halves, reversed stairs, unconnected fences/panes and dark floors (`limit` lists more coordinates). Fix the real ones; `light` fixes dark floors.
 - Then one `render_region` (default: small isometric view, a few hundred tokens). `"top"` or `"both"` when the floor plan matters, an elevation (`"north"`, `"south"`, `"east"`, `"west"`) to judge a facade, the opposite `corner` (e.g. `"nw"`) to see the back, `"large"` only for the final look of a big build.
 - Last, `decorate` the placed signs and containers, and add item frames (`facing` = away from the wall) and armor stands:
   `{"origin": [104, 64, -20], "items": [{"at": [2, 2, 0], "text": ["The Inn", "Rooms"]}, {"at": [1, 1, 5], "contents": {"bread": 6, "torch": 16}}]}`.

@@ -15,7 +15,7 @@ public final class RegionLint {
     public record Issue(String kind, int count, List<Vec3> at, String hint) {
     }
 
-    public static final List<String> KINDS = List.of("floating", "unsupported", "halves", "stairs", "unconnected", "dark");
+    public static final List<String> KINDS = List.of("floating", "unsupported", "gaps", "halves", "stairs", "unconnected", "dark");
     private static final int MAX_AT = 5;
     private static final int MAX_AT_LIMIT = 100;
 
@@ -118,6 +118,7 @@ public final class RegionLint {
             Issue issue = switch (kind) {
                 case "floating" -> floating(g, maxAt);
                 case "unsupported" -> issue(g, kind, unsupported(g), maxAt, "breaks or falls: needs a block below, or behind it for wall blocks");
+                case "gaps" -> issue(g, kind, gaps(g), maxAt, "stands on a bottom slab, so half a block of air shows under it; make the slab type=top or a full block");
                 case "halves" -> issue(g, kind, halves(g), maxAt, "door or bed is missing its other half");
                 case "stairs" -> issue(g, kind, stairs(g), maxAt, "faces down the slope; face it the way the slope rises");
                 case "unconnected" -> issue(g, kind, legacy ? List.of() : unconnected(g), maxAt, "connection states unset; re-place it or set north/south/east/west");
@@ -184,6 +185,34 @@ public final class RegionLint {
             }
         }
         return out;
+    }
+
+    /**
+     * Blocks standing on a bottom slab, which fills only the lower half of its cell: whatever is set on it hovers
+     * half a block up, like a campfire on a chimney cap. Blocks that hang from above or cling to a wall are left out.
+     */
+    private static List<Integer> gaps(Grid g) {
+        List<Integer> out = new ArrayList<>();
+        for (int i = 0; i < g.n; i++) {
+            Traits t = g.cells[i];
+            if (t.air || t.wallAttached || hangs(t)) continue;
+            int below = g.at(i, 0, -1, 0);
+            if (below < 0) continue;
+            Traits b = g.cells[below];
+            if (b.type.endsWith("_slab") && b.prop("type", "bottom").equals("bottom")) out.add(i);
+        }
+        return out;
+    }
+
+    /** Hangs from the block above, clings to a side or fills its cell like a liquid: not resting on what is below. */
+    private static boolean hangs(Traits t) {
+        String type = t.type;
+        return type.contains("wall_") || type.contains("hanging") || type.equals("chain") || type.endsWith("_chain")
+                || type.endsWith("vine") || type.endsWith("vines") || type.equals("glow_lichen") || type.equals("sculk_vein")
+                || type.equals("spore_blossom") || type.equals("cobweb") || type.equals("water") || type.equals("lava")
+                || type.equals("bubble_column") || type.equals("light") || type.equals("structure_void")
+                || (type.endsWith("lantern") && t.prop("hanging", "false").equals("true"))
+                || (type.equals("pointed_dripstone") && t.prop("vertical_direction", "up").equals("down"));
     }
 
     private static List<Integer> halves(Grid g) {

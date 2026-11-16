@@ -325,7 +325,7 @@ class ToolsTest {
 
     @Test
     void checkRegionNamesTheValidChecks() {
-        assertEquals("unknown check 'floaty'; use floating, unsupported, halves, stairs, unconnected, dark",
+        assertEquals("unknown check 'floaty'; use floating, unsupported, gaps, halves, stairs, unconnected, dark",
                 error("check_region", "{\"region\":[0,64,0,4,68,4],\"checks\":\"floating,floaty\"}"));
         assertTrue(error("check_region", "{\"region\":[0,64,0,4,68,4],\"mode\":\"full\"}").contains("unknown argument \"mode\""));
     }
