@@ -131,9 +131,18 @@ It uses the user's own API key for one of two providers, which bills them; a Cla
 | Anthropic | `sk-ant-…`, from the Claude Console | `https://api.anthropic.com/v1/messages` |
 | OpenRouter | `sk-or-…`, from openrouter.ai | `https://openrouter.ai/api/v1/messages`, OpenRouter's Anthropic-compatible endpoint, asking it to prefer Anthropic's own API (`provider.order`) |
 
-Both take the same Messages API, so one loop serves both (`lib/server/chat/providers.ts` holds what differs). The
-models are the same Claude models under each provider's id (`CHAT_MODELS` in `lib/chat.ts`).
+Both take the same Messages API, so one loop serves both (`lib/server/chat/providers.ts` holds what differs).
 
+- **Models.** Through Anthropic: Claude Opus 5.5 (the default), Sonnet 5.5, Haiku 5.5 and Fable 5.2. Through
+  OpenRouter: every model in its public catalog that can call tools on the Messages API (some 320, Claude first, then
+  newest first), read at most every ten minutes (`lib/server/chat/models.ts`); the page searches them and shows each
+  one's price per million tokens and context. When the catalog can't be read, the same four Claude models stand in.
+- **What each model is sent.** Claude 4.6 and later get adaptive thinking at effort `high`; every Claude model gets
+  Anthropic's prompt caching, and through OpenRouter a preference for Anthropic's own API. Any other model gets the
+  plain Messages API, so it reasons as it does by default, and its answer is capped at the most output OpenRouter
+  lists for it. A model that cannot take images gets a note in place of each render, telling it to use
+  `check_region` and `read_region` instead. The build advice in the prompt is written for Claude, so other models may
+  build worse; the picker says so.
 - **Keys.** **Access tokens** → **API keys for the chat**, one per provider. The panel checks a key with its provider
   once, at no cost (Anthropic's model list, OpenRouter's `/api/v1/key`), stores it sealed with AES-256-GCM under
   `KEY_SECRET` (`AUTH0_SECRET` without it; `lib/server/secretBox.ts`) and shows only its last four characters again.
@@ -167,6 +176,7 @@ models are the same Claude models under each provider's id (`CHAT_MODELS` in `li
 | --- | --- |
 | `GET /api/account/api-keys` | the caller's keys: `{keys: {anthropic, openrouter}}`, each `{hint, created, usable}` or null |
 | `PUT/DELETE /api/account/api-keys/<provider>` | save `{key}` (after the provider accepts it) or remove the key |
+| `GET /api/chat-models` | the models per provider: `{models: {anthropic, openrouter}, stale}` |
 | `GET /api/servers/<id>/chats` | the caller's chats there, and the providers they have a usable key for |
 | `POST /api/servers/<id>/chats` | a new chat from its first message `{text, provider?, model?}` |
 | `GET/POST/DELETE /api/servers/<id>/chats/<chat>` | the chat as the page shows it; the next message `{text, model?}`; delete |

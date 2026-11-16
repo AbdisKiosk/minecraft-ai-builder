@@ -9,6 +9,8 @@ export interface ToolAnswer { content: ResultContent; isError: boolean }
 
 export interface TurnInput {
   model: string;
+  /** The fields that depend on the model (providers.ts modelParams): max_tokens, thinking, caching, routing. */
+  params: Record<string, unknown>;
   system: string;
   tools: Anthropic.Tool[];
   /** The conversation so far, ending with the user's new message. The turn appends to it. */
@@ -32,9 +34,6 @@ export interface TurnDeps {
 
 export interface TurnEnd { reason: EndReason; error?: string }
 
-/** Most output tokens of one answer. Requests are streamed, so a long one does not time out. */
-export const MAX_TOKENS = 64_000;
-
 const toolUses = (content: Anthropic.ContentBlock[]) => content.filter((b): b is Anthropic.ToolUseBlock => b.type === 'tool_use');
 
 export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnEnd> {
@@ -45,16 +44,13 @@ export async function runTurn(input: TurnInput, deps: TurnDeps): Promise<TurnEnd
     let message: Anthropic.Message;
     try {
       message = await deps.ask({
+        max_tokens: 16_000,
+        ...input.params,
         model: input.model,
-        max_tokens: MAX_TOKENS,
         system: input.system,
         tools: input.tools,
         messages,
-        thinking: { type: 'adaptive' },
-        output_config: { effort: 'high' },
-        // The tools, the system prompt and the earlier messages are the same on every request of a conversation.
-        cache_control: { type: 'ephemeral' },
-      }, text => deps.emit({ type: 'text', text }), signal);
+      } as Anthropic.MessageCreateParamsNonStreaming, text => deps.emit({ type: 'text', text }), signal);
     } catch (e) {
       if (signal.aborted) return { reason: 'stopped' };
       throw e;

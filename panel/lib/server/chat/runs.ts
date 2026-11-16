@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { chatModel, itemsOf, providerName, type ChatEvent, type ChatView, type EndReason, type ProviderId } from '../../chat';
+import { itemsOf, providerName, type ChatEvent, type ChatModel, type ChatView, type EndReason, type ProviderId } from '../../chat';
 import { roleOf, type UserRow } from '../access';
 import { apiKeyOf } from '../apiKeys';
 import { hub } from '../hub';
@@ -9,7 +9,8 @@ import { HttpError } from '../route';
 import { owedResults, runTurn, type TurnEnd } from './agent';
 import { callTool, instructions, listTools, McpError, type Send } from './mcp';
 import { loadSkills, systemPrompt } from './prompt';
-import { clientFor, providerFailure, withExtra } from './providers';
+import { findModel } from './models';
+import { clientFor, modelParams, providerFailure, withoutImages } from './providers';
 import { appendMessage, chatRow, messagesOf, setSystemPrompt, turnEnded, turnStarted, type ChatRow } from './store';
 
 // The turns that are running. A turn belongs to this process, not to the request that started it: a build takes
@@ -96,7 +97,8 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
   const provider = chat.provider;
   if (!text.trim()) throw new HttpError(400, 'write a message first');
   if (text.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message can be at most ${MAX_MESSAGE_CHARS} characters`);
-  if (!chatModel(provider, model)) throw new HttpError(400, `unknown model for ${providerName(provider)}: ${model}`);
+  const chosen = await findModel(provider, model);
+  if (!chosen) throw new HttpError(400, `${providerName(provider)} has no model '${model}' that can use tools`);
   if (running(chat.id)) throw new HttpError(409, 'Claude is still answering in this chat; stop it or wait');
   if ([...runs().values()].filter(r => !r.ended && r.userId === user.id).length >= MAX_RUNS) {
     throw new HttpError(429, `you have ${MAX_RUNS} chats running; wait for one or stop it`);
@@ -126,10 +128,10 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
   });
   run.base = messages.length;
 
-  answer(run, chat, model, apiKey!, messages).catch(e => console.error(`chat ${chat.id}: turn failed to finish`, e));
+  answer(run, chat, chosen, apiKey!, messages).catch(e => console.error(`chat ${chat.id}: turn failed to finish`, e));
 }
 
-async function answer(run: Run, chat: ChatRow, model: string, apiKey: string, messages: Anthropic.MessageParam[]) {
+async function answer(run: Run, chat: ChatRow, model: ChatModel, apiKey: string, messages: Anthropic.MessageParam[]) {
   const send: Send = body => hub().requestAsUser(chat.server_id, { t: 'mcp', body }, chat.user_id, TOOL_TIMEOUT_MS);
   let end: TurnEnd;
   try {
@@ -141,9 +143,10 @@ async function answer(run: Run, chat: ChatRow, model: string, apiKey: string, me
     }
     // The key is always the user's own, never one from the panel's environment.
     const client = clientFor(chat.provider, apiKey);
-    end = await runTurn({ model, system, tools, messages, maxRounds: MAX_ROUNDS, signal: run.abort.signal }, {
+    end = await runTurn({ model: model.id, params: modelParams(model), system, tools, messages, maxRounds: MAX_ROUNDS, signal: run.abort.signal }, {
       ask(params, onText, signal) {
-        const stream = client.messages.stream(withExtra(chat.provider, params), { signal });
+        if (!model.images) params = { ...params, messages: withoutImages(params.messages) };
+        const stream = client.messages.stream(params, { signal });
         stream.on('text', onText);
         return stream.finalMessage();
       },

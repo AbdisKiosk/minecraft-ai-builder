@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { providerName, type ProviderId } from '../../chat';
+import { providerName, type ChatModel, type ProviderId } from '../../chat';
 
 // How the chat reaches each provider. Both take Anthropic's Messages API, so one client and one loop serve them; only
 // the address, the way the key is sent and a few request fields differ.
@@ -8,18 +8,17 @@ type Fetch = typeof fetch;
 
 interface Setup {
   baseURL: string;
-  /** Sent as the SDK's apiKey (Anthropic's own header) or as a plain bearer token. */
+  /** Sent as the SDK's apiKey or as a plain bearer token. */
   auth: 'apiKey' | 'bearer';
-  /** Fields this provider takes on top of the Messages API's. */
-  extra?: Record<string, unknown>;
 }
 
 const SETUP: Record<ProviderId, Setup> = {
   anthropic: { baseURL: 'https://api.anthropic.com', auth: 'apiKey' },
-  // OpenRouter serves Claude from Anthropic and from cloud platforms; Anthropic's own API first, as OpenRouter
-  // recommends for Claude agents, with the others as fallbacks.
-  openrouter: { baseURL: 'https://openrouter.ai/api', auth: 'bearer', extra: { provider: { order: ['anthropic'] } } },
+  openrouter: { baseURL: 'https://openrouter.ai/api', auth: 'bearer' },
 };
+
+/** Most output tokens of one answer. Requests are streamed, so a long one does not time out. */
+export const MAX_TOKENS = 64_000;
 
 /**
  * A client that sends `key` to `provider` and nowhere else. Every option is given, so none comes from the panel's
@@ -34,9 +33,34 @@ export function clientFor(provider: ProviderId, key: string, fetchImpl?: Fetch):
   });
 }
 
-/** The request with the provider's own fields added. */
-export function withExtra<T extends object>(provider: ProviderId, params: T): T {
-  return { ...params, ...SETUP[provider].extra };
+/**
+ * The request fields that depend on the model, on top of model, system, tools and messages. Only Claude gets
+ * Anthropic's own fields; another model through OpenRouter gets the plain Messages API and thinks as it does by default.
+ */
+export function modelParams(model: ChatModel): Record<string, unknown> {
+  const params: Record<string, unknown> = { max_tokens: Math.min(MAX_TOKENS, model.maxOutput ?? MAX_TOKENS) };
+  if (model.adaptive) Object.assign(params, { thinking: { type: 'adaptive' }, output_config: { effort: 'high' } });
+  // The tools, the system prompt and the earlier messages are the same on every request of a conversation.
+  if (model.claude) params.cache_control = { type: 'ephemeral' };
+  // OpenRouter serves Claude from Anthropic and from cloud platforms: Anthropic's own API first, as OpenRouter
+  // recommends for Claude agents, with the others as fallbacks.
+  if (model.claude && model.provider === 'openrouter') params.provider = { order: ['anthropic'] };
+  return params;
+}
+
+const NO_IMAGE = '(A render was here. This model cannot see images; use check_region and read_region to judge the build.)';
+
+/** The messages with every image in a tool result replaced by a note, for a model that cannot see images. */
+export function withoutImages(messages: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  return messages.map(m => {
+    if (typeof m.content === 'string' || !m.content.some(b => b.type === 'tool_result' && Array.isArray(b.content) && b.content.some(c => c.type === 'image'))) return m;
+    return {
+      ...m,
+      content: m.content.map(b => (b.type === 'tool_result' && Array.isArray(b.content)
+        ? { ...b, content: b.content.map(c => (c.type === 'image' ? { type: 'text' as const, text: NO_IMAGE } : c)) }
+        : b)),
+    } as Anthropic.MessageParam;
+  });
 }
 
 export class KeyCheckError extends Error {

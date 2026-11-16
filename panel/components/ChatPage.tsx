@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api, message, serverApi } from '../lib/api';
-import { applyEvent, CHAT_MODELS, defaultModel, PROVIDERS, providerName, type ChatEvent, type ChatItem, type ChatSummary, type ChatView, type ProviderId } from '../lib/chat';
+import { applyEvent, DEFAULT_MODEL, priceText, PROVIDERS, providerName, type ChatEvent, type ChatItem, type ChatModel, type ChatSummary, type ChatView, type ProviderId } from '../lib/chat';
 import { ago, num } from '../lib/format';
 import { chatHref, draftHref, go, tokensHref } from '../lib/routes';
 import type { Server } from '../lib/types';
 
 interface List { chats: ChatSummary[]; /** The providers the user has a usable key for. */ providers: ProviderId[] }
 
-/** A model choice in the picker: the provider and its model id. */
-const choiceOf = (provider: ProviderId, model: string) => `${provider}|${model}`;
-function parseChoice(choice: string): { provider: ProviderId; model: string } {
-  const at = choice.indexOf('|');
-  return { provider: choice.slice(0, at) as ProviderId, model: choice.slice(at + 1) };
-}
+/** The models a chat can use per provider; `stale` names providers whose list could not be read just now. */
+interface Catalog { models: Record<ProviderId, ChatModel[]>; stale: ProviderId[] }
+
+/** The provider and model picked for the next message; `model` is what the user typed until it names one. */
+interface Pick { provider: ProviderId; model: string }
 
 /**
  * Chat with Claude about one server: it builds through the same tools as Claude Code, on the user's own API key for
@@ -26,8 +25,9 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [usage, setUsage] = useState<{ input: number; output: number } | null>(null);
-  /** The picked model, as choiceOf gives it; empty until the user's keys are known. */
-  const [choice, setChoice] = useState('');
+  const [catalog, setCatalog] = useState<Catalog | null>(null);
+  /** Null until the user's keys are known. */
+  const [pick, setPick] = useState<Pick | null>(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   /** Bumped to read the chat again: after a message is sent and when a turn ends. */
@@ -37,6 +37,9 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
     api<List>(base).then(setList, ex => setError(message(ex)));
   }, [base]);
   useEffect(loadList, [loadList]);
+  useEffect(() => {
+    api<Catalog>('/api/chat-models').then(setCatalog, ex => setError(message(ex)));
+  }, []);
 
   useEffect(() => {
     setError('');
@@ -54,7 +57,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
       setItems(v.items);
       setRunning(v.running);
       setUsage(null);
-      setChoice(choiceOf(v.provider, v.model));
+      setPick({ provider: v.provider, model: v.model });
     }, ex => { if (current) setError(message(ex)); });
     return () => { current = false; };
   }, [base, chat, version]);
@@ -79,12 +82,15 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   // A new chat starts on the first provider the user has a key for, unless they picked another.
   useEffect(() => {
     if (chat || !list) return;
-    setChoice(now => (now && list.providers.includes(parseChoice(now).provider) ? now
-      : list.providers.length ? choiceOf(list.providers[0], defaultModel(list.providers[0])) : ''));
+    setPick(now => (now && list.providers.includes(now.provider) ? now
+      : list.providers.length ? { provider: list.providers[0], model: DEFAULT_MODEL[list.providers[0]] } : null));
   }, [chat, list]);
 
+  const chosen = pick ? catalog?.models[pick.provider]?.find(m => m.id === pick.model) ?? null : null;
+
   const send = async (text: string) => {
-    const { provider, model } = parseChoice(choice);
+    if (!chosen) return false;
+    const { provider, id: model } = chosen;
     setSending(true);
     setError('');
     try {
@@ -151,20 +157,10 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
         {blocked === 'chat-key' && view && <p className="warn">This chat uses {providerName(view.provider)}, and you have no{' '}
           {providerName(view.provider)} key. <a href={tokensHref}>Add it under Access tokens</a>, or start a new chat.</p>}
         {blocked === 'offline' && <p className="warn">This server is offline, so Claude cannot build on it right now.</p>}
-        <Composer disabled={!!blocked || sending || !choice} running={running} onSend={send} onStop={stop} />
+        <Composer disabled={!!blocked || sending || !chosen} running={running} onSend={send} onStop={stop} />
         <div className="chat-foot muted">
-          {providers.length > 0 && (
-            <label>Model{' '}
-              <select value={choice} onChange={ev => setChoice(ev.target.value)} disabled={running}>
-                {PROVIDERS.filter(p => providers.includes(p.id)).map(p => (
-                  <optgroup key={p.id} label={p.name}>
-                    {CHAT_MODELS.filter(m => m.provider === p.id).map(m => (
-                      <option key={m.id} value={choiceOf(p.id, m.id)}>{m.name} ({m.note}), {p.name}</option>
-                    ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
+          {pick && providers.length > 0 && (
+            <ModelPicker providers={providers} pick={pick} catalog={catalog} locked={!!view} disabled={running} onPick={setPick} />
           )}
           <span className="spacer" />
           {total && total.input + total.output > 0 && (
@@ -173,6 +169,55 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+/** "1M" or "200k". */
+const tokens = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+
+/**
+ * The provider (for a new chat, among those the user has a key for) and its model: a list for Anthropic's few, a
+ * search over the catalog for OpenRouter's hundreds.
+ */
+function ModelPicker({ providers, pick, catalog, locked, disabled, onPick }: {
+  providers: ProviderId[]; pick: Pick; catalog: Catalog | null; locked: boolean; disabled: boolean; onPick: (p: Pick) => void;
+}) {
+  const models = catalog?.models[pick.provider] ?? [];
+  const chosen = models.find(m => m.id === pick.model);
+  const listId = `chat-models-${pick.provider}`;
+  return (
+    <div className="model-picker">
+      {!locked && providers.length > 1 ? (
+        <select value={pick.provider} disabled={disabled} aria-label="Provider"
+          onChange={ev => { const provider = ev.target.value as ProviderId; onPick({ provider, model: DEFAULT_MODEL[provider] }); }}>
+          {PROVIDERS.filter(p => providers.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+        </select>
+      ) : <span>{providerName(pick.provider)}</span>}
+      {models.length <= 12 ? (
+        <select value={chosen ? pick.model : ''} disabled={disabled || !catalog} aria-label="Model"
+          onChange={ev => onPick({ ...pick, model: ev.target.value })}>
+          {!chosen && <option value="">{catalog ? 'Pick a model' : 'Loading models…'}</option>}
+          {models.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      ) : (
+        <>
+          <input type="search" list={listId} value={pick.model} disabled={disabled} spellCheck={false}
+            placeholder="Search models, e.g. claude, gpt, gemini" aria-label="Model"
+            onChange={ev => onPick({ ...pick, model: ev.target.value.trim() })} />
+          <datalist id={listId}>
+            {models.map(m => <option key={m.id} value={m.id} label={`${m.name} · ${priceText(m)}`} />)}
+          </datalist>
+        </>
+      )}
+      <span className="model-facts">
+        {chosen ? <>
+          {priceText(chosen)}{chosen.context ? ` · ${tokens(chosen.context)} context` : ''}
+          {!chosen.images && ' · cannot see renders'}
+          {!chosen.claude && ' · the build advice is written for Claude, so results may vary'}
+        </> : catalog && pick.model ? `No model that can use tools is called "${pick.model}". Pick one from the list.` : null}
+        {catalog?.stale.includes(pick.provider) && ` ${providerName(pick.provider)}\u2019s model list could not be read just now.`}
+      </span>
     </div>
   );
 }

@@ -26,25 +26,53 @@ export function providerName(id: ProviderId): string {
   return PROVIDERS.find(p => p.id === id)!.name;
 }
 
-export interface ChatModel { provider: ProviderId; id: string; name: string; note: string }
-
-/** The Claude models on offer, the default first, with each provider's name for them. */
-const CLAUDE: readonly ({ name: string; note: string } & Record<ProviderId, string>)[] = [
-  { name: 'Claude Opus 5.5', note: 'the default', anthropic: 'claude-opus-5-5', openrouter: 'anthropic/claude-opus-5.5' },
-  { name: 'Claude Sonnet 5.5', note: 'about half the price', anthropic: 'claude-sonnet-5-5', openrouter: 'anthropic/claude-sonnet-5.5' },
-  { name: 'Claude Haiku 5.5', note: 'cheapest, for small jobs', anthropic: 'claude-haiku-5-5', openrouter: 'anthropic/claude-haiku-5.5' },
-  { name: 'Claude Fable 5.2', note: 'most capable, twice the price', anthropic: 'claude-fable-5-2', openrouter: 'anthropic/claude-fable-5.2' },
-];
-
-/** The models a chat can use, per provider. The user pays the provider for whichever they pick. */
-export const CHAT_MODELS: readonly ChatModel[] = PROVIDERS.flatMap(p => CLAUDE.map(m => ({ provider: p.id, id: m[p.id], name: m.name, note: m.note })));
-
-export function chatModel(provider: ProviderId, id: string): ChatModel | undefined {
-  return CHAT_MODELS.find(m => m.provider === provider && m.id === id);
+export interface ChatModel {
+  provider: ProviderId;
+  /** The id the provider takes. */
+  id: string;
+  name: string;
+  /** Dollars per million input and output tokens; null when it varies (a router that picks a model per request). */
+  price: { input: number; output: number } | null;
+  /** Tokens it reads at most. */
+  context: number | null;
+  /** Most tokens of one answer, when the provider says. */
+  maxOutput: number | null;
+  /** It can look at renders. A model that can't gets a note in their place. */
+  images: boolean;
+  /** One of Anthropic's models: requests use Anthropic's prompt caching. */
+  claude: boolean;
+  /** It takes adaptive thinking and an effort level. */
+  adaptive: boolean;
 }
 
-export function defaultModel(provider: ProviderId): string {
-  return CHAT_MODELS.find(m => m.provider === provider)!.id;
+/** The Claude models the chat offers through Anthropic's API, the default first, with OpenRouter's ids for them. */
+const CLAUDE = [
+  { name: 'Claude Opus 5.5', anthropic: 'claude-opus-5-5', openrouter: 'anthropic/claude-opus-5.5', input: 4, output: 20 },
+  { name: 'Claude Sonnet 5.5', anthropic: 'claude-sonnet-5-5', openrouter: 'anthropic/claude-sonnet-5.5', input: 2, output: 10 },
+  { name: 'Claude Haiku 5.5', anthropic: 'claude-haiku-5-5', openrouter: 'anthropic/claude-haiku-5.5', input: 0.1, output: 0.5 },
+  { name: 'Claude Fable 5.2', anthropic: 'claude-fable-5-2', openrouter: 'anthropic/claude-fable-5.2', input: 8, output: 40 },
+] as const;
+
+const claudeVia = (provider: ProviderId): ChatModel[] => CLAUDE.map(m => ({
+  provider, id: m[provider], name: m.name, price: { input: m.input, output: m.output },
+  context: 1_000_000, maxOutput: 128_000, images: true, claude: true, adaptive: true,
+}));
+
+/** The models offered through Anthropic's API. */
+export const ANTHROPIC_MODELS: readonly ChatModel[] = claudeVia('anthropic');
+
+/** What OpenRouter offers when its catalog can't be read: the same Claude models. */
+export const OPENROUTER_FALLBACK: readonly ChatModel[] = claudeVia('openrouter');
+
+/** The model a new chat starts with on each provider. */
+export const DEFAULT_MODEL: Record<ProviderId, string> = { anthropic: CLAUDE[0].anthropic, openrouter: CLAUDE[0].openrouter };
+
+/** "$4 / $20 per million tokens", "free" or "price varies". */
+export function priceText(m: ChatModel): string {
+  if (!m.price) return 'price varies';
+  if (m.price.input === 0 && m.price.output === 0) return 'free';
+  const usd = (n: number) => '$' + (n >= 1 ? n.toFixed(2).replace(/\.00$/, '') : String(+n.toPrecision(2)));
+  return `${usd(m.price.input)} / ${usd(m.price.output)} per million tokens`;
 }
 
 /** What a tool call answered, cut down for the page. `image` is a data URL (a render). */

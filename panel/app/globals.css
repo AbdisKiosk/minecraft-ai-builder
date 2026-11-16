@@ -490,3 +490,10 @@ dialog.guide { width: min(460px, calc(100vw - 32px)); padding: 32px 28px 20px; b
 .provider-key { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
 .provider-key h3 { margin: 0 0 4px; font-size: 14px; }
 .provider-key p { margin: 0 0 8px; }
+.model-picker { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.model-picker input[type=search] {
+  font: inherit; color: var(--text); background: var(--surface); border: 1px solid var(--border);
+  border-radius: 8px; padding: 4px 8px; width: min(340px, 100%);
+}
+.model-picker select { padding: 4px 8px; }
+.model-facts { font-size: 12.5px; }

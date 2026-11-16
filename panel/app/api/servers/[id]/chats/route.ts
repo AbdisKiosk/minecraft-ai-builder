@@ -1,4 +1,5 @@
-import { defaultModel, isProvider } from '../../../../../lib/chat';
+import { isProvider } from '../../../../../lib/chat';
+import { defaultModel } from '../../../../../lib/server/chat/models';
 import { usableProviders } from '../../../../../lib/server/apiKeys';
 import { startTurn } from '../../../../../lib/server/chat/runs';
 import { chatsOf, createChat, deleteChat } from '../../../../../lib/server/chat/store';
