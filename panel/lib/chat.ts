@@ -1,19 +1,50 @@
 // The panel's chat, as the browser and the server both see it: the models on offer, what a conversation shows, and
 // the events a running turn sends. No imports, so the page bundle gets none of the server's code.
 
-export interface ChatModel { id: string; name: string; note: string }
+export type ProviderId = 'anthropic' | 'openrouter';
 
-/** The models a chat can use, the default first. The user pays Anthropic for whichever they pick. */
-export const CHAT_MODELS: readonly ChatModel[] = [
-  { id: 'claude-opus-5-5', name: 'Claude Opus 5.5', note: 'the default' },
-  { id: 'claude-sonnet-5-5', name: 'Claude Sonnet 5.5', note: 'about half the price' },
-  { id: 'claude-haiku-5-5', name: 'Claude Haiku 5.5', note: 'cheapest, for small jobs' },
-  { id: 'claude-fable-5-2', name: 'Claude Fable 5.2', note: 'most capable, twice the price' },
+export interface Provider {
+  id: ProviderId;
+  name: string;
+  /** What its keys start with. */
+  keyPrefix: string;
+  /** Where a user makes a key. */
+  keysUrl: string;
+}
+
+/** Where the chat can send its requests. Both speak Anthropic's Messages API; the user brings a key for either. */
+export const PROVIDERS: readonly Provider[] = [
+  { id: 'anthropic', name: 'Anthropic', keyPrefix: 'sk-ant-', keysUrl: 'https://platform.claude.com/settings/keys' },
+  { id: 'openrouter', name: 'OpenRouter', keyPrefix: 'sk-or-', keysUrl: 'https://openrouter.ai/settings/keys' },
 ];
-export const DEFAULT_MODEL = CHAT_MODELS[0].id;
 
-export function isChatModel(v: unknown): v is string {
-  return CHAT_MODELS.some(m => m.id === v);
+export function isProvider(v: unknown): v is ProviderId {
+  return PROVIDERS.some(p => p.id === v);
+}
+
+export function providerName(id: ProviderId): string {
+  return PROVIDERS.find(p => p.id === id)!.name;
+}
+
+export interface ChatModel { provider: ProviderId; id: string; name: string; note: string }
+
+/** The Claude models on offer, the default first, with each provider's name for them. */
+const CLAUDE: readonly ({ name: string; note: string } & Record<ProviderId, string>)[] = [
+  { name: 'Claude Opus 5.5', note: 'the default', anthropic: 'claude-opus-5-5', openrouter: 'anthropic/claude-opus-5.5' },
+  { name: 'Claude Sonnet 5.5', note: 'about half the price', anthropic: 'claude-sonnet-5-5', openrouter: 'anthropic/claude-sonnet-5.5' },
+  { name: 'Claude Haiku 5.5', note: 'cheapest, for small jobs', anthropic: 'claude-haiku-5-5', openrouter: 'anthropic/claude-haiku-5.5' },
+  { name: 'Claude Fable 5.2', note: 'most capable, twice the price', anthropic: 'claude-fable-5-2', openrouter: 'anthropic/claude-fable-5.2' },
+];
+
+/** The models a chat can use, per provider. The user pays the provider for whichever they pick. */
+export const CHAT_MODELS: readonly ChatModel[] = PROVIDERS.flatMap(p => CLAUDE.map(m => ({ provider: p.id, id: m[p.id], name: m.name, note: m.note })));
+
+export function chatModel(provider: ProviderId, id: string): ChatModel | undefined {
+  return CHAT_MODELS.find(m => m.provider === provider && m.id === id);
+}
+
+export function defaultModel(provider: ProviderId): string {
+  return CHAT_MODELS.find(m => m.provider === provider)!.id;
 }
 
 /** What a tool call answered, cut down for the page. `image` is a data URL (a render). */
@@ -36,7 +67,7 @@ export type ChatEvent =
   | { type: 'usage'; input: number; output: number }
   | { type: 'end'; reason: EndReason; error?: string };
 
-export interface ChatSummary { id: string; title: string; model: string; updated: number }
+export interface ChatSummary { id: string; title: string; provider: ProviderId; model: string; updated: number }
 
 export interface ChatView extends ChatSummary {
   items: ChatItem[];

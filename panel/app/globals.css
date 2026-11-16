@@ -487,3 +487,6 @@ dialog.guide { width: min(460px, calc(100vw - 32px)); padding: 32px 28px 20px; b
   .chat-list ul { max-height: 132px; overflow-y: auto; }
   .chat-list li button { opacity: 1; }
 }
+.provider-key { border-top: 1px solid var(--border); padding-top: 12px; margin-top: 12px; }
+.provider-key h3 { margin: 0 0 4px; font-size: 14px; }
+.provider-key p { margin: 0 0 8px; }

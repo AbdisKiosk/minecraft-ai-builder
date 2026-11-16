@@ -1,5 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
-import { itemsOf, isChatModel, type ChatEvent, type ChatView, type EndReason } from '../../chat';
+import type Anthropic from '@anthropic-ai/sdk';
+import { chatModel, itemsOf, providerName, type ChatEvent, type ChatView, type EndReason, type ProviderId } from '../../chat';
 import { roleOf, type UserRow } from '../access';
 import { apiKeyOf } from '../apiKeys';
 import { hub } from '../hub';
@@ -9,6 +9,7 @@ import { HttpError } from '../route';
 import { owedResults, runTurn, type TurnEnd } from './agent';
 import { callTool, instructions, listTools, McpError, type Send } from './mcp';
 import { loadSkills, systemPrompt } from './prompt';
+import { clientFor, providerFailure, withExtra } from './providers';
 import { appendMessage, chatRow, messagesOf, setSystemPrompt, turnEnded, turnStarted, type ChatRow } from './store';
 
 // The turns that are running. A turn belongs to this process, not to the request that started it: a build takes
@@ -77,7 +78,7 @@ export async function chatView(chat: ChatRow): Promise<ChatView> {
   const live = !!run && !run.ended;
   const messages = await messagesOf(chat.id);
   return {
-    id: chat.id, title: chat.title, model: chat.model, updated: chat.updated_at.getTime(),
+    id: chat.id, title: chat.title, provider: chat.provider, model: chat.model, updated: chat.updated_at.getTime(),
     items: itemsOf(live ? messages.slice(0, run.base) : messages),
     running: live,
     usage: { input: chat.input_tokens, output: chat.output_tokens },
@@ -88,11 +89,14 @@ export async function chatView(chat: ChatRow): Promise<ChatView> {
 /**
  * Starts a turn: stores the user's message and lets Claude answer in the background. Resolves once the message is
  * stored. Refuses (HttpError) when the turn cannot start; the caller has checked that `user` builds on the server.
+ * The model may change between turns, the provider may not: thinking blocks that one provider's account returned
+ * are not for another's.
  */
 export async function startTurn(chat: ChatRow, user: UserRow, text: string, model: string): Promise<void> {
+  const provider = chat.provider;
   if (!text.trim()) throw new HttpError(400, 'write a message first');
   if (text.length > MAX_MESSAGE_CHARS) throw new HttpError(400, `a message can be at most ${MAX_MESSAGE_CHARS} characters`);
-  if (!isChatModel(model)) throw new HttpError(400, 'unknown model');
+  if (!chatModel(provider, model)) throw new HttpError(400, `unknown model for ${providerName(provider)}: ${model}`);
   if (running(chat.id)) throw new HttpError(409, 'Claude is still answering in this chat; stop it or wait');
   if ([...runs().values()].filter(r => !r.ended && r.userId === user.id).length >= MAX_RUNS) {
     throw new HttpError(429, `you have ${MAX_RUNS} chats running; wait for one or stop it`);
@@ -104,8 +108,10 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
   runs().set(chat.id, run);
   let apiKey: string | null;
   const messages = await (async () => {
-    apiKey = await apiKeyOf(user.id);
-    if (!apiKey) throw new HttpError(400, 'add your Anthropic API key first (Access tokens in the top bar)');
+    apiKey = await apiKeyOf(user.id, provider);
+    if (!apiKey) {
+      throw new HttpError(400, `this chat uses ${providerName(provider)}: add your ${providerName(provider)} API key under Access tokens, or start a new chat`);
+    }
     const history = await messagesOf(chat.id);
     const owed = owedResults(history);
     for (const m of [...(owed ? [owed] : []), { role: 'user' as const, content: text }]) {
@@ -134,10 +140,10 @@ async function answer(run: Run, chat: ChatRow, model: string, apiKey: string, me
       await setSystemPrompt(chat.id, system);
     }
     // The key is always the user's own, never one from the panel's environment.
-    const client = new Anthropic({ apiKey });
+    const client = clientFor(chat.provider, apiKey);
     end = await runTurn({ model, system, tools, messages, maxRounds: MAX_ROUNDS, signal: run.abort.signal }, {
       ask(params, onText, signal) {
-        const stream = client.messages.stream(params, { signal });
+        const stream = client.messages.stream(withExtra(chat.provider, params), { signal });
         stream.on('text', onText);
         return stream.finalMessage();
       },
@@ -150,7 +156,7 @@ async function answer(run: Run, chat: ChatRow, model: string, apiKey: string, me
       emit: e => run.emit(e),
     });
   } catch (e) {
-    end = { reason: 'error', error: failure(e) };
+    end = { reason: 'error', error: failure(chat.provider, e) };
   }
   const error = end.error ?? WHY[end.reason];
   run.ended = true;
@@ -169,13 +175,9 @@ const WHY: Record<EndReason, string | null> = {
 };
 
 /** What went wrong, in words for the user. Anything unexpected is logged and not shown. */
-function failure(e: unknown): string {
-  if (e instanceof Anthropic.AuthenticationError) return 'Anthropic no longer accepts your API key. Replace it under Access tokens.';
-  if (e instanceof Anthropic.PermissionDeniedError) return 'Your API key may not use this model. Pick another model, or check the key in the Claude Console.';
-  if (e instanceof Anthropic.RateLimitError) return 'Anthropic’s rate limit for your API key was reached. Wait a minute and say "continue".';
-  if (e instanceof Anthropic.BadRequestError) return `Anthropic refused the request: ${e.message}`;
-  if (e instanceof Anthropic.APIConnectionError) return 'The panel could not reach Anthropic. Say "continue" to try again.';
-  if (e instanceof Anthropic.APIError) return `Anthropic answered with an error (${e.status ?? 'no status'}). Say "continue" to try again.`;
+function failure(provider: ProviderId, e: unknown): string {
+  const said = providerFailure(provider, e);
+  if (said) return said;
   const code = (e as { code?: unknown } | null)?.code;
   if (e instanceof McpError || code === 'OFFLINE' || code === 'TIMEOUT') return `The Minecraft server did not answer: ${(e as Error).message}.`;
   console.error('chat: turn failed', e);

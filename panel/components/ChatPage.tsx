@@ -1,14 +1,22 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api, message, serverApi } from '../lib/api';
-import { applyEvent, CHAT_MODELS, DEFAULT_MODEL, type ChatEvent, type ChatItem, type ChatSummary, type ChatView } from '../lib/chat';
+import { applyEvent, CHAT_MODELS, defaultModel, PROVIDERS, providerName, type ChatEvent, type ChatItem, type ChatSummary, type ChatView, type ProviderId } from '../lib/chat';
 import { ago, num } from '../lib/format';
 import { chatHref, draftHref, go, tokensHref } from '../lib/routes';
 import type { Server } from '../lib/types';
 
-interface List { chats: ChatSummary[]; key: boolean }
+interface List { chats: ChatSummary[]; /** The providers the user has a usable key for. */ providers: ProviderId[] }
+
+/** A model choice in the picker: the provider and its model id. */
+const choiceOf = (provider: ProviderId, model: string) => `${provider}|${model}`;
+function parseChoice(choice: string): { provider: ProviderId; model: string } {
+  const at = choice.indexOf('|');
+  return { provider: choice.slice(0, at) as ProviderId, model: choice.slice(at + 1) };
+}
 
 /**
- * Chat with Claude about one server: it builds through the same tools as Claude Code, on the user's own API key.
+ * Chat with Claude about one server: it builds through the same tools as Claude Code, on the user's own API key for
+ * Anthropic or OpenRouter.
  * A turn runs on the panel, so this page only follows it and can be closed meanwhile.
  */
 export default function ChatPage({ server, chat }: { server: Server; chat: string | null }) {
@@ -18,7 +26,8 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [usage, setUsage] = useState<{ input: number; output: number } | null>(null);
-  const [model, setModel] = useState(DEFAULT_MODEL);
+  /** The picked model, as choiceOf gives it; empty until the user's keys are known. */
+  const [choice, setChoice] = useState('');
   const [sending, setSending] = useState(false);
   const [error, setError] = useState('');
   /** Bumped to read the chat again: after a message is sent and when a turn ends. */
@@ -45,7 +54,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
       setItems(v.items);
       setRunning(v.running);
       setUsage(null);
-      setModel(v.model);
+      setChoice(choiceOf(v.provider, v.model));
     }, ex => { if (current) setError(message(ex)); });
     return () => { current = false; };
   }, [base, chat, version]);
@@ -67,7 +76,15 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
     return () => source.close();
   }, [base, chat, view, loadList]);
 
+  // A new chat starts on the first provider the user has a key for, unless they picked another.
+  useEffect(() => {
+    if (chat || !list) return;
+    setChoice(now => (now && list.providers.includes(parseChoice(now).provider) ? now
+      : list.providers.length ? choiceOf(list.providers[0], defaultModel(list.providers[0])) : ''));
+  }, [chat, list]);
+
   const send = async (text: string) => {
+    const { provider, model } = parseChoice(choice);
     setSending(true);
     setError('');
     try {
@@ -75,7 +92,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
         await api(`${base}/${encodeURIComponent(chat)}`, { method: 'POST', body: JSON.stringify({ text, model }) });
         setVersion(v => v + 1);
       } else {
-        const made = await api<{ id: string }>(base, { method: 'POST', body: JSON.stringify({ text, model }) });
+        const made = await api<{ id: string }>(base, { method: 'POST', body: JSON.stringify({ text, provider, model }) });
         loadList();
         go(chatHref(server.id, made.id));
       }
@@ -104,7 +121,12 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   };
 
   const total = view ? { input: view.usage.input + (usage?.input ?? 0), output: view.usage.output + (usage?.output ?? 0) } : null;
-  const blocked = list && !list.key ? 'key' : !server.online ? 'offline' : null;
+  // An open chat keeps its provider; a new one can use any provider the user has a key for.
+  const providers = view ? [view.provider] : list?.providers ?? [];
+  const blocked = !list || (chat && !view) ? null
+    : view && !list.providers.includes(view.provider) ? 'chat-key'
+    : !view && !list.providers.length ? 'key'
+    : !server.online ? 'offline' : null;
   return (
     <div className="chat-page">
       <aside className="card chat-list">
@@ -124,19 +146,29 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
         <Conversation items={items} running={running} server={server.id} empty={!chat} />
         {view?.error && !running && <p className="warn">{view.error}</p>}
         {error && <p className="error">{error}</p>}
-        {blocked === 'key' && <p className="warn">Chatting here uses your own Anthropic API key.{' '}
-          <a href={tokensHref}>Add it under Access tokens</a>, then come back.</p>}
+        {blocked === 'key' && <p className="warn">Chatting here uses your own API key for Anthropic or OpenRouter.{' '}
+          <a href={tokensHref}>Add one under Access tokens</a>, then come back.</p>}
+        {blocked === 'chat-key' && view && <p className="warn">This chat uses {providerName(view.provider)}, and you have no{' '}
+          {providerName(view.provider)} key. <a href={tokensHref}>Add it under Access tokens</a>, or start a new chat.</p>}
         {blocked === 'offline' && <p className="warn">This server is offline, so Claude cannot build on it right now.</p>}
-        <Composer disabled={!!blocked || sending} running={running} onSend={send} onStop={stop} />
+        <Composer disabled={!!blocked || sending || !choice} running={running} onSend={send} onStop={stop} />
         <div className="chat-foot muted">
-          <label>Model{' '}
-            <select value={model} onChange={ev => setModel(ev.target.value)} disabled={running}>
-              {CHAT_MODELS.map(m => <option key={m.id} value={m.id}>{m.name} ({m.note})</option>)}
-            </select>
-          </label>
+          {providers.length > 0 && (
+            <label>Model{' '}
+              <select value={choice} onChange={ev => setChoice(ev.target.value)} disabled={running}>
+                {PROVIDERS.filter(p => providers.includes(p.id)).map(p => (
+                  <optgroup key={p.id} label={p.name}>
+                    {CHAT_MODELS.filter(m => m.provider === p.id).map(m => (
+                      <option key={m.id} value={choiceOf(p.id, m.id)}>{m.name} ({m.note}), {p.name}</option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </label>
+          )}
           <span className="spacer" />
           {total && total.input + total.output > 0 && (
-            <span title="Tokens this chat has sent to and received from Anthropic, billed to your API key">
+            <span title={`Tokens this chat has sent to and received from ${view ? providerName(view.provider) : 'the provider'}, billed to your key`}>
               {num(total.input)} tokens in · {num(total.output)} out</span>
           )}
         </div>

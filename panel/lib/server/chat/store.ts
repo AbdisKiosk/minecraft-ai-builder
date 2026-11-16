@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { ChatSummary } from '../../chat';
+import type { ChatSummary, ProviderId } from '../../chat';
 import { exec, one, query } from '../db';
 import { shortId } from '../tokens';
 
@@ -10,6 +10,7 @@ export interface ChatRow {
   server_id: string;
   user_id: number;
   title: string;
+  provider: ProviderId;
   model: string;
   system_prompt: string | null;
   input_tokens: number;
@@ -18,11 +19,12 @@ export interface ChatRow {
   updated_at: Date;
 }
 
-const COLUMNS = 'id, server_id, user_id, title, model, system_prompt, input_tokens, output_tokens, error, updated_at';
+const COLUMNS = 'id, server_id, user_id, title, provider, model, system_prompt, input_tokens, output_tokens, error, updated_at';
 
-export async function createChat(serverId: string, userId: number, title: string, model: string): Promise<ChatRow> {
+export async function createChat(serverId: string, userId: number, title: string, provider: ProviderId, model: string): Promise<ChatRow> {
   const id = shortId(12);
-  await exec('INSERT INTO chats (id, server_id, user_id, title, model) VALUES (?, ?, ?, ?, ?)', [id, serverId, userId, title, model]);
+  await exec('INSERT INTO chats (id, server_id, user_id, title, provider, model) VALUES (?, ?, ?, ?, ?, ?)',
+    [id, serverId, userId, title, provider, model]);
   return (await chatRow(id))!;
 }
 
@@ -34,9 +36,10 @@ export async function chatRow(id: string): Promise<ChatRow | null> {
 
 /** The user's newest chats about a server. */
 export async function chatsOf(serverId: string, userId: number): Promise<ChatSummary[]> {
-  const rows = await query<{ id: string; title: string; model: string; updated_at: Date }>(
-    'SELECT id, title, model, updated_at FROM chats WHERE server_id = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 50', [serverId, userId]);
-  return rows.map(r => ({ id: r.id, title: r.title, model: r.model, updated: r.updated_at.getTime() }));
+  const rows = await query<{ id: string; title: string; provider: ProviderId; model: string; updated_at: Date }>(
+    'SELECT id, title, provider, model, updated_at FROM chats WHERE server_id = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 50',
+    [serverId, userId]);
+  return rows.map(r => ({ id: r.id, title: r.title, provider: r.provider, model: r.model, updated: r.updated_at.getTime() }));
 }
 
 export async function messagesOf(chatId: string): Promise<Anthropic.MessageParam[]> {

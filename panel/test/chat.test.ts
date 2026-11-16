@@ -14,11 +14,12 @@ registerHooks({
     }
   },
 });
-const { applyEvent, itemsOf, MAX_RESULT_TEXT } = await import('../lib/chat.ts');
+const { applyEvent, CHAT_MODELS, chatModel, defaultModel, itemsOf, MAX_RESULT_TEXT, PROVIDERS } = await import('../lib/chat.ts');
 const { owedResults, runTurn } = await import('../lib/server/chat/agent.ts');
 const { callTool, instructions, listTools, toolAnswer } = await import('../lib/server/chat/mcp.ts');
 const { skillText, systemPrompt } = await import('../lib/server/chat/prompt.ts');
 const { keyRefusal } = await import('../lib/server/apiKeys.ts');
+const { checkKey, clientFor, KeyCheckError, providerFailure, withExtra } = await import('../lib/server/chat/providers.ts');
 
 type Msg = { role: 'user' | 'assistant'; content: any };
 const usage = { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 90 };
@@ -165,8 +166,84 @@ test('the system prompt keeps the skills but nothing about scripts or subagents'
   assert.equal(skillText('---\nname: x\n---\n# T\nkeep\n## Scripts\ndrop\n## Next\nkeep too'), '# T\nkeep\n## Next\nkeep too');
 });
 
-test('keyRefusal takes API keys and names what is wrong with the rest', () => {
-  assert.equal(keyRefusal('sk-ant-api03-' + 'a'.repeat(40)), null);
-  assert.match(keyRefusal('hello')!, /does not look like/);
-  assert.match(keyRefusal('sk-ant-admin01-' + 'a'.repeat(40))!, /Admin API key/);
+test('keyRefusal takes each provider\u2019s keys and points a key to its own provider', () => {
+  const ant = 'sk-ant-api03-' + 'a'.repeat(40), or = 'sk-or-v1-' + '0'.repeat(64);
+  assert.equal(keyRefusal('anthropic', ant), null);
+  assert.equal(keyRefusal('openrouter', or), null);
+  assert.match(keyRefusal('anthropic', or)!, /an OpenRouter key; add it under OpenRouter/);
+  assert.match(keyRefusal('openrouter', ant)!, /an Anthropic key; add it under Anthropic/);
+  assert.match(keyRefusal('anthropic', 'hello')!, /does not look like an Anthropic API key/);
+  assert.match(keyRefusal('openrouter', 'hello')!, /does not look like an OpenRouter API key \(they start with sk-or-\)/);
+  assert.match(keyRefusal('anthropic', 'sk-ant-admin01-' + 'a'.repeat(40))!, /Admin API key/);
+});
+
+test('every provider offers the same Claude models, each under its own id', () => {
+  for (const p of PROVIDERS) {
+    const models = CHAT_MODELS.filter(m => m.provider === p.id);
+    assert.deepEqual(models.map(m => m.name), CHAT_MODELS.filter(m => m.provider === 'anthropic').map(m => m.name));
+    assert.equal(new Set(models.map(m => m.id)).size, models.length);
+    assert.equal(chatModel(p.id, defaultModel(p.id))?.name, 'Claude Opus 5.5');
+  }
+  assert.equal(chatModel('openrouter', 'claude-opus-5-5'), undefined);
+  assert.equal(chatModel('anthropic', 'anthropic/claude-opus-5.5'), undefined);
+});
+
+/** A fetch that records each request and answers with `status` and `body`. */
+function recorder(status = 200, body: unknown = {}) {
+  const requests: { url: string; headers: Headers; body: any }[] = [];
+  const fetchImpl = async (url: string | URL | Request, init?: RequestInit) => {
+    requests.push({ url: String(url), headers: new Headers(init?.headers), body: init?.body ? JSON.parse(String(init.body)) : null });
+    return new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
+  };
+  return { requests, fetchImpl: fetchImpl as typeof fetch };
+}
+
+const reply = { id: 'msg_1', type: 'message', role: 'assistant', model: 'm', content: [{ type: 'text', text: 'hi' }],
+  stop_reason: 'end_turn', stop_sequence: null, usage: { input_tokens: 1, output_tokens: 1 } };
+
+test('a provider\u2019s client sends the user\u2019s key to that provider only, whatever the panel\u2019s environment says', async () => {
+  const saved = { ...process.env };
+  Object.assign(process.env, { ANTHROPIC_API_KEY: 'sk-ant-panel', ANTHROPIC_AUTH_TOKEN: 'panel-token', ANTHROPIC_BASE_URL: 'https://elsewhere.example' });
+  try {
+    const params = { model: 'm', max_tokens: 10, messages: [{ role: 'user' as const, content: 'hi' }] };
+    const a = recorder(200, reply);
+    await clientFor('anthropic', 'sk-ant-user', a.fetchImpl).messages.create(withExtra('anthropic', params));
+    const o = recorder(200, reply);
+    await clientFor('openrouter', 'sk-or-user', o.fetchImpl).messages.create(withExtra('openrouter', params));
+    assert.equal(a.requests[0].url, 'https://api.anthropic.com/v1/messages');
+    assert.equal(o.requests[0].url, 'https://openrouter.ai/api/v1/messages');
+    for (const [r, key] of [[a, 'sk-ant-user'], [o, 'sk-or-user']] as const) {
+      const sent = [...r.requests[0].headers.values()].join(' ');
+      assert.match(sent, new RegExp(key));
+      assert.doesNotMatch(sent, /sk-ant-panel|panel-token/);
+    }
+    assert.equal(a.requests[0].body.provider, undefined);
+    assert.deepEqual(o.requests[0].body.provider, { order: ['anthropic'] });
+  } finally {
+    process.env = saved;
+  }
+});
+
+test('checkKey asks each provider without spending and tells a refused key from an unreachable provider', async () => {
+  const ok = recorder(200, { data: { label: 'x' } });
+  await checkKey('openrouter', 'sk-or-user', ok.fetchImpl);
+  assert.equal(ok.requests[0].url, 'https://openrouter.ai/api/v1/key');
+  assert.equal(ok.requests[0].headers.get('authorization'), 'Bearer sk-or-user');
+  const models = recorder(200, { data: [], has_more: false, first_id: null, last_id: null });
+  await checkKey('anthropic', 'sk-ant-user', models.fetchImpl);
+  assert.match(models.requests[0].url, /^https:\/\/api\.anthropic\.com\/v1\/models/);
+  for (const provider of ['anthropic', 'openrouter'] as const) {
+    await assert.rejects(checkKey(provider, 'k', recorder(401, { error: { type: 'authentication_error', message: 'no' } }).fetchImpl),
+      (e: any) => e instanceof KeyCheckError && e.kind === 'refused');
+    await assert.rejects(checkKey(provider, 'k', recorder(500, { error: { type: 'api_error', message: 'down' } }).fetchImpl),
+      (e: any) => e instanceof KeyCheckError && e.kind === 'unavailable');
+  }
+});
+
+test('provider errors are explained with the provider\u2019s name', async () => {
+  const fail = (status: number) => clientFor('openrouter', 'k', recorder(status, { error: { type: 'x', message: 'm' } }).fetchImpl)
+    .messages.create({ model: 'm', max_tokens: 1, messages: [{ role: 'user', content: 'hi' }] }, { maxRetries: 0 }).catch(e => e);
+  assert.match(providerFailure('openrouter', await fail(401))!, /^OpenRouter no longer accepts your API key/);
+  assert.match(providerFailure('openrouter', await fail(402))!, /OpenRouter account has run out of credit/);
+  assert.equal(providerFailure('openrouter', new Error('other')), null);
 });
