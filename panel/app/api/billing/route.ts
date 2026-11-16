@@ -1,9 +1,13 @@
 import { limitsOf, PLANS, PRO_INCLUDES_STUDIO, UNLIMITED } from '../../../lib/plans';
 import { billingEnabled, billingOf } from '../../../lib/server/billing';
+import { creditsEnabled, creditsView } from '../../../lib/server/credits';
 import { one } from '../../../lib/server/db';
 import { json, requireUser, route } from '../../../lib/server/route';
 
-/** The caller's plan, what it allows and how much of it they use. `enabled` is false on a panel that sells no plans. */
+/**
+ * The caller's plan, what it allows and how much of it they use. `enabled` is false on a panel that sells no plans.
+ * `credits` is their credit balance and history (lib/credits.ts CreditsView), null on a panel that sells no credits.
+ */
 export const GET = route(async () => {
   const user = await requireUser();
   const owned = await one<{ n: number }>('SELECT COUNT(*) AS n FROM servers WHERE owner_id = ?', [user.id]);
@@ -16,5 +20,6 @@ export const GET = route(async () => {
     limits: limitsOf(billing.plan),
     usage,
     pro: { price: PLANS.pro.price, includesStudio: PRO_INCLUDES_STUDIO },
+    credits: creditsEnabled() ? await creditsView(user.id) : null,
   });
 });

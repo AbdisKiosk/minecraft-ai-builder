@@ -1,6 +1,8 @@
 import Stripe from 'stripe';
 import { customerOfEvent, isPlan, limitsOf, planState, UNLIMITED, type Limits, type PlanId } from '../plans';
+import { topupRefusal } from '../credits';
 import type { UserRow } from './access';
+import { applyLedger, ledgerAction, topupOfSession, type LedgerAction } from './credits';
 import { exec, one, query } from './db';
 
 // Plans are sold through Stripe: hosted Checkout to subscribe, the Customer Portal to change or cancel. The panel keeps
@@ -116,10 +118,38 @@ export async function portalUrl(user: UserRow, base: string): Promise<string | n
   return (await stripe().billingPortal.sessions.create({ customer, return_url: `${base}/dashboard#/billing` })).url;
 }
 
-/** Whether a finished Checkout session is this user's. */
-export async function ownsCheckout(user: UserRow, sessionId: string): Promise<boolean> {
+/**
+ * A Stripe Checkout page where the user buys `dollars` of credits (lib/credits.ts) in one payment. The ledger is
+ * credited from the paid session (credits.ts topupOfSession), which metadata.credits marks as a top-up.
+ */
+export async function topupUrl(user: UserRow, base: string, dollars: number): Promise<string> {
+  const refused = topupRefusal(dollars);
+  if (refused) throw new Error(refused);
+  const marks = { credits: String(dollars), user: String(user.id) };
+  const session = await stripe().checkout.sessions.create({
+    mode: 'payment',
+    customer: await customerFor(user),
+    client_reference_id: String(user.id),
+    line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: dollars * 100, product_data: { name: 'AI Builder credits' } } }],
+    metadata: marks,
+    payment_intent_data: { metadata: marks },
+    success_url: `${base}/api/billing/return?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${base}/dashboard#/billing`,
+  });
+  if (!session.url) throw new Error('Stripe made a checkout session without a URL');
+  return session.url;
+}
+
+/**
+ * Brings the account up to date with a Checkout session the user just came back from, when it is theirs: a paid
+ * top-up is credited, a subscription is read from Stripe. Both happen again when the webhook arrives, to no effect.
+ */
+export async function finishCheckout(user: UserRow, sessionId: string): Promise<void> {
   const session = await stripe().checkout.sessions.retrieve(sessionId);
-  return session.client_reference_id === String(user.id);
+  if (session.client_reference_id !== String(user.id)) return;
+  const topup = topupOfSession(session);
+  if (topup) await applyLedger(topup);
+  else await syncUser(user.id);
 }
 
 /**
@@ -152,12 +182,15 @@ export async function syncUser(userId: number): Promise<void> {
 }
 
 /**
- * Handles a webhook delivery: checks Stripe's signature, then syncs the customer the event is about.
+ * Handles a webhook delivery: checks Stripe's signature, then syncs the customer the event is about and writes what
+ * the event does to the credit ledger.
  * @param sync how a customer is synced; tests replace it
+ * @param apply how the ledger is written; tests replace it
  * @returns false when the signature is wrong
  */
 export async function handleWebhook(payload: string, signature: string | null,
-    sync: (customer: string) => Promise<void> = syncCustomer): Promise<boolean> {
+    sync: (customer: string) => Promise<void> = syncCustomer,
+    apply: (action: LedgerAction) => Promise<void> = applyLedger): Promise<boolean> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not set');
   let event: Stripe.Event;
@@ -168,5 +201,7 @@ export async function handleWebhook(payload: string, signature: string | null,
   }
   const customer = customerOfEvent(event);
   if (customer) await sync(customer);
+  const action = ledgerAction(event);
+  if (action) await apply(action);
   return true;
 }

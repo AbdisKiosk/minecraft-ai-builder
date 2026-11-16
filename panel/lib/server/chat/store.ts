@@ -1,5 +1,5 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import type { ChatSummary, ProviderId } from '../../chat';
+import type { ChatSource, ChatSummary } from '../../chat';
 import { exec, one, query } from '../db';
 import { shortId } from '../tokens';
 
@@ -10,18 +10,21 @@ export interface ChatRow {
   server_id: string;
   user_id: number;
   title: string;
-  provider: ProviderId;
+  /** What pays for it: the user's key with a provider, or 'credits'. */
+  provider: ChatSource;
   model: string;
   system_prompt: string | null;
   input_tokens: number;
   output_tokens: number;
+  /** What it has cost in credits, in micro-dollars. */
+  cost_micros: number;
   error: string | null;
   updated_at: Date;
 }
 
-const COLUMNS = 'id, server_id, user_id, title, provider, model, system_prompt, input_tokens, output_tokens, error, updated_at';
+const COLUMNS = 'id, server_id, user_id, title, provider, model, system_prompt, input_tokens, output_tokens, cost_micros, error, updated_at';
 
-export async function createChat(serverId: string, userId: number, title: string, provider: ProviderId, model: string): Promise<ChatRow> {
+export async function createChat(serverId: string, userId: number, title: string, provider: ChatSource, model: string): Promise<ChatRow> {
   const id = shortId(12);
   await exec('INSERT INTO chats (id, server_id, user_id, title, provider, model) VALUES (?, ?, ?, ?, ?, ?)',
     [id, serverId, userId, title, provider, model]);
@@ -31,12 +34,12 @@ export async function createChat(serverId: string, userId: number, title: string
 export async function chatRow(id: string): Promise<ChatRow | null> {
   const r = await one<ChatRow>(`SELECT ${COLUMNS} FROM chats WHERE id = ?`, [id]);
   // mysql2 gives BIGINT as a string once it is large; these stay far below that.
-  return r && { ...r, input_tokens: Number(r.input_tokens), output_tokens: Number(r.output_tokens) };
+  return r && { ...r, input_tokens: Number(r.input_tokens), output_tokens: Number(r.output_tokens), cost_micros: Number(r.cost_micros) };
 }
 
 /** The user's newest chats about a server. */
 export async function chatsOf(serverId: string, userId: number): Promise<ChatSummary[]> {
-  const rows = await query<{ id: string; title: string; provider: ProviderId; model: string; updated_at: Date }>(
+  const rows = await query<{ id: string; title: string; provider: ChatSource; model: string; updated_at: Date }>(
     'SELECT id, title, provider, model, updated_at FROM chats WHERE server_id = ? AND user_id = ? ORDER BY updated_at DESC LIMIT 50',
     [serverId, userId]);
   return rows.map(r => ({ id: r.id, title: r.title, provider: r.provider, model: r.model, updated: r.updated_at.getTime() }));
@@ -61,10 +64,10 @@ export async function setSystemPrompt(chatId: string, prompt: string): Promise<v
   await exec('UPDATE chats SET system_prompt = ? WHERE id = ?', [prompt, chatId]);
 }
 
-/** A turn ended: what it used, and why it stopped early if it did. */
-export async function turnEnded(chatId: string, input: number, output: number, error: string | null): Promise<void> {
-  await exec('UPDATE chats SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, error = ?, updated_at = NOW() WHERE id = ?',
-    [input, output, error, chatId]);
+/** A turn ended: what it used, what that cost in credits (micro-dollars), and why it stopped early if it did. */
+export async function turnEnded(chatId: string, input: number, output: number, cost: number, error: string | null): Promise<void> {
+  await exec(`UPDATE chats SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, cost_micros = cost_micros + ?,
+              error = ?, updated_at = NOW() WHERE id = ?`, [input, output, cost, error, chatId]);
 }
 
 export async function deleteChat(chatId: string): Promise<void> {

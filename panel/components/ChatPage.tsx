@@ -1,21 +1,28 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
 import { api, message, serverApi } from '../lib/api';
-import { applyEvent, DEFAULT_MODEL, priceText, PROVIDERS, providerName, type ChatEvent, type ChatItem, type ChatModel, type ChatSummary, type ChatView, type ProviderId } from '../lib/chat';
+import { applyEvent, DEFAULT_MODEL, priceText, providerName, type ChatEvent, type ChatItem, type ChatModel, type ChatSource, type ChatSummary, type ChatView } from '../lib/chat';
+import { usd } from '../lib/credits';
 import { ago, num } from '../lib/format';
-import { chatHref, draftHref, go, tokensHref } from '../lib/routes';
+import { billingHref, chatHref, draftHref, go, tokensHref } from '../lib/routes';
 import type { Server } from '../lib/types';
 
-interface List { chats: ChatSummary[]; /** The providers the user has a usable key for. */ providers: ProviderId[] }
+interface List {
+  chats: ChatSummary[];
+  /** What can pay for a chat: the providers the user has a usable key for, then 'credits' when the panel sells them. */
+  providers: ChatSource[];
+  /** The credit balance in micro-dollars; null when the panel sells no credits. */
+  credits: number | null;
+}
 
-/** The models a chat can use per provider; `stale` names providers whose list could not be read just now. */
-interface Catalog { models: Record<ProviderId, ChatModel[]>; stale: ProviderId[] }
+/** The models a chat can use per source; `stale` names providers whose list could not be read just now. */
+interface Catalog { models: Partial<Record<ChatSource, ChatModel[]>>; stale: ChatSource[] }
 
-/** The provider and model picked for the next message; `model` is what the user typed until it names one. */
-interface Pick { provider: ProviderId; model: string }
+/** The source and model picked for the next message; `model` is what the user typed until it names one. */
+interface Pick { provider: ChatSource; model: string }
 
 /**
  * Chat with an AI about one server: it builds through the same tools as Claude Code, on the user's own API key for
- * Anthropic or OpenRouter.
+ * Anthropic or OpenRouter, or on credits they bought.
  * A turn runs on the panel, so this page only follows it and can be closed meanwhile.
  */
 export default function ChatPage({ server, chat }: { server: Server; chat: string | null }) {
@@ -25,6 +32,8 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   const [items, setItems] = useState<ChatItem[]>([]);
   const [running, setRunning] = useState(false);
   const [usage, setUsage] = useState<{ input: number; output: number } | null>(null);
+  /** What the running turn has cost in credits so far, in micro-dollars. */
+  const [cost, setCost] = useState<number | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
   /** Null until the user's keys are known. */
   const [pick, setPick] = useState<Pick | null>(null);
@@ -48,6 +57,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
       setItems([]);
       setRunning(false);
       setUsage(null);
+      setCost(null);
       return;
     }
     let current = true;
@@ -57,6 +67,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
       setItems(v.items);
       setRunning(v.running);
       setUsage(null);
+      setCost(null);
       setPick({ provider: v.provider, model: v.model });
     }, ex => { if (current) setError(message(ex)); });
     return () => { current = false; };
@@ -70,6 +81,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
     source.onmessage = ev => {
       const e = JSON.parse(ev.data) as ChatEvent;
       if (e.type === 'usage') setUsage({ input: e.input, output: e.output });
+      else if (e.type === 'cost') setCost(e.micros);
       else if (e.type === 'end') {
         source.close();
         setVersion(v => v + 1);
@@ -79,7 +91,7 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
     return () => source.close();
   }, [base, chat, view, loadList]);
 
-  // A new chat starts on the first provider the user has a key for, unless they picked another.
+  // A new chat starts on the first source the user can pay with, unless they picked another.
   useEffect(() => {
     if (chat || !list) return;
     setPick(now => (now && list.providers.includes(now.provider) ? now
@@ -127,10 +139,13 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
   };
 
   const total = view ? { input: view.usage.input + (usage?.input ?? 0), output: view.usage.output + (usage?.output ?? 0) } : null;
-  // An open chat keeps its provider; a new one can use any provider the user has a key for.
+  // An open chat keeps its source; a new one can use any source the user can pay with.
   const providers = view ? [view.provider] : list?.providers ?? [];
+  const source = view ? view.provider : pick?.provider;
+  const balance = list?.credits ?? null;
   const blocked = !list || (chat && !view) ? null
-    : view && !list.providers.includes(view.provider) ? 'chat-key'
+    : view && !list.providers.includes(view.provider) ? (view.provider === 'credits' ? 'chat-credits' : 'chat-key')
+    : source === 'credits' && (balance ?? 0) <= 0 ? 'no-credits'
     : !view && !list.providers.length ? 'key'
     : !server.online ? 'offline' : null;
   return (
@@ -156,14 +171,18 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
           <a href={tokensHref}>Add one under Access tokens</a>, then come back.</p>}
         {blocked === 'chat-key' && view && <p className="warn">This chat uses {providerName(view.provider)}, and you have no{' '}
           {providerName(view.provider)} key. <a href={tokensHref}>Add it under Access tokens</a>, or start a new chat.</p>}
+        {blocked === 'chat-credits' && <p className="warn">This chat ran on credits, which this panel no longer sells. Start a new chat.</p>}
+        {blocked === 'no-credits' && <p className="warn">You are out of credits. <a href={billingHref}>Top up on the Billing page</a>.</p>}
         {blocked === 'offline' && <p className="warn">This server is offline, so the AI cannot build on it right now.</p>}
         <Composer disabled={!!blocked || sending || !chosen} running={running} onSend={send} onStop={stop} />
         <div className="chat-foot muted">
           {pick && providers.length > 0 && (
-            <ModelPicker providers={providers} pick={pick} catalog={catalog} locked={!!view} disabled={running} onPick={setPick} />
+            <ModelPicker providers={providers} pick={pick} catalog={catalog} balance={balance} locked={!!view} disabled={running} onPick={setPick} />
           )}
           <span className="spacer" />
-          {total && total.input + total.output > 0 && (
+          {view?.provider === 'credits' ? (view.cost ?? 0) + (cost ?? 0) > 0 && (
+            <span title="What this chat has cost in credits">{usd((view.cost ?? 0) + (cost ?? 0))} in credits</span>
+          ) : total && total.input + total.output > 0 && (
             <span title={`Tokens this chat has sent to and received from ${view ? providerName(view.provider) : 'the provider'}, billed to your key`}>
               {num(total.input)} tokens in · {num(total.output)} out</span>
           )}
@@ -177,11 +196,11 @@ export default function ChatPage({ server, chat }: { server: Server; chat: strin
 const tokens = (n: number) => (n >= 1_000_000 ? `${+(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
 
 /**
- * The provider (for a new chat, among those the user has a key for) and its model: a list for Anthropic's few, a
- * search over the catalog for OpenRouter's hundreds.
+ * The source (for a new chat, among those the user can pay with) and its model: a list for Anthropic's few, a
+ * search over the catalog for OpenRouter's hundreds. On credits it also shows the balance.
  */
-function ModelPicker({ providers, pick, catalog, locked, disabled, onPick }: {
-  providers: ProviderId[]; pick: Pick; catalog: Catalog | null; locked: boolean; disabled: boolean; onPick: (p: Pick) => void;
+function ModelPicker({ providers, pick, catalog, balance, locked, disabled, onPick }: {
+  providers: ChatSource[]; pick: Pick; catalog: Catalog | null; balance: number | null; locked: boolean; disabled: boolean; onPick: (p: Pick) => void;
 }) {
   const models = catalog?.models[pick.provider] ?? [];
   const chosen = models.find(m => m.id === pick.model);
@@ -190,10 +209,13 @@ function ModelPicker({ providers, pick, catalog, locked, disabled, onPick }: {
     <div className="model-picker">
       {!locked && providers.length > 1 ? (
         <select value={pick.provider} disabled={disabled} aria-label="Provider"
-          onChange={ev => { const provider = ev.target.value as ProviderId; onPick({ provider, model: DEFAULT_MODEL[provider] }); }}>
-          {PROVIDERS.filter(p => providers.includes(p.id)).map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          onChange={ev => { const provider = ev.target.value as ChatSource; onPick({ provider, model: DEFAULT_MODEL[provider] }); }}>
+          {providers.map(p => <option key={p} value={p}>{providerName(p)}</option>)}
         </select>
       ) : <span>{providerName(pick.provider)}</span>}
+      {pick.provider === 'credits' && balance !== null && (
+        <span className="chat-balance">Balance {usd(balance)} <a href={billingHref}>Top up</a></span>
+      )}
       {models.length <= 12 ? (
         <select value={chosen ? pick.model : ''} disabled={disabled || !catalog} aria-label="Model"
           onChange={ev => onPick({ ...pick, model: ev.target.value })}>
@@ -213,6 +235,7 @@ function ModelPicker({ providers, pick, catalog, locked, disabled, onPick }: {
       <span className="model-facts">
         {chosen ? <>
           {priceText(chosen)}{chosen.context ? ` · ${tokens(chosen.context)} context` : ''}
+          {chosen.long && ` · prompts over ${num(chosen.long.over)} tokens cost ${chosen.long.times} times as much`}
           {!chosen.images && ' · cannot see renders'}
           {!chosen.claude && ' · the build advice was tuned on Claude models, so results may vary'}
         </> : catalog && pick.model ? `No model that can use tools is called "${pick.model}". Pick one from the list.` : null}
