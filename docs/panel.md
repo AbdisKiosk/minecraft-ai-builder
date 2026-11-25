@@ -302,6 +302,12 @@ To set it up:
   A missing value shows as `[COMPANY_NAME]` and so on. The pages are written for a Danish VAT-registered seller
   selling to consumers in the EU; another seller has to rewrite them.
 
+Deleting an account is by email request for now (`/privacy` promises it within 30 days). First delete the user's
+servers and assets the way the dashboard does (their routes), so their files leave R2
+(`servers.owner_id` does not cascade, and asset rows cascade without their R2 objects); then delete the `users` row,
+which takes their memberships, tokens, chats, API keys, Minecraft links and credit ledger with it; then the user in
+Auth0. Stripe keeps the invoices and payments, which are the accounting records the privacy policy keeps for 5 years.
+
 Withdrawals and refunds follow `/refunds`: a consumer who withdraws within 14 days of a top-up gets back the unused
 part of it, and within 14 days of first subscribing gets Pro's payment back less the days it was active. Refund the
 amount in Stripe (a partial refund of the charge); for a top-up the webhook takes the refunded credits off the balance.
