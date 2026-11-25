@@ -285,6 +285,26 @@ To set it up:
   `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created` and `charge.dispute.closed`
   to the webhook's events. A top-up is credited when its buyer returns from Checkout and again, to no effect, by the
   webhook; refunds and disputes reach the panel through the webhook only.
+- VAT, with prices that include it. Checkout turns on Stripe Tax (`saleTerms` in `lib/server/billing.ts`), which
+  works out the VAT from where the buyer is, takes a business's VAT number for reverse charge, and saves the address
+  and name it collects onto the customer. In the Dashboard: activate Stripe Tax with the business address and its
+  registrations, and give the Pro price the tax behaviour **inclusive** (a credits top-up sets it itself, so a dollar
+  paid is a dollar of credits). `STRIPE_TAX=off` sells without tax, for a seller who is not VAT-registered.
+- The terms. Every Checkout has a required box: "I agree to the Terms and ask for my purchase to start now. If I
+  withdraw within 14 days, I get back the part I have not used", linking `/terms` and `/refunds`. EU consumer law
+  needs that request before a service may start inside the 14 days a consumer can withdraw. Stripe shows the box only
+  when its Dashboard has a terms of service URL (Settings > Business > Public details): set it to `<APP_BASE_URL>/terms`.
+- Receipts: turn on Stripe's emails for successful payments and for invoices. A credits top-up also makes an invoice
+  (`invoice_creation`), which a business buyer needs for its VAT; Stripe charges a small fee per invoice. Top-ups ask
+  the card for 3D Secure whenever it supports it, because credits are spent on the panel's key at once.
+- The seller: `COMPANY_NAME`, `COMPANY_ADDRESS`, `COMPANY_CVR`, `CONTACT_EMAIL` and `HOSTING_PROVIDER` fill in
+  `/terms`, `/privacy`, `/refunds` and `/contact` (`lib/operator.ts`), which every public page links in its footer.
+  A missing value shows as `[COMPANY_NAME]` and so on. The pages are written for a Danish VAT-registered seller
+  selling to consumers in the EU; another seller has to rewrite them.
+
+Withdrawals and refunds follow `/refunds`: a consumer who withdraws within 14 days of a top-up gets back the unused
+part of it, and within 14 days of first subscribing gets Pro's payment back less the days it was active. Refund the
+amount in Stripe (a partial refund of the charge); for a top-up the webhook takes the refunded credits off the balance.
 
 ## History
 

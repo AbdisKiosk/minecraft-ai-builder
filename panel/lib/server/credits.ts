@@ -89,7 +89,8 @@ export function topupOfSession(session: unknown): Extract<LedgerAction, { do: 't
   const user = Number(s.client_reference_id);
   const customer = idOf(s.customer);
   const ref = idOf(s.payment_intent);
-  // Before tax: a dollar paid for credits is a dollar of credits.
+  // The price includes VAT (billing.ts topupFields), so the subtotal is what was paid: a dollar paid is a dollar of
+  // credits. A price that added tax on top would leave that tax out.
   const paid = cents(s.amount_subtotal);
   if (!Number.isInteger(user) || user <= 0 || !customer || !ref || paid === null) return null;
   return { do: 'topup', user, customer, micros: paid * MICROS_PER_CENT, ref };

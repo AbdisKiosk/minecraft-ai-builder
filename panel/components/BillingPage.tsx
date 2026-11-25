@@ -74,6 +74,8 @@ export default function BillingPage() {
           <p className="muted small-print">
             Credits pay for the AI chat without your own API key. A request costs the model&apos;s price plus {Math.round(b.credits.markup * 100)}%,
             and the chat shows each model&apos;s price. Your own keys still work: add them under Access tokens.
+            Prices include VAT. Within 14 days of a top-up you can withdraw and get back what you have not used
+            (<a href="/refunds">Refunds</a>).
           </p>
           {b.credits.entries.length > 0 && (
             <div className="table-wrap">
@@ -106,6 +108,10 @@ export default function BillingPage() {
           <p className="muted small-print">You own more servers than the free plan allows. They keep working; you can&apos;t add another.</p>
         )}
       </section>
+      <p className="muted small-print">
+        Prices are in US dollars and include VAT. Payments go through Stripe, which emails the receipts.
+        See the <a href="/terms">terms</a> and how <a href="/refunds">refunds and withdrawal</a> work.
+      </p>
     </>
   );
 }

@@ -19,6 +19,11 @@ export function LandingNav({ signedIn }: { signedIn: boolean }) {
 
 export function LandingFooter() {
   return (
-    <footer>AIBuilder · Not affiliated with Mojang or Microsoft. · <a href={PLUGIN_JAR_HREF}>Plain plugin jar</a> for setting it up by hand</footer>
+    <footer>
+      AIBuilder · Not affiliated with Mojang or Microsoft. · <a href={PLUGIN_JAR_HREF}>Plain plugin jar</a> for setting it up by hand
+      <nav className="legal-links" aria-label="Legal">
+        <a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds</a> · <a href="/contact">Contact</a>
+      </nav>
+    </footer>
   );
 }

@@ -33,8 +33,9 @@ export default async function Home() {
       <section className="hero">
         <div>
           <h1>Let AI build on your Minecraft server.</h1>
-          <p className="lead">Tell your AI what to build and watch it appear on your Paper server. Review edits before they land
-            and undo anything with one click. Setup takes a few minutes: no ports to open, no config files to edit.</p>
+          <p className="lead">Tell the AI what to build and watch it appear on your Paper server: chat with it right here in the
+            browser, or connect the assistant you already use. Review edits before they land and undo anything with one click.
+            Setup takes a few minutes: no ports to open, no config files to edit.</p>
           <div className="cta">
             {session ? <a className="button" href="/dashboard">Open dashboard</a>
               : <a className="button" href={SIGN_UP_HREF}>Get started free</a>}
@@ -45,7 +46,7 @@ export default async function Home() {
       </section>
 
       <section className="features">
-        <div className="card"><h2>Live jobs</h2><p>Every fill, paste and roof the AI makes shows up as it runs, with progress for big edits.</p></div>
+        <div className="card"><h2>Chat in the browser</h2><p>Describe a build on your server&apos;s page and watch every fill, paste and roof go up as it runs. Pay as you go with credits, or use your own Anthropic or OpenRouter key.</p></div>
         <div className="card"><h2>History you can undo</h2><p>Before and after pictures of each edit, a 3D view, and revert that works even after a restart.</p></div>
         <div className="card"><h2>Review mode</h2><p>Keep the AI&apos;s edits in a draft until you approve them, then place exactly what you previewed.</p></div>
         <div className="card"><h2>Build together</h2><p>Invite friends as admins, builders or viewers with a link. Each person uses their own access token.</p></div>
@@ -57,7 +58,8 @@ export default async function Home() {
         <li><span><b>Create an account and name your server.</b> You get a copy of the plugin that&apos;s already set up for it.</span></li>
         <li><span><b>Drop it into your server&apos;s <code>plugins</code> folder</b>, next to WorldEdit, and restart. The page shows
           the moment it connects.</span></li>
-        <li><span><b>Connect your AI assistant</b> with one command and ask it to build.</span></li>
+        <li><span><b>Ask the AI to build</b> in the chat on your server&apos;s page, or connect your own AI assistant with one
+          command.</span></li>
       </ol>
 
       <LandingFooter />

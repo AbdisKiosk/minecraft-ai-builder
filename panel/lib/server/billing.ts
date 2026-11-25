@@ -97,10 +97,40 @@ async function customerFor(user: UserRow): Promise<string> {
   return (await saved()) ?? made.id;
 }
 
+/** Whether Checkout works out VAT with Stripe Tax: on unless STRIPE_TAX is "off". */
+export const taxEnabled = () => process.env.STRIPE_TAX !== 'off';
+
+/**
+ * What every Checkout session of the panel adds to its own fields.
+ * - The buyer ticks a box that accepts the terms and asks for the purchase to start at once, which EU consumer law
+ *   needs before a service can start inside the 14 days a consumer may withdraw (see /refunds). Stripe shows the box
+ *   only when its Dashboard has a terms of service URL (Settings > Business > Public details).
+ * - With tax on, Stripe Tax works out VAT from where the buyer is, a business with a VAT number pays by reverse charge,
+ *   and Checkout saves the address and name it collects onto the customer, as Stripe requires for a customer that
+ *   already exists. Prices include the tax: Pro's price in Stripe must have the tax behaviour "inclusive".
+ */
+export function saleTerms(base: string, tax: boolean) {
+  return {
+    consent_collection: { terms_of_service: 'required' },
+    custom_text: {
+      terms_of_service_acceptance: {
+        message: `I agree to the [Terms](${base}/terms) and ask for my purchase to start now. If I withdraw within 14 days, `
+          + `I get back the part I have not used ([Refunds](${base}/refunds)).`,
+      },
+    },
+    ...(tax ? {
+      automatic_tax: { enabled: true },
+      tax_id_collection: { enabled: true },
+      customer_update: { address: 'auto', name: 'auto' },
+    } : {}),
+  } satisfies Partial<Stripe.Checkout.SessionCreateParams>;
+}
+
 /** A Stripe Checkout page where the user subscribes to Pro; Stripe sends them to /api/billing/return afterwards. */
 export async function checkoutUrl(user: UserRow, base: string): Promise<string> {
   const session = await stripe().checkout.sessions.create({
     mode: 'subscription',
+    ...saleTerms(base, taxEnabled()),
     customer: await customerFor(user),
     client_reference_id: String(user.id),
     line_items: [{ price: await proPriceId(), quantity: 1 }],
@@ -119,20 +149,37 @@ export async function portalUrl(user: UserRow, base: string): Promise<string | n
 }
 
 /**
+ * The Checkout fields of a top-up of `dollars` of credits, besides saleTerms. The price includes VAT, so a dollar paid
+ * is a dollar of credits. The payment gets an invoice, which a business needs for its VAT, and the card is asked for
+ * 3D Secure whenever it supports it: credits are spent on the panel's own key at once, so a stolen card costs twice.
+ */
+export function topupFields(dollars: number, user: number) {
+  const marks = { credits: String(dollars), user: String(user) };
+  return {
+    line_items: [{
+      quantity: 1,
+      price_data: { currency: 'usd', unit_amount: dollars * 100, tax_behavior: 'inclusive', product_data: { name: 'AI Builder credits' } },
+    }],
+    metadata: marks,
+    payment_intent_data: { metadata: marks },
+    payment_method_options: { card: { request_three_d_secure: 'any' } },
+    invoice_creation: { enabled: true },
+  } satisfies Partial<Stripe.Checkout.SessionCreateParams>;
+}
+
+/**
  * A Stripe Checkout page where the user buys `dollars` of credits (lib/credits.ts) in one payment. The ledger is
  * credited from the paid session (credits.ts topupOfSession), which metadata.credits marks as a top-up.
  */
 export async function topupUrl(user: UserRow, base: string, dollars: number): Promise<string> {
   const refused = topupRefusal(dollars);
   if (refused) throw new Error(refused);
-  const marks = { credits: String(dollars), user: String(user.id) };
   const session = await stripe().checkout.sessions.create({
     mode: 'payment',
+    ...saleTerms(base, taxEnabled()),
+    ...topupFields(dollars, user.id),
     customer: await customerFor(user),
     client_reference_id: String(user.id),
-    line_items: [{ quantity: 1, price_data: { currency: 'usd', unit_amount: dollars * 100, product_data: { name: 'AI Builder credits' } } }],
-    metadata: marks,
-    payment_intent_data: { metadata: marks },
     success_url: `${base}/api/billing/return?session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${base}/dashboard#/billing`,
   });
