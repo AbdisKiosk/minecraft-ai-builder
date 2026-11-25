@@ -1,7 +1,9 @@
-import { ANTHROPIC_MODELS, DEFAULT_MODEL, OPENROUTER_FALLBACK, type ChatModel, type ProviderId } from '../../chat';
+import { ANTHROPIC_MODELS, DEFAULT_MODEL, OPENROUTER_FALLBACK, type ChatModel, type ChatSource } from '../../chat';
+import { CREDIT_MODELS } from '../../credits';
 
-// The models a chat can use. Anthropic's are a fixed list; OpenRouter's come from its public catalog, cut down to the
-// ones that can call tools (the chat builds through tools), and kept for a while so a page view does not ask again.
+// The models a chat can use. Anthropic's are a fixed list, and credits pay for the same ones at their own prices;
+// OpenRouter's come from its public catalog, cut down to the ones that can call tools (the chat builds through tools),
+// and kept for a while so a page view does not ask again.
 
 const CATALOG = 'https://openrouter.ai/api/v1/models';
 const KEEP_MS = 10 * 60_000;
@@ -72,15 +74,16 @@ export async function openRouterCatalog(fetchImpl: typeof fetch = fetch): Promis
   }
 }
 
-export async function modelsOf(provider: ProviderId): Promise<{ models: ChatModel[]; stale: boolean }> {
-  return provider === 'anthropic' ? { models: [...ANTHROPIC_MODELS], stale: false } : openRouterCatalog();
+export async function modelsOf(source: ChatSource): Promise<{ models: ChatModel[]; stale: boolean }> {
+  if (source === 'openrouter') return openRouterCatalog();
+  return { models: [...(source === 'credits' ? CREDIT_MODELS : ANTHROPIC_MODELS)], stale: false };
 }
 
-/** The provider's model with this id, or null when it has none the chat can use. */
-export async function findModel(provider: ProviderId, id: string): Promise<ChatModel | null> {
-  return (await modelsOf(provider)).models.find(m => m.id === id) ?? null;
+/** The source's model with this id, or null when it has none the chat can use. */
+export async function findModel(source: ChatSource, id: string): Promise<ChatModel | null> {
+  return (await modelsOf(source)).models.find(m => m.id === id) ?? null;
 }
 
-export function defaultModel(provider: ProviderId): string {
+export function defaultModel(provider: ChatSource): string {
   return DEFAULT_MODEL[provider];
 }

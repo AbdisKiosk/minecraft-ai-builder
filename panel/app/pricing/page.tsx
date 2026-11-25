@@ -1,8 +1,11 @@
 import type { Metadata } from 'next';
 import { LandingFooter, LandingNav, SIGN_UP_HREF } from '../../components/Landing';
+import { priceText } from '../../lib/chat';
+import { CREDIT_MODELS, MAX_TOPUP, MIN_TOPUP } from '../../lib/credits';
 import { PLANS, PRO_INCLUDES_STUDIO, type Plan } from '../../lib/plans';
 import { auth0 } from '../../lib/server/auth0';
 import { billingEnabled } from '../../lib/server/billing';
+import { creditsEnabled } from '../../lib/server/credits';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,8 +97,22 @@ export default async function Pricing() {
         ))}
       </section>
 
-      <p className="pricing-note muted">Prices are in US dollars. The AI itself is not included: you connect your
-        own assistant.</p>
+      {creditsEnabled() && (
+        <section className="card plan credits-offer">
+          <h2>AI chat credits</h2>
+          <p className="muted">Chat with AI on your server&apos;s page in the browser, with no API key of your own. Credits are
+            prepaid: buy ${MIN_TOPUP} to ${MAX_TOPUP} at a time on the Billing page; they don&apos;t expire. Each request costs
+            the tokens it uses:</p>
+          <ul>
+            {CREDIT_MODELS.map(m => <li key={m.id}>{m.name}: {priceText(m)} (input / output)</li>)}
+          </ul>
+          <p className="muted small-print">Within 14 days of a top-up you can withdraw and get back what you have not used.</p>
+        </section>
+      )}
+
+      <p className="pricing-note muted">Prices are in US dollars and include VAT. A plan doesn&apos;t include the AI itself:
+        connect your own assistant, chat on your own Anthropic or OpenRouter key, or chat on credits.
+        See the <a href="/terms">terms</a> and <a href="/refunds">refunds</a>.</p>
 
       <LandingFooter />
     </div>

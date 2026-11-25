@@ -124,7 +124,8 @@ The Python SDK works the same way, through `AIBUILDER_URL=https://panel.example.
 ## AI chat
 
 **Chat with AI** on a server's page (builders and up) is an AI building from the browser, without Claude Code.
-It uses the user's own API key for one of two providers, which bills them; a Claude subscription includes neither:
+It runs on credits bought on the panel (see [Credits](#credits)), or on the user's own API key for one of two providers,
+which bills them; a Claude subscription includes neither:
 
 | Provider | Key | Requests go to |
 | --- | --- | --- |
@@ -168,20 +169,52 @@ Both take the same Messages API, so one loop serves both (`lib/server/chat/provi
   chat is its user's alone. Deleting it leaves what it built in the world and in the history.
 - **Restart.** The panel's turns end when it restarts. What they stored stays, and the chat's next message first
   answers tool calls that were left open with "interrupted", so the model checks the world before repeating one.
-- **Cost.** The page shows the tokens a chat has used. The panel sets no spending limit: set one with the provider (a
-  workspace limit in the Claude Console, a credit limit on the OpenRouter key). An OpenRouter account out of credit
-  ends the turn with a message saying so.
+- **Cost.** On the user's own key the page shows the tokens a chat has used. The panel sets no spending limit there:
+  set one with the provider (a workspace limit in the Claude Console, a credit limit on the OpenRouter key). An
+  OpenRouter account out of credit ends the turn with a message saying so. On credits the page shows what the chat
+  has cost in dollars.
 
 | Route | What it does |
 | --- | --- |
 | `GET /api/account/api-keys` | the caller's keys: `{keys: {anthropic, openrouter}}`, each `{hint, created, usable}` or null |
 | `PUT/DELETE /api/account/api-keys/<provider>` | save `{key}` (after the provider accepts it) or remove the key |
-| `GET /api/chat-models` | the models per provider: `{models: {anthropic, openrouter}, stale}` |
-| `GET /api/servers/<id>/chats` | the caller's chats there, and the providers they have a usable key for |
-| `POST /api/servers/<id>/chats` | a new chat from its first message `{text, provider?, model?}` |
+| `GET /api/chat-models` | the models per source: `{models: {anthropic, openrouter, credits?}, stale}` |
+| `GET /api/servers/<id>/chats` | the caller's chats there; `providers` they can pay with (their keys' providers, then `credits`); `credits`, their balance |
+| `POST /api/servers/<id>/chats` | a new chat from its first message `{text, provider?, model?}`; `provider` may be `credits` |
 | `GET/POST/DELETE /api/servers/<id>/chats/<chat>` | the chat as the page shows it; the next message `{text, model?}`; delete |
-| `GET /api/servers/<id>/chats/<chat>/events` | the running turn's events: `text`, `tool`, `result`, `usage`, `end` |
+| `GET /api/servers/<id>/chats/<chat>/events` | the running turn's events: `text`, `tool`, `result`, `usage`, `cost`, `end` |
 | `POST /api/servers/<id>/chats/<chat>/stop` | stop the running turn |
+
+### Credits
+
+Credits are a prepaid balance in US dollars that pays for chats on the panel's own Anthropic key, so a user needs no
+key of their own. The panel sells them when `STRIPE_SECRET_KEY` and `CREDITS_ANTHROPIC_KEY` are both set. The own-key
+providers stay as they are, and nothing on a user's own key is charged.
+
+- **Buying.** **Billing** → **Credits** links to `/api/billing/credits?amount=<dollars>`, a one-time payment in Stripe
+  Checkout: $10 at least and $500 at most (`MIN_TOPUP`, `MAX_TOPUP` in `lib/credits.ts`). A dollar paid, before tax, is
+  a dollar of credits. The panel sets no expiry.
+- **Price.** Each request to the model costs what Anthropic charges for it plus 60% (`MARKUP`), rounded up to a
+  millionth of a dollar. Anthropic's prices are the `CLAUDE` table in `lib/chat.ts`: input, output, and the prompt
+  cache's writes and reads, which have prices of their own; Haiku 5.5 costs five times as much for a request whose
+  prompt is over 100,000 tokens. **When Anthropic changes a price, change that table**: credits are charged from it,
+  not from Anthropic's bill. The model picker shows the prices credits pay, e.g. $6.40 / $32 per million tokens for Opus 5.5.
+- **Models.** The four Claude models of the Anthropic provider. A chat on credits keeps that source, like a provider.
+- **Charging.** `lib/server/chat/meter.ts` charges every request when its answer is complete, and a request that
+  was stopped or broke off for what had arrived. A turn needs a balance above zero to start, and the balance is
+  checked again after every answer that calls tools: at zero or below, the calls are not run and the turn ends asking
+  for a top-up. So a balance goes at most one request below zero, and the next top-up covers it.
+- **Ledger.** `credit_ledger` (migration `014_credits.sql`) has one row per top-up, per turn of a chat, per refund
+  and per disputed payment; the balance is the sum of an account's rows and is stored nowhere else. The entry of a
+  turn grows with each of its requests, so a panel that stops mid-turn has still charged what was used.
+- **Refunds and disputes.** Refund a top-up in Stripe and the webhook takes the refunded amount off the balance; a
+  dispute takes its amount off when it opens and gives it back if it is won. Both can leave a balance below zero when
+  the credits were already spent.
+- **Failures.** When Anthropic refuses the panel's key (revoked, out of money, no access to the model) the turn ends
+  with a message that the problem is on the panel's side, and the server log has the reason.
+- **Your side.** The key in `CREDITS_ANTHROPIC_KEY` is billed for every chat on credits, and its rate limits are
+  shared by all of them: give it a workspace of its own in the Claude Console, with a spend limit. The terms of the
+  sale (refunds, VAT, what users may do with the chat) are the operator's to write.
 
 ## Roles
 
@@ -248,6 +281,36 @@ To set it up:
   `customer.subscription.created`, `.updated` and `.deleted`, and set its signing secret as `STRIPE_WEBHOOK_SECRET`.
   Without the webhook a change made in the portal (a cancellation, a card that fails) does not reach the panel.
   Locally, `stripe listen --forward-to localhost:3000/api/billing/webhook` forwards events and prints the secret.
+- To sell [credits](#credits) too: `CREDITS_ANTHROPIC_KEY`, an Anthropic API key of the panel's own, and add
+  `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created` and `charge.dispute.closed`
+  to the webhook's events. A top-up is credited when its buyer returns from Checkout and again, to no effect, by the
+  webhook; refunds and disputes reach the panel through the webhook only.
+- VAT, with prices that include it. Checkout turns on Stripe Tax (`saleTerms` in `lib/server/billing.ts`), which
+  works out the VAT from where the buyer is, takes a business's VAT number for reverse charge, and saves the address
+  and name it collects onto the customer. In the Dashboard: activate Stripe Tax with the business address and its
+  registrations, and give the Pro price the tax behaviour **inclusive** (a credits top-up sets it itself, so a dollar
+  paid is a dollar of credits). `STRIPE_TAX=off` sells without tax, for a seller who is not VAT-registered.
+- The terms. Every Checkout has a required box: "I agree to the Terms and ask for my purchase to start now. If I
+  withdraw within 14 days, I get back the part I have not used", linking `/terms` and `/refunds`. EU consumer law
+  needs that request before a service may start inside the 14 days a consumer can withdraw. Stripe shows the box only
+  when its Dashboard has a terms of service URL (Settings > Business > Public details): set it to `<APP_BASE_URL>/terms`.
+- Receipts: turn on Stripe's emails for successful payments and for invoices. A credits top-up also makes an invoice
+  (`invoice_creation`), which a business buyer needs for its VAT; Stripe charges a small fee per invoice. Top-ups ask
+  the card for 3D Secure whenever it supports it, because credits are spent on the panel's key at once.
+- The seller: `COMPANY_NAME`, `COMPANY_ADDRESS`, `COMPANY_CVR`, `CONTACT_EMAIL` and `HOSTING_PROVIDER` fill in
+  `/terms`, `/privacy`, `/refunds` and `/contact` (`lib/operator.ts`), which every public page links in its footer.
+  A missing value shows as `[COMPANY_NAME]` and so on. The pages are written for a Danish VAT-registered seller
+  selling to consumers in the EU; another seller has to rewrite them.
+
+Deleting an account is by email request for now (`/privacy` promises it within 30 days). First delete the user's
+servers and assets the way the dashboard does (their routes), so their files leave R2
+(`servers.owner_id` does not cascade, and asset rows cascade without their R2 objects); then delete the `users` row,
+which takes their memberships, tokens, chats, API keys, Minecraft links and credit ledger with it; then the user in
+Auth0. Stripe keeps the invoices and payments, which are the accounting records the privacy policy keeps for 5 years.
+
+Withdrawals and refunds follow `/refunds`: a consumer who withdraws within 14 days of a top-up gets back the unused
+part of it, and within 14 days of first subscribing gets Pro's payment back less the days it was active. Refund the
+amount in Stripe (a partial refund of the charge); for a top-up the webhook takes the refunded credits off the balance.
 
 ## History
 

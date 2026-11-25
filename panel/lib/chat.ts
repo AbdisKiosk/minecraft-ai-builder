@@ -22,12 +22,27 @@ export function isProvider(v: unknown): v is ProviderId {
   return PROVIDERS.some(p => p.id === v);
 }
 
-export function providerName(id: ProviderId): string {
-  return PROVIDERS.find(p => p.id === id)!.name;
+/**
+ * What pays for a chat: one of the user's own keys, or their credits (lib/credits.ts), which the panel spends on its
+ * own Anthropic key. A chat keeps its source.
+ */
+export type ChatSource = ProviderId | 'credits';
+
+export function isSource(v: unknown): v is ChatSource {
+  return v === 'credits' || isProvider(v);
+}
+
+export function providerName(id: ChatSource): string {
+  return id === 'credits' ? 'AI Builder credits' : PROVIDERS.find(p => p.id === id)!.name;
+}
+
+/** The provider that answers a chat's requests. */
+export function upstream(source: ChatSource): ProviderId {
+  return source === 'credits' ? 'anthropic' : source;
 }
 
 export interface ChatModel {
-  provider: ProviderId;
+  provider: ChatSource;
   /** The id the provider takes. */
   id: string;
   name: string;
@@ -43,19 +58,27 @@ export interface ChatModel {
   claude: boolean;
   /** It takes adaptive thinking and an effort level. */
   adaptive: boolean;
+  /** A request whose prompt is over `over` tokens costs `times` as much, for every kind of token. */
+  long?: { over: number; times: number };
 }
 
-/** The Claude models the chat offers through Anthropic's API, the default first, with OpenRouter's ids for them. */
-const CLAUDE = [
-  { name: 'Claude Opus 5.5', anthropic: 'claude-opus-5-5', openrouter: 'anthropic/claude-opus-5.5', input: 4, output: 20 },
-  { name: 'Claude Sonnet 5.5', anthropic: 'claude-sonnet-5-5', openrouter: 'anthropic/claude-sonnet-5.5', input: 2, output: 10 },
-  { name: 'Claude Haiku 5.5', anthropic: 'claude-haiku-5-5', openrouter: 'anthropic/claude-haiku-5.5', input: 0.1, output: 0.5 },
-  { name: 'Claude Fable 5.2', anthropic: 'claude-fable-5-2', openrouter: 'anthropic/claude-fable-5.2', input: 8, output: 40 },
+/**
+ * The Claude models the chat offers, the default first, with OpenRouter's ids for them. Prices are Anthropic's, in
+ * dollars per million tokens: input, output, writing the prompt cache (for 5 minutes) and reading it. Credits are
+ * charged from these (lib/credits.ts), so they must match https://platform.claude.com/docs/en/about-claude/pricing.
+ */
+export const CLAUDE = [
+  { name: 'Claude Opus 5.5', anthropic: 'claude-opus-5-5', openrouter: 'anthropic/claude-opus-5.5', input: 4, output: 20, cacheWrite: 5, cacheRead: 0.2 },
+  { name: 'Claude Sonnet 5.5', anthropic: 'claude-sonnet-5-5', openrouter: 'anthropic/claude-sonnet-5.5', input: 2, output: 10, cacheWrite: 2.5, cacheRead: 0.1 },
+  { name: 'Claude Haiku 5.5', anthropic: 'claude-haiku-5-5', openrouter: 'anthropic/claude-haiku-5.5', input: 0.1, output: 0.5, cacheWrite: 0.125, cacheRead: 0.01,
+    long: { over: 100_000, times: 5 } },
+  { name: 'Claude Fable 5.2', anthropic: 'claude-fable-5-2', openrouter: 'anthropic/claude-fable-5.2', input: 8, output: 40, cacheWrite: 10, cacheRead: 0.2 },
 ] as const;
 
 const claudeVia = (provider: ProviderId): ChatModel[] => CLAUDE.map(m => ({
   provider, id: m[provider], name: m.name, price: { input: m.input, output: m.output },
   context: 1_000_000, maxOutput: 128_000, images: true, claude: true, adaptive: true,
+  ...(provider === 'anthropic' && 'long' in m ? { long: m.long } : {}),
 }));
 
 /** The models offered through Anthropic's API. */
@@ -64,8 +87,8 @@ export const ANTHROPIC_MODELS: readonly ChatModel[] = claudeVia('anthropic');
 /** What OpenRouter offers when its catalog can't be read: the same Claude models. */
 export const OPENROUTER_FALLBACK: readonly ChatModel[] = claudeVia('openrouter');
 
-/** The model a new chat starts with on each provider. */
-export const DEFAULT_MODEL: Record<ProviderId, string> = { anthropic: CLAUDE[0].anthropic, openrouter: CLAUDE[0].openrouter };
+/** The model a new chat starts with on each source. */
+export const DEFAULT_MODEL: Record<ChatSource, string> = { anthropic: CLAUDE[0].anthropic, openrouter: CLAUDE[0].openrouter, credits: CLAUDE[0].anthropic };
 
 /** "$4 / $20 per million tokens", "free" or "price varies". */
 export function priceText(m: ChatModel): string {
@@ -93,15 +116,19 @@ export type ChatEvent =
   | { type: 'tool'; id: string; name: string; input: unknown }
   | { type: 'result'; id: string; result: ToolView }
   | { type: 'usage'; input: number; output: number }
+  /** What the turn has cost in credits so far, in millionths of a dollar. Only a chat that runs on credits sends it. */
+  | { type: 'cost'; micros: number }
   | { type: 'end'; reason: EndReason; error?: string };
 
-export interface ChatSummary { id: string; title: string; provider: ProviderId; model: string; updated: number }
+export interface ChatSummary { id: string; title: string; provider: ChatSource; model: string; updated: number }
 
 export interface ChatView extends ChatSummary {
   items: ChatItem[];
   running: boolean;
-  /** Tokens this conversation has sent to and received from Anthropic so far. */
+  /** Tokens this conversation has sent to and received from its provider so far, before the turn that is running. */
   usage: { input: number; output: number };
+  /** What it has cost in credits before the running turn, in millionths of a dollar; null on the user's own key. */
+  cost: number | null;
   /** Why the last turn stopped early, if it did. */
   error: string | null;
 }

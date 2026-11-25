@@ -4,8 +4,10 @@ import { json } from '../../../../lib/server/route';
 
 /**
  * Stripe's webhook: subscription changes that happen away from the panel (a renewal that fails, a cancellation in the
- * portal). Stripe signs the raw body with STRIPE_WEBHOOK_SECRET; anything unsigned is refused. Register it for
- * checkout.session.completed and customer.subscription.created, .updated and .deleted.
+ * portal) and what happens to a payment for credits (paid, refunded, disputed). Stripe signs the raw body with
+ * STRIPE_WEBHOOK_SECRET; anything unsigned is refused. Register it for checkout.session.completed and
+ * customer.subscription.created, .updated and .deleted, and when the panel sells credits also for
+ * checkout.session.async_payment_succeeded, charge.refunded, charge.dispute.created and charge.dispute.closed.
  */
 export async function POST(req: NextRequest): Promise<Response> {
   if (!process.env.STRIPE_SECRET_KEY || !process.env.STRIPE_WEBHOOK_SECRET) return json({ error: 'billing webhook is not configured' }, 404);

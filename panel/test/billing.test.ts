@@ -15,7 +15,7 @@ registerHooks({
     }
   },
 });
-const { handleWebhook } = await import('../lib/server/billing.ts');
+const { handleWebhook, saleTerms, taxEnabled, topupFields } = await import('../lib/server/billing.ts');
 
 const SECRET = 'whsec_test';
 process.env.STRIPE_SECRET_KEY = 'sk_test_unused';
@@ -60,4 +60,46 @@ test('an unsigned, wrongly signed, altered or old delivery is refused and syncs 
 test('a failing sync is thrown, so the route answers 500 and Stripe delivers again', async () => {
   const payload = body('customer.subscription.updated', { id: 'sub_1', customer: 'cus_1' });
   await assert.rejects(handleWebhook(payload, sign(payload), async () => { throw new Error('db down'); }), /db down/);
+});
+
+test('every checkout asks the buyer to accept the terms and an immediate start, linking both pages', () => {
+  const t = saleTerms('https://panel.example', true);
+  assert.equal(t.consent_collection.terms_of_service, 'required');
+  const text = t.custom_text.terms_of_service_acceptance.message;
+  assert.match(text, /\(https:\/\/panel\.example\/terms\)/);
+  assert.match(text, /\(https:\/\/panel\.example\/refunds\)/);
+  assert.match(text, /start now/);
+  assert.ok(text.length <= 1200, 'Stripe takes at most 1200 characters');
+});
+
+test('with tax on, Stripe Tax works out VAT, takes VAT numbers and saves the address; off, none of that', () => {
+  const on = saleTerms('https://panel.example', true);
+  assert.deepEqual('automatic_tax' in on && on.automatic_tax, { enabled: true });
+  assert.deepEqual('tax_id_collection' in on && on.tax_id_collection, { enabled: true });
+  assert.deepEqual('customer_update' in on && on.customer_update, { address: 'auto', name: 'auto' });
+  const off = saleTerms('https://panel.example', false);
+  assert.ok(!('automatic_tax' in off) && !('tax_id_collection' in off) && !('customer_update' in off));
+});
+
+test('tax is on unless STRIPE_TAX is off', () => {
+  const was = process.env.STRIPE_TAX;
+  try {
+    delete process.env.STRIPE_TAX;
+    assert.equal(taxEnabled(), true);
+    process.env.STRIPE_TAX = 'off';
+    assert.equal(taxEnabled(), false);
+  } finally {
+    if (was === undefined) delete process.env.STRIPE_TAX;
+    else process.env.STRIPE_TAX = was;
+  }
+});
+
+test('a top-up is priced with VAT included, marked as credits, invoiced and asks for 3D Secure', () => {
+  const f = topupFields(25, 7);
+  assert.equal(f.line_items[0].price_data.unit_amount, 2500);
+  assert.equal(f.line_items[0].price_data.tax_behavior, 'inclusive');
+  assert.deepEqual(f.metadata, { credits: '25', user: '7' });
+  assert.deepEqual(f.payment_intent_data.metadata, f.metadata);
+  assert.equal(f.payment_method_options.card.request_three_d_secure, 'any');
+  assert.deepEqual(f.invoice_creation, { enabled: true });
 });

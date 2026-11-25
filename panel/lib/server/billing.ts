@@ -1,6 +1,8 @@
 import Stripe from 'stripe';
 import { customerOfEvent, isPlan, limitsOf, planState, UNLIMITED, type Limits, type PlanId } from '../plans';
+import { topupRefusal } from '../credits';
 import type { UserRow } from './access';
+import { applyLedger, ledgerAction, topupOfSession, type LedgerAction } from './credits';
 import { exec, one, query } from './db';
 
 // Plans are sold through Stripe: hosted Checkout to subscribe, the Customer Portal to change or cancel. The panel keeps
@@ -95,10 +97,40 @@ async function customerFor(user: UserRow): Promise<string> {
   return (await saved()) ?? made.id;
 }
 
+/** Whether Checkout works out VAT with Stripe Tax: on unless STRIPE_TAX is "off". */
+export const taxEnabled = () => process.env.STRIPE_TAX !== 'off';
+
+/**
+ * What every Checkout session of the panel adds to its own fields.
+ * - The buyer ticks a box that accepts the terms and asks for the purchase to start at once, which EU consumer law
+ *   needs before a service can start inside the 14 days a consumer may withdraw (see /refunds). Stripe shows the box
+ *   only when its Dashboard has a terms of service URL (Settings > Business > Public details).
+ * - With tax on, Stripe Tax works out VAT from where the buyer is, a business with a VAT number pays by reverse charge,
+ *   and Checkout saves the address and name it collects onto the customer, as Stripe requires for a customer that
+ *   already exists. Prices include the tax: Pro's price in Stripe must have the tax behaviour "inclusive".
+ */
+export function saleTerms(base: string, tax: boolean) {
+  return {
+    consent_collection: { terms_of_service: 'required' },
+    custom_text: {
+      terms_of_service_acceptance: {
+        message: `I agree to the [Terms](${base}/terms) and ask for my purchase to start now. If I withdraw within 14 days, `
+          + `I get back the part I have not used ([Refunds](${base}/refunds)).`,
+      },
+    },
+    ...(tax ? {
+      automatic_tax: { enabled: true },
+      tax_id_collection: { enabled: true },
+      customer_update: { address: 'auto', name: 'auto' },
+    } : {}),
+  } satisfies Partial<Stripe.Checkout.SessionCreateParams>;
+}
+
 /** A Stripe Checkout page where the user subscribes to Pro; Stripe sends them to /api/billing/return afterwards. */
 export async function checkoutUrl(user: UserRow, base: string): Promise<string> {
   const session = await stripe().checkout.sessions.create({
     mode: 'subscription',
+    ...saleTerms(base, taxEnabled()),
     customer: await customerFor(user),
     client_reference_id: String(user.id),
     line_items: [{ price: await proPriceId(), quantity: 1 }],
@@ -116,10 +148,55 @@ export async function portalUrl(user: UserRow, base: string): Promise<string | n
   return (await stripe().billingPortal.sessions.create({ customer, return_url: `${base}/dashboard#/billing` })).url;
 }
 
-/** Whether a finished Checkout session is this user's. */
-export async function ownsCheckout(user: UserRow, sessionId: string): Promise<boolean> {
+/**
+ * The Checkout fields of a top-up of `dollars` of credits, besides saleTerms. The price includes VAT, so a dollar paid
+ * is a dollar of credits. The payment gets an invoice, which a business needs for its VAT, and the card is asked for
+ * 3D Secure whenever it supports it: credits are spent on the panel's own key at once, so a stolen card costs twice.
+ */
+export function topupFields(dollars: number, user: number) {
+  const marks = { credits: String(dollars), user: String(user) };
+  return {
+    line_items: [{
+      quantity: 1,
+      price_data: { currency: 'usd', unit_amount: dollars * 100, tax_behavior: 'inclusive', product_data: { name: 'AI Builder credits' } },
+    }],
+    metadata: marks,
+    payment_intent_data: { metadata: marks },
+    payment_method_options: { card: { request_three_d_secure: 'any' } },
+    invoice_creation: { enabled: true },
+  } satisfies Partial<Stripe.Checkout.SessionCreateParams>;
+}
+
+/**
+ * A Stripe Checkout page where the user buys `dollars` of credits (lib/credits.ts) in one payment. The ledger is
+ * credited from the paid session (credits.ts topupOfSession), which metadata.credits marks as a top-up.
+ */
+export async function topupUrl(user: UserRow, base: string, dollars: number): Promise<string> {
+  const refused = topupRefusal(dollars);
+  if (refused) throw new Error(refused);
+  const session = await stripe().checkout.sessions.create({
+    mode: 'payment',
+    ...saleTerms(base, taxEnabled()),
+    ...topupFields(dollars, user.id),
+    customer: await customerFor(user),
+    client_reference_id: String(user.id),
+    success_url: `${base}/api/billing/return?session_id={CHECKOUT_SESSION_ID}`,
+    cancel_url: `${base}/dashboard#/billing`,
+  });
+  if (!session.url) throw new Error('Stripe made a checkout session without a URL');
+  return session.url;
+}
+
+/**
+ * Brings the account up to date with a Checkout session the user just came back from, when it is theirs: a paid
+ * top-up is credited, a subscription is read from Stripe. Both happen again when the webhook arrives, to no effect.
+ */
+export async function finishCheckout(user: UserRow, sessionId: string): Promise<void> {
   const session = await stripe().checkout.sessions.retrieve(sessionId);
-  return session.client_reference_id === String(user.id);
+  if (session.client_reference_id !== String(user.id)) return;
+  const topup = topupOfSession(session);
+  if (topup) await applyLedger(topup);
+  else await syncUser(user.id);
 }
 
 /**
@@ -152,12 +229,15 @@ export async function syncUser(userId: number): Promise<void> {
 }
 
 /**
- * Handles a webhook delivery: checks Stripe's signature, then syncs the customer the event is about.
+ * Handles a webhook delivery: checks Stripe's signature, then syncs the customer the event is about and writes what
+ * the event does to the credit ledger.
  * @param sync how a customer is synced; tests replace it
+ * @param apply how the ledger is written; tests replace it
  * @returns false when the signature is wrong
  */
 export async function handleWebhook(payload: string, signature: string | null,
-    sync: (customer: string) => Promise<void> = syncCustomer): Promise<boolean> {
+    sync: (customer: string) => Promise<void> = syncCustomer,
+    apply: (action: LedgerAction) => Promise<void> = applyLedger): Promise<boolean> {
   const secret = process.env.STRIPE_WEBHOOK_SECRET;
   if (!secret) throw new Error('STRIPE_WEBHOOK_SECRET is not set');
   let event: Stripe.Event;
@@ -168,5 +248,7 @@ export async function handleWebhook(payload: string, signature: string | null,
   }
   const customer = customerOfEvent(event);
   if (customer) await sync(customer);
+  const action = ledgerAction(event);
+  if (action) await apply(action);
   return true;
 }

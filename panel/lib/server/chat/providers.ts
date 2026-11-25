@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { providerName, type ChatModel, type ProviderId } from '../../chat';
+import { providerName, type ChatModel, type ChatSource, type ProviderId } from '../../chat';
 
 // How the chat reaches each provider. Both take Anthropic's Messages API, so one client and one loop serve them; only
 // the address, the way the key is sent and a few request fields differ.
@@ -101,8 +101,26 @@ export async function checkKey(provider: ProviderId, key: string, fetchImpl: Fet
   if (!res.ok) throw unavailable();
 }
 
+/**
+ * What went wrong with a request on the panel's own key, in words for a user who pays with credits: the key and the
+ * account behind it are not theirs to fix. Null when it is not Anthropic's error.
+ */
+function creditsFailure(e: unknown): string | null {
+  if (e instanceof Anthropic.RateLimitError) return 'The AI is busy right now. Wait a minute and say "continue".';
+  if (e instanceof Anthropic.BadRequestError) return `The AI refused the request: ${e.message}`;
+  if (e instanceof Anthropic.APIConnectionError) return 'The panel could not reach the AI. Say "continue" to try again.';
+  if (!(e instanceof Anthropic.APIError)) return null;
+  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError || e.status === 402) {
+    // The panel's key was revoked, may not use the model, or its account is out of money: only the operator can fix it.
+    console.error('chat: Anthropic refused the panel’s own key (CREDITS_ANTHROPIC_KEY)', e.status, e.message);
+    return 'Chatting on credits is unavailable right now because of a problem on the panel’s side. Try again later, or use your own API key.';
+  }
+  return `The AI answered with an error (${e.status ?? 'no status'}). Say "continue" to try again.`;
+}
+
 /** What went wrong with a request to the provider, in words for the user; null when it is not the provider's error. */
-export function providerFailure(provider: ProviderId, e: unknown): string | null {
+export function providerFailure(provider: ChatSource, e: unknown): string | null {
+  if (provider === 'credits') return creditsFailure(e);
   const name = providerName(provider);
   if (e instanceof Anthropic.AuthenticationError) return `${name} no longer accepts your API key. Replace it under Access tokens.`;
   if (e instanceof Anthropic.PermissionDeniedError) return `Your ${name} key may not use this model. Pick another model, or check the key with ${name}.`;

@@ -1,13 +1,16 @@
 import type Anthropic from '@anthropic-ai/sdk';
-import { itemsOf, providerName, type ChatEvent, type ChatModel, type ChatView, type EndReason, type ProviderId } from '../../chat';
+import { itemsOf, providerName, upstream, type ChatEvent, type ChatModel, type ChatSource, type ChatView, type EndReason } from '../../chat';
 import { roleOf, type UserRow } from '../access';
 import { apiKeyOf } from '../apiKeys';
+import { PAYMENT_REQUIRED } from '../billing';
+import { balanceOf, chargeUsage, closeUsage, creditsEnabled, creditsKey, openUsage, roundUsage } from '../credits';
 import { hub } from '../hub';
 import { TOOL_TIMEOUT_MS } from '../plugin-proxy';
 import { atLeast } from '../roles';
 import { HttpError } from '../route';
 import { owedResults, runTurn, type TurnEnd } from './agent';
 import { callTool, instructions, listTools, McpError, type Send } from './mcp';
+import { metered } from './meter';
 import { loadSkills, systemPrompt } from './prompt';
 import { findModel } from './models';
 import { clientFor, modelParams, providerFailure, withoutImages } from './providers';
@@ -33,11 +36,14 @@ class Run {
   base = 0;
   ended = false;
   usage = { input: 0, output: 0 };
+  /** What the turn has cost in credits, in micro-dollars. */
+  cost = 0;
 
   constructor(readonly userId: number) {}
 
   emit(e: ChatEvent) {
     if (e.type === 'usage') this.usage = { input: e.input, output: e.output };
+    if (e.type === 'cost') this.cost = e.micros;
     const last = this.events[this.events.length - 1];
     // Text arrives a few characters at a time: kept as one event, so a replay is short.
     if (e.type === 'text' && last?.type === 'text') this.events[this.events.length - 1] = { type: 'text', text: last.text + e.text };
@@ -83,6 +89,7 @@ export async function chatView(chat: ChatRow): Promise<ChatView> {
     items: itemsOf(live ? messages.slice(0, run.base) : messages),
     running: live,
     usage: { input: chat.input_tokens, output: chat.output_tokens },
+    cost: chat.provider === 'credits' ? chat.cost_micros : null,
     error: live ? null : chat.error,
   };
 }
@@ -91,7 +98,7 @@ export async function chatView(chat: ChatRow): Promise<ChatView> {
  * Starts a turn: stores the user's message and lets the model answer in the background. Resolves once the message is
  * stored. Refuses (HttpError) when the turn cannot start; the caller has checked that `user` builds on the server.
  * The model may change between turns, the provider may not: thinking blocks that one provider's account returned
- * are not for another's.
+ * are not for another's. A chat on credits runs on the panel's own key, and only while the user has credits left.
  */
 export async function startTurn(chat: ChatRow, user: UserRow, text: string, model: string): Promise<void> {
   const provider = chat.provider;
@@ -110,9 +117,15 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
   runs().set(chat.id, run);
   let apiKey: string | null;
   const messages = await (async () => {
-    apiKey = await apiKeyOf(user.id, provider);
-    if (!apiKey) {
-      throw new HttpError(400, `this chat uses ${providerName(provider)}: add your ${providerName(provider)} API key under Access tokens, or start a new chat`);
+    if (provider === 'credits') {
+      apiKey = creditsEnabled() ? creditsKey() : null;
+      if (!apiKey) throw new HttpError(400, 'this chat ran on credits, which this panel no longer sells; start a new chat');
+      if (await balanceOf(user.id) <= 0) throw new HttpError(PAYMENT_REQUIRED, OUT_OF_CREDITS);
+    } else {
+      apiKey = await apiKeyOf(user.id, provider);
+      if (!apiKey) {
+        throw new HttpError(400, `this chat uses ${providerName(provider)}: add your ${providerName(provider)} API key under Access tokens, or start a new chat`);
+      }
     }
     const history = await messagesOf(chat.id);
     const owed = owedResults(history);
@@ -134,26 +147,35 @@ export async function startTurn(chat: ChatRow, user: UserRow, text: string, mode
 async function answer(run: Run, chat: ChatRow, model: ChatModel, apiKey: string, messages: Anthropic.MessageParam[]) {
   const send: Send = body => hub().requestAsUser(chat.server_id, { t: 'mcp', body }, chat.user_id, TOOL_TIMEOUT_MS);
   let end: TurnEnd;
+  /** The turn's entry in the credit ledger, when credits pay for the chat. */
+  let entry: number | null = null;
   try {
+    if (chat.provider === 'credits') entry = await openUsage(chat.user_id, chat.id, model.id);
     const tools = await listTools(send);
     let system = chat.system_prompt;
     if (system === null) {
       system = systemPrompt(await instructions(send), await loadSkills());
       await setSystemPrompt(chat.id, system);
     }
-    // The key is always the user's own, never one from the panel's environment.
-    const client = clientFor(chat.provider, apiKey);
+    // The key is the user's own, or for a chat on credits the panel's key for credits; never another from the environment.
+    const client = clientFor(upstream(chat.provider), apiKey);
+    const paid = entry;
     end = await runTurn({ model: model.id, params: modelParams(model), system, tools, messages, maxRounds: MAX_ROUNDS, signal: run.abort.signal }, {
       ask(params, onText, signal) {
         if (!model.images) params = { ...params, messages: withoutImages(params.messages) };
         const stream = client.messages.stream(params, { signal });
         stream.on('text', onText);
-        return stream.finalMessage();
+        if (paid === null) return stream.finalMessage();
+        return metered(stream, async usage => {
+          run.emit({ type: 'cost', micros: run.cost + await chargeUsage(paid, model.id, roundUsage(usage)) });
+        });
       },
       callTool: (name, input) => callTool(send, name, input),
       async refusal() {
         const role = await roleOf(chat.user_id, chat.server_id);
-        return atLeast(role, 'builder') ? null : 'You no longer have the builder role on this server, so nothing was built.';
+        if (!atLeast(role, 'builder')) return 'You no longer have the builder role on this server, so nothing was built.';
+        // Asked after every answer that calls tools, so a turn goes at most one request below zero.
+        return paid !== null && await balanceOf(chat.user_id) <= 0 ? RAN_OUT : null;
       },
       append: m => appendMessage(chat.id, m),
       emit: e => run.emit(e),
@@ -163,11 +185,15 @@ async function answer(run: Run, chat: ChatRow, model: ChatModel, apiKey: string,
   }
   const error = end.error ?? WHY[end.reason];
   run.ended = true;
-  await turnEnded(chat.id, run.usage.input, run.usage.output, error).catch(e => console.warn(`chat ${chat.id}: could not store the turn's end`, e.message));
+  if (entry !== null) await closeUsage(entry).catch(e => console.warn(`chat ${chat.id}: could not close the turn's ledger entry`, e.message));
+  await turnEnded(chat.id, run.usage.input, run.usage.output, run.cost, error).catch(e => console.warn(`chat ${chat.id}: could not store the turn's end`, e.message));
   run.emit({ type: 'end', reason: end.reason, ...(error ? { error } : {}) });
   run.listeners.clear();
   setTimeout(() => { if (runs().get(chat.id) === run) runs().delete(chat.id); }, KEEP_ENDED_MS).unref();
 }
+
+const OUT_OF_CREDITS = 'you are out of credits; top up on the Billing page';
+const RAN_OUT = 'You ran out of credits, so the AI stopped. Top up on the Billing page, then say "continue".';
 
 const WHY: Record<EndReason, string | null> = {
   done: null,
@@ -178,7 +204,7 @@ const WHY: Record<EndReason, string | null> = {
 };
 
 /** What went wrong, in words for the user. Anything unexpected is logged and not shown. */
-function failure(provider: ProviderId, e: unknown): string {
+function failure(provider: ChatSource, e: unknown): string {
   const said = providerFailure(provider, e);
   if (said) return said;
   const code = (e as { code?: unknown } | null)?.code;
